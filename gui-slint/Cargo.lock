@@ -1581,27 +1581,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashbeam-slint"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "chrono",
- "dirs 5.0.1",
- "engine",
- "iroh",
- "open",
- "rfd",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8124,6 +8103,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
+]
+
+[[package]]
+name = "tunnelmanager-slint"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "chrono",
+ "dirs 5.0.1",
+ "engine",
+ "iroh",
+ "open",
+ "rfd",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

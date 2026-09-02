@@ -1518,12 +1518,12 @@ fn main() {
         .build()
         .expect("tokio runtime");
 
-    let data_dir = std::env::var("DASHBEAM_SLINT_DATA_DIR")
+    let data_dir = std::env::var("TUNNELMANAGER_SLINT_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             dirs::data_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("dashbeam-slint")
+                .join("tunnelmanager-slint")
         });
     let _ = std::fs::create_dir_all(&data_dir);
 

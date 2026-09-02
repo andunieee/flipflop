@@ -1,13 +1,13 @@
 [package]
-name = "dashbeam-slint"
+name = "tunnelmanager-slint"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
-description = "Alternative Slint-based desktop GUI for DashBeam, using the engine crate directly"
+description = "Alternative Slint-based desktop GUI for TunnelManager, using the engine crate directly"
 rust-version = "1.91"
 
 [[bin]]
-name = "dashbeam-slint"
+name = "tunnelmanager-slint"
 path = "src/main.rs"
 
 [build-dependencies]
