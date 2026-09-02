@@ -1,0 +1,4 @@
+# Slint 1.17 needs rustc 1.92; the repo-wide pin (1.91) covers the engine.
+[toolchain]
+channel = "1.92"
+components = ["rustfmt"]
