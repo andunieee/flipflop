@@ -1,19 +1,91 @@
 import { State, Logic } from "globals.slint";
-import { SendPage } from "send-page.slint";
-import { ReceivePage } from "receive-page.slint";
-import { HistoryPage } from "history-page.slint";
+import { ScrollView } from "std-widgets.slint";
+import { PeerPage } from "peer-page.slint";
+import { AddPeerPage } from "add-peer-page.slint";
 import { SettingsPage } from "settings-page.slint";
 
 export { State, Logic }
 
-component NavButton inherits Rectangle {
+component AddPeerButton inherits Rectangle {
+    border-radius: 6px;
+    background: #37374a;
+    min-height: 34px;
+
+    touch := TouchArea {
+        clicked => {
+            State.page = "add-peer";
+            Logic.page-changed("add-peer");
+        }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        alignment: center;
+
+        Text {
+            text: "+ Add peer";
+            color: white;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component PeerButton inherits Rectangle {
+    in property <string> endpoint-id;
+    in property <string> label;
+    in property <bool> online;
+
+    border-radius: 6px;
+    background: State.page == "peer" && State.selected-id == self.endpoint-id
+        ? #4a5fd0
+        : transparent;
+    min-height: 34px;
+
+    touch := TouchArea {
+        clicked => {
+            Logic.select-peer(root.endpoint-id);
+            State.page = "peer";
+            Logic.page-changed("peer");
+        }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 6px;
+            alignment: start;
+
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.online ? #7bd88f : #4a4a58;
+            }
+            Text {
+                text: root.label;
+                color: State.selected-id == root.endpoint-id ? white : #c8c8d0;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+component NavBottomButton inherits Rectangle {
     in property <string> label;
     in property <string> key;
     in property <bool> active;
 
     border-radius: 6px;
-    background: active ? #4a5fd0 : transparent;
-    min-height: 36px;
+    background: active ? #37374a : transparent;
+    min-height: 34px;
 
     touch := TouchArea {
         clicked => {
@@ -25,8 +97,6 @@ component NavButton inherits Rectangle {
 
     HorizontalLayout {
         padding-left: 12px;
-        padding-right: 12px;
-        alignment: center;
         Text {
             text: root.label;
             color: root.active ? white : #c8c8d0;
@@ -47,8 +117,8 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             // Sidebar
             Rectangle {
-                min-width: 160px;
-                max-width: 160px;
+                min-width: 210px;
+                max-width: 210px;
                 background: #20202b;
 
                 VerticalLayout {
@@ -63,15 +133,48 @@ export component AppWindow inherits Window {
                         color: white;
                     }
 
-                    NavButton { label: "Send"; key: "send"; active: State.page == "send"; }
-                    NavButton { label: "Receive"; key: "receive"; active: State.page == "receive"; }
-                    NavButton { label: "History"; key: "history"; active: State.page == "history"; }
-                    NavButton { label: "Settings"; key: "settings"; active: State.page == "settings"; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: State.my-name;
+                            color: #9a9aac;
+                            font-size: 11px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        if !State.node-ready: Text {
+                            text: "(starting…)";
+                            color: #d0a040;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle { min-height: 6px; }
+
+                    AddPeerButton { }
+
+                    if State.peers.length > 0: Rectangle { min-height: 6px; }
+
+                    ScrollView {
+                        VerticalLayout {
+                            spacing: 2px;
+                            alignment: start;
+                            for peer in State.peers: PeerButton {
+                                endpoint-id: peer.endpoint-id;
+                                label: peer.name;
+                                online: peer.online;
+                            }
+                        }
+                    }
 
                     Rectangle { vertical-stretch: 1; }
 
+                    NavBottomButton { label: "Settings"; key: "settings"; active: State.page == "settings"; }
+
                     Text {
-                        text: "Slint GUI (alt)";
+                        text: State.presence-label;
                         color: #6a6a78;
                         font-size: 10px;
                     }
@@ -80,15 +183,11 @@ export component AppWindow inherits Window {
 
             // Content
             Rectangle {
-                if State.page == "send": SendPage {
+                if State.page == "peer": PeerPage {
                     width: 100%;
                     height: 100%;
                 }
-                if State.page == "receive": ReceivePage {
-                    width: 100%;
-                    height: 100%;
-                }
-                if State.page == "history": HistoryPage {
+                if State.page == "add-peer": AddPeerPage {
                     width: 100%;
                     height: 100%;
                 }

@@ -1,46 +1,72 @@
-use crate::recorder::Recorder;
 use slint::{ComponentHandle, Weak};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::AppWindow;
 use crate::State;
 
-/// Bridges engine events to the Slint UI and the history recorder.
-pub struct GuiEmitter {
-    weak: Weak<AppWindow>,
-    recorder: Option<Arc<Recorder>>,
+/// One node/transfer event: (name, json payload).
+pub type MainEvent = (String, Option<String>);
+
+/// Queue of events from the long-lived `NodeService`. Drained by the UI.
+#[derive(Clone, Default)]
+pub struct MainQueue {
+    events: Arc<Mutex<Vec<MainEvent>>>,
 }
 
-impl GuiEmitter {
-    pub fn new(weak: Weak<AppWindow>, recorder: Option<Arc<Recorder>>) -> Self {
-        Self { weak, recorder }
+impl MainQueue {
+    pub fn drain(&self) -> Vec<MainEvent> {
+        std::mem::take(&mut *self.events.lock().unwrap())
     }
 
-    fn dispatch(&self, name: &str, payload: Option<String>) {
-        if let Some(recorder) = &self.recorder {
-            recorder.note(name, payload.as_deref());
-        }
-        let weak = self.weak.clone();
-        let name = name.to_string();
-        let _ = slint::invoke_from_event_loop(move || {
-            handle_event(&weak, &name, payload.as_deref());
-        });
+    fn push(&self, name: &str, payload: Option<String>) {
+        self.events
+            .lock()
+            .unwrap()
+            .push((name.to_string(), payload));
     }
 }
 
-impl engine::EventEmitter for GuiEmitter {
+/// `engine::EventEmitter` bound to the node service.
+pub struct MainEmitter {
+    queue: MainQueue,
+}
+
+impl MainEmitter {
+    pub fn new(queue: MainQueue) -> Self {
+        Self { queue }
+    }
+}
+
+impl engine::EventEmitter for MainEmitter {
     fn emit_event(&self, event_name: &str) -> Result<(), String> {
-        self.dispatch(event_name, None);
+        self.queue.push(event_name, None);
         Ok(())
     }
 
     fn emit_event_with_payload(&self, event_name: &str, payload: &str) -> Result<(), String> {
-        self.dispatch(event_name, Some(payload.to_string()));
+        self.queue.push(event_name, Some(payload.to_string()));
         Ok(())
     }
 }
 
-fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
+/// Store of pending per-peer receive cancellers from the auto-accept path.
+#[derive(Default, Clone)]
+pub struct ReceiveCancels(
+    pub Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+);
+
+impl ReceiveCancels {
+    pub fn lock(
+        &self,
+    ) -> std::sync::MutexGuard<
+        '_,
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>,
+    > {
+        self.0.lock().unwrap()
+    }
+}
+
+pub fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
     use crate::format::{fmt_speed, parse_progress};
 
     let Some(ui) = weak.upgrade() else {
@@ -89,7 +115,6 @@ fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
         "receive-completed" => {
             state.set_receive_progress(1.0);
             state.set_receive_progress_label("100%".into());
-            state.set_receive_done(true);
             let out = payload
                 .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
                 .and_then(|v| {
@@ -97,7 +122,6 @@ fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
                         .and_then(|v| v.as_str().map(str::to_string))
                 })
                 .unwrap_or_default();
-            state.set_received_dir(out.clone().into());
             state.set_receive_status(format!("Saved to {out}").into());
         }
         "transfer-failed" => {

@@ -1,0 +1,253 @@
+import { Button, ScrollView, LineEdit } from "std-widgets.slint";
+import { State, Logic, HistoryRow } from "globals.slint";
+import { ProgressBar, HintText, StatusText } from "components.slint";
+
+component HistoryItem inherits Rectangle {
+    in property <HistoryRow> entry;
+    border-radius: 6px;
+    background: #232330;
+    min-height: 64px;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 4px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.entry.direction == "send" ? "↑" : "↓";
+                color: root.entry.direction == "send" ? #d0a040 : #40a0d0;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.entry.title;
+                color: white;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.entry.status;
+                color: root.entry.failed ? #ff8a98 : #8fd08f;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: root.entry.detail;
+                color: #9a9aac;
+                font-size: 11px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.entry.size;
+                color: #9a9aac;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.entry.date;
+                color: #8a8a9a;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            if root.entry.can-open: Button {
+                text: "Open";
+                clicked => { Logic.open-row(root.entry.id); }
+            }
+            Button {
+                text: "✕";
+                clicked => { Logic.delete-row(root.entry.id); }
+            }
+        }
+    }
+}
+
+component TransferPanel inherits Rectangle {
+    in property <bool> sending: true;
+    in property <float> progress: 0.0;
+    in property <string> progress-label: "";
+    in property <string> status: "";
+    in property <string> error: "";
+    in property <bool> can-cancel: false;
+    callback cancel();
+
+    border-radius: 6px;
+    background: #232330;
+    min-height: 72px;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.sending ? "↑ Sending" : "↓ Receiving";
+                color: white;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.can-cancel: Button {
+                text: "Stop";
+                clicked => { root.cancel(); }
+            }
+        }
+
+        ProgressBar { value: root.progress; label: root.progress-label; }
+
+        Text {
+            text: root.status;
+            color: #9a9aac;
+            font-size: 11px;
+            overflow: elide;
+        }
+
+        if root.error != "": StatusText { label: root.error; error: true; }
+    }
+}
+
+export component PeerPage inherits Rectangle {
+    background: transparent;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 14px;
+        alignment: start;
+
+        // Header
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: State.selected-name == "" ? "No peer selected" : State.selected-name;
+                    color: white;
+                    font-size: 22px;
+                    font-weight: 700;
+                    vertical-stretch: 0;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: State.selected-online ? #7bd88f : #4a4a58;
+                    }
+                    Text {
+                        text: State.selected-detail == ""
+                            ? "Select a peer in the sidebar, or add one."
+                            : State.selected-detail;
+                        color: State.selected-detail == "" ? #9a9aac : #8a8a9a;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if State.selected-name != "" && !State.rename-mode: Button {
+                text: "Rename";
+                clicked => { Logic.rename-peer(); }
+            }
+            if State.selected-name != "" && !State.rename-mode: Button {
+                text: "Forget";
+                clicked => { Logic.remove-peer(); }
+            }
+        }
+
+        // Inline rename
+        if State.rename-mode: HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            LineEdit {
+                text <=> State.rename-input;
+                min-width: 260px;
+                accepted => { Logic.rename-peer-confirm(); }
+            }
+            Button {
+                text: "Save";
+                primary: true;
+                clicked => { Logic.rename-peer-confirm(); }
+            }
+            Button {
+                text: "Cancel";
+                clicked => { Logic.rename-peer-cancel(); }
+            }
+        }
+
+        // Active transfers
+        if State.selected-id != "" && State.send-active-id == State.selected-id
+           && (State.share-starting || State.send-status != "" || State.send-error != ""):
+        TransferPanel {
+            sending: true;
+            progress: State.send-progress;
+            progress-label: State.send-progress-label;
+            status: State.send-status;
+            error: State.send-error;
+            can-cancel: State.share-starting || State.send-status == "Transferring…" || State.send-peers > 0;
+            cancel() => { Logic.stop-share(); }
+        }
+
+        if State.selected-id != "" && State.receive-active-id == State.selected-id
+           && (State.receive-status != "" || State.receive-error != ""):
+        TransferPanel {
+            sending: false;
+            progress: State.receive-progress;
+            progress-label: State.receive-progress-label;
+            status: State.receive-speed == "" ? State.receive-status
+                : State.receive-status + " · " + State.receive-speed;
+            error: State.receive-error;
+            cancel() => { Logic.cancel-receive(); }
+        }
+
+        // Send button (no transfer in flight for this peer)
+        if State.selected-name != "" && State.send-active-id != State.selected-id:
+        Button {
+            text: "Send files…";
+            clicked => { Logic.send-to-peer(); }
+        }
+
+        // History for this peer
+        Rectangle { min-height: 4px; }
+
+        HorizontalLayout {
+            Text {
+                text: "Transfers";
+                font-size: 15px;
+                font-weight: 700;
+                color: white;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Refresh"; clicked => { Logic.refresh-history(); } }
+        }
+
+        if State.selected-name == "":
+            HintText { label: "Add a peer with the sidebar button to start sending files."; }
+
+        if State.selected-name != "" && State.history.length == 0:
+            HintText { label: "No transfers with this peer yet."; }
+
+        ScrollView {
+            VerticalLayout {
+                spacing: 8px;
+                alignment: start;
+
+                for entry in State.history: HistoryItem {
+                    entry: entry;
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+    }
+}

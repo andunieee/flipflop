@@ -1,0 +1,153 @@
+import { Button, ScrollView, LineEdit } from "std-widgets.slint";
+import { State, Logic, PeerRow } from "globals.slint";
+import { HintText, StatusText } from "components.slint";
+
+component SuggestionRow inherits Rectangle {
+    in property <PeerRow> entry;
+    border-radius: 6px;
+    background: #232330;
+    min-height: 48px;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: #40a0d0;
+        }
+
+        VerticalLayout {
+            padding-top: 6px;
+            padding-bottom: 6px;
+            spacing: 2px;
+            Text {
+                text: root.entry.name;
+                color: white;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.detail;
+                color: #9a9aac;
+                font-size: 11px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        if root.entry.is-request: Button {
+            text: "Accept";
+            clicked => { Logic.accept-suggestion(root.entry.endpoint-id); }
+        }
+        if root.entry.is-request: Button {
+            text: "Decline";
+            clicked => { Logic.decline-suggestion(root.entry.endpoint-id); }
+        }
+        if root.entry.is-suggestion: Button {
+            text: "Pair";
+            clicked => { Logic.accept-suggestion(root.entry.endpoint-id); }
+        }
+    }
+}
+
+export component AddPeerPage inherits Rectangle {
+    background: transparent;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 14px;
+        alignment: start;
+
+        Text {
+            text: "Add a peer";
+            font-size: 22px;
+            font-weight: 700;
+            color: white;
+            vertical-stretch: 0;
+        }
+
+        // Paste an address
+        Text {
+            text: "Paste their DashBeam / iroh address:";
+            color: #c8c8d8;
+            font-size: 12px;
+            vertical-stretch: 0;
+        }
+        LineEdit {
+            text <=> State.add-ticket-input;
+            placeholder-text: "iroh node id or pairing ticket";
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Button {
+                text: "Connect";
+                enabled: State.add-ticket-input != "" && !State.pairing-busy;
+                clicked => { Logic.pair-with-pasted(); }
+            }
+            if State.pairing-busy: HintText { label: "Connecting…"; vertical-alignment: center; }
+            if State.pairing-status != "": StatusText {
+                label: State.pairing-status;
+                error: State.pairing-error;
+                vertical-alignment: center;
+            }
+        }
+
+        // Suggestions
+        Rectangle { min-height: 4px; }
+        Text {
+            text: "Suggested peers";
+            font-size: 15px;
+            font-weight: 700;
+            color: white;
+            vertical-stretch: 0;
+        }
+        HintText {
+            label: State.nearby-note == ""
+                ? "Peers on your local network, or peers who already asked to connect with you."
+                : State.nearby-note;
+        }
+
+        ScrollView {
+            VerticalLayout {
+                spacing: 8px;
+                alignment: start;
+
+                for node in State.suggestions: SuggestionRow {
+                    entry: node;
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        // Our own invite
+        Text {
+            text: "Want them to add you instead?";
+            color: #c8c8d8;
+            font-size: 12px;
+            vertical-stretch: 0;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: State.my-ticket;
+                color: #9a9aac;
+                font-size: 11px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: "Copy";
+                clicked => { Logic.copy-my-ticket(); }
+            }
+        }
+    }
+}
