@@ -3,31 +3,47 @@ name = "tunnelmanager-slint"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
-description = "Alternative Slint-based desktop GUI for TunnelManager, using the engine crate directly"
+description = "Alternative Slint-based GUI for TunnelManager, using the engine crate directly (desktop + Android)"
 rust-version = "1.91"
+
+# The crate is a lib (cdylib) so it can be loaded as an Android native
+# activity; the desktop build is a thin bin calling into the same code.
+[lib]
+name = "tunnelmanager_slint"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
 
 [[bin]]
 name = "tunnelmanager-slint"
 path = "src/main.rs"
 
 [build-dependencies]
-slint-build = "1"
+slint-build = "=1.16.1"
 
 [dependencies]
 engine = { path = "../engine" }
-slint = "1"
+# backend-android-activity-06 is inert off-Android (only used on
+# target_os = "android"); enabling it unconditionally keeps one dep set.
+# Pinned to 1.16.1: 1.17.x ships a `i-slint-backend-android-activity =1.17.1`
+# requirement that was never published to crates.io.
+slint = { version = "=1.16.1", features = ["backend-android-activity-06"] }
 anyhow = "1"
 tokio = { version = "1.34.0", features = ["rt-multi-thread", "sync", "time", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rfd = "0.15"
-arboard = "3"
-open = "5"
 dirs = "5"
 chrono = "0.4"
 iroh = "1.0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = "0.15"
+arboard = "3"
+open = "5"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
 
 [profile.release]
 panic = "abort"
@@ -36,3 +52,45 @@ codegen-units = 1
 lto = true
 debug = "none"
 strip = true
+
+# --------------------------------------------------------------- Android
+#
+# Build with: cargo apk run -p tunnelmanager-slint
+# (see the README's Android section for the toolchain setup)
+
+[package.metadata.android]
+package = "dev.tunnelmanager.slint"
+apk_name = "tunnelmanager-slint"
+# Slint's Android backend needs API >= 26.
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "TunnelManager"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar"
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|keyboardHidden|screenSize"
+
+# Reachable peers need plain internet access only; everything else is
+# app-private storage.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_NETWORK_STATE"
+# Without this Android drops multicast to the app, so it can publish its own
+# mDNS records but never receives other devices' — LAN peers appear one-way.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+
+# Appear in the system share sheet ("Send to TunnelManager"); shared
+# content is staged into the app-private outbox and offered per peer.
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"]
+categories = ["android.intent.category.DEFAULT"]
+
+[[package.metadata.android.application.activity.intent_filter.data]]
+mime_type = "*/*"

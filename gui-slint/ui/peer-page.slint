@@ -6,10 +6,10 @@ component HistoryItem inherits Rectangle {
     in property <HistoryRow> entry;
     border-radius: 6px;
     background: #232330;
-    min-height: 64px;
+    min-height: State.touch ? 76px : 64px;
 
     VerticalLayout {
-        padding: 10px;
+        padding: State.touch ? 12px : 10px;
         spacing: 4px;
 
         HorizontalLayout {
@@ -18,6 +18,7 @@ component HistoryItem inherits Rectangle {
                 text: root.entry.direction == "send" ? "↑" : "↓";
                 color: root.entry.direction == "send" ? #d0a040 : #40a0d0;
                 font-weight: 700;
+                font-size: State.touch ? 15px : 13px;
                 vertical-alignment: center;
             }
             Text {
@@ -31,16 +32,16 @@ component HistoryItem inherits Rectangle {
             Text {
                 text: root.entry.status;
                 color: root.entry.failed ? #ff8a98 : #8fd08f;
-                font-size: 11px;
+                font-size: State.touch ? 13px : 11px;
                 vertical-alignment: center;
             }
         }
         HorizontalLayout {
-            spacing: 12px;
+            spacing: State.touch ? 8px : 12px;
             Text {
                 text: root.entry.detail;
                 color: #9a9aac;
-                font-size: 11px;
+                font-size: State.touch ? 13px : 11px;
                 vertical-alignment: center;
                 overflow: elide;
                 horizontal-stretch: 1;
@@ -48,16 +49,16 @@ component HistoryItem inherits Rectangle {
             Text {
                 text: root.entry.size;
                 color: #9a9aac;
-                font-size: 11px;
+                font-size: State.touch ? 13px : 11px;
                 vertical-alignment: center;
             }
-            Text {
+            if !State.touch: Text {
                 text: root.entry.date;
                 color: #8a8a9a;
                 font-size: 11px;
                 vertical-alignment: center;
             }
-            if root.entry.can-open: Button {
+            if root.entry.can-open && !State.touch: Button {
                 text: "Open";
                 clicked => { Logic.open-row(root.entry.id); }
             }
@@ -80,10 +81,10 @@ component TransferPanel inherits Rectangle {
 
     border-radius: 6px;
     background: #232330;
-    min-height: 72px;
+    min-height: State.touch ? 88px : 72px;
 
     VerticalLayout {
-        padding: 10px;
+        padding: State.touch ? 12px : 10px;
         spacing: 6px;
 
         HorizontalLayout {
@@ -106,11 +107,52 @@ component TransferPanel inherits Rectangle {
         Text {
             text: root.status;
             color: #9a9aac;
-            font-size: 11px;
+            font-size: State.touch ? 13px : 11px;
             overflow: elide;
+            wrap: State.touch ? word-wrap : no-wrap;
         }
 
         if root.error != "": StatusText { label: root.error; error: true; }
+    }
+}
+
+// Compact-mode peer switcher chip (opens the picker below it).
+component PeerChip inherits Rectangle {
+    in property <string> endpoint-id;
+    in property <string> label;
+    in property <bool> online;
+
+    border-radius: 8px;
+    background: State.selected-id == root.endpoint-id ? #4a5fd0 : #232330;
+    min-height: State.touch ? 48px : 40px;
+
+    touch := TouchArea {
+        clicked => {
+            Logic.select-peer(root.endpoint-id);
+            State.show-peer-picker = false;
+        }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+        alignment: start;
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.online ? #7bd88f : #4a4a58;
+        }
+        Text {
+            text: root.label;
+            color: State.selected-id == root.endpoint-id ? white : #c8c8d0;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
 }
 
@@ -118,8 +160,8 @@ export component PeerPage inherits Rectangle {
     background: transparent;
 
     VerticalLayout {
-        padding: 16px;
-        spacing: 14px;
+        padding: State.touch ? 12px : 16px;
+        spacing: State.touch ? 10px : 14px;
         alignment: start;
 
         // Header
@@ -130,9 +172,10 @@ export component PeerPage inherits Rectangle {
                 Text {
                     text: State.selected-name == "" ? "No peer selected" : State.selected-name;
                     color: white;
-                    font-size: 22px;
+                    font-size: State.touch ? 19px : 22px;
                     font-weight: 700;
                     vertical-stretch: 0;
+                    overflow: elide;
                 }
                 HorizontalLayout {
                     spacing: 6px;
@@ -144,10 +187,10 @@ export component PeerPage inherits Rectangle {
                     }
                     Text {
                         text: State.selected-detail == ""
-                            ? "Select a peer in the sidebar, or add one."
+                            ? "Select a peer, or add one."
                             : State.selected-detail;
                         color: State.selected-detail == "" ? #9a9aac : #8a8a9a;
-                        font-size: 12px;
+                        font-size: State.touch ? 13px : 12px;
                         vertical-alignment: center;
                         overflow: elide;
                     }
@@ -164,13 +207,65 @@ export component PeerPage inherits Rectangle {
             }
         }
 
+        // Compact layout has no sidebar: pick the peer here.
+        if State.compact && State.peers.length > 0: Rectangle {
+            border-radius: 8px;
+            background: #232330;
+            min-height: 48px;
+
+            chip-touch := TouchArea {
+                clicked => { State.show-peer-picker = !State.show-peer-picker; }
+                mouse-cursor: pointer;
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 8px;
+
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: State.selected-online ? #7bd88f : #4a4a58;
+                }
+                Text {
+                    text: State.selected-name == "" ? "Choose a peer" : State.selected-name;
+                    color: white;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: State.show-peer-picker ? "▲" : "▼";
+                    color: #9a9aac;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if State.compact && State.show-peer-picker: ScrollView {
+            max-height: 240px;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: start;
+                for peer in State.peers: PeerChip {
+                    endpoint-id: peer.endpoint-id;
+                    label: peer.name;
+                    online: peer.online;
+                }
+            }
+        }
+
         // Inline rename
         if State.rename-mode: HorizontalLayout {
             spacing: 10px;
             alignment: start;
             LineEdit {
                 text <=> State.rename-input;
-                min-width: 260px;
+                min-width: State.touch ? 140px : 260px;
+                horizontal-stretch: 1;
                 accepted => { Logic.rename-peer-confirm(); }
             }
             Button {
@@ -211,10 +306,31 @@ export component PeerPage inherits Rectangle {
 
         // Send button (no transfer in flight for this peer)
         if State.selected-name != "" && State.send-active-id != State.selected-id:
-        Button {
-            text: "Send files…";
-            clicked => { Logic.send-to-peer(); }
+        Rectangle {
+            min-height: State.touch ? 48px : 0px;
+            border-radius: 6px;
+            background: #4a5fd0;
+
+            send-touch := TouchArea {
+                clicked => { Logic.send-to-peer(); }
+                mouse-cursor: pointer;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    text: "Send files…";
+                    color: white;
+                    font-size: State.touch ? 16px : 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
         }
+
+        // Content shared into the app via the system share sheet.
+        if State.touch && State.outbox-count > 0:
+            HintText { label: State.outbox-count + " file(s) staged from the share sheet — pick a peer and send."; }
 
         // History for this peer
         Rectangle { min-height: 4px; }
@@ -232,7 +348,7 @@ export component PeerPage inherits Rectangle {
         }
 
         if State.selected-name == "":
-            HintText { label: "Add a peer with the sidebar button to start sending files."; }
+            HintText { label: "Add a peer with the + button to start sending files."; }
 
         if State.selected-name != "" && State.history.length == 0:
             HintText { label: "No transfers with this peer yet."; }

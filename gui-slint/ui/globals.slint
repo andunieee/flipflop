@@ -35,6 +35,16 @@ export global State {
     // navigation: "peer" | "add-peer" | "settings"
     in-out property <string> page: "peer";
 
+    // ---- responsive layout -------------------------------------------
+    // Window is narrower than the sidebar + content can share.
+    in-out property <bool> compact: false;
+    // true on touch devices (Android): bigger hit targets, native toasts.
+    in-out property <bool> touch: false;
+    // Compact peer switcher open (single-pane layout only).
+    in-out property <bool> show-peer-picker: false;
+    // Shared content staged from the system share sheet.
+    in-out property <int> outbox-count: 0;
+
     // sidebar
     in-out property <string> my-name: "";
     in-out property <bool> node-ready: false;

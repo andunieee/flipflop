@@ -6,7 +6,7 @@ component SuggestionRow inherits Rectangle {
     in property <PeerRow> entry;
     border-radius: 6px;
     background: #232330;
-    min-height: 48px;
+    min-height: State.touch ? 60px : 48px;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -14,6 +14,7 @@ component SuggestionRow inherits Rectangle {
         spacing: 10px;
 
         Rectangle {
+            y: (parent.height - self.height) / 2;
             width: 8px;
             height: 8px;
             border-radius: 4px;
@@ -34,7 +35,7 @@ component SuggestionRow inherits Rectangle {
             Text {
                 text: root.entry.detail;
                 color: #9a9aac;
-                font-size: 11px;
+                font-size: State.touch ? 13px : 11px;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -61,13 +62,13 @@ export component AddPeerPage inherits Rectangle {
     background: transparent;
 
     VerticalLayout {
-        padding: 16px;
-        spacing: 14px;
+        padding: State.touch ? 12px : 16px;
+        spacing: State.touch ? 10px : 14px;
         alignment: start;
 
         Text {
             text: "Add a peer";
-            font-size: 22px;
+            font-size: State.touch ? 19px : 22px;
             font-weight: 700;
             color: white;
             vertical-stretch: 0;
@@ -77,8 +78,9 @@ export component AddPeerPage inherits Rectangle {
         Text {
             text: "Paste their TunnelManager / iroh address:";
             color: #c8c8d8;
-            font-size: 12px;
+            font-size: State.touch ? 13px : 12px;
             vertical-stretch: 0;
+            wrap: word-wrap;
         }
         LineEdit {
             text <=> State.add-ticket-input;
@@ -139,8 +141,9 @@ export component AddPeerPage inherits Rectangle {
             Text {
                 text: State.my-ticket;
                 color: #9a9aac;
-                font-size: 11px;
+                font-size: State.touch ? 12px : 11px;
                 vertical-alignment: center;
+                wrap: word-wrap;
                 overflow: elide;
                 horizontal-stretch: 1;
             }

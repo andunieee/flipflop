@@ -76,6 +76,18 @@ impl Settings {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from)
-            .or_else(dirs::download_dir)
+            .or_else(default_downloads_dir)
     }
+}
+
+#[cfg(target_os = "android")]
+fn default_downloads_dir() -> Option<std::path::PathBuf> {
+    // No system Downloads access without SAF plumbing; keep received files
+    // in the app-private downloads folder instead.
+    Some(crate::android::downloads_dir())
+}
+
+#[cfg(not(target_os = "android"))]
+fn default_downloads_dir() -> Option<std::path::PathBuf> {
+    dirs::download_dir()
 }
