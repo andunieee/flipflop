@@ -9,6 +9,12 @@ pub struct Settings {
     pub relay_mode: String,
     pub relay_urls: Vec<String>,
     pub relay_token: Option<String>,
+    /// "strict" | "public" — what to do when a custom relay is unreachable.
+    pub relay_fallback: String,
+    /// "default" | "custom"
+    pub discovery_mode: String,
+    pub discovery_pkarr_relay_url: Option<String>,
+    pub discovery_dns_origin: Option<String>,
     pub history_enabled: bool,
     /// "everyone" | "paired-only" | "off"
     pub discoverability: String,
@@ -21,6 +27,10 @@ impl Default for Settings {
             relay_mode: "default".to_string(),
             relay_urls: Vec::new(),
             relay_token: None,
+            relay_fallback: "strict".to_string(),
+            discovery_mode: "default".to_string(),
+            discovery_pkarr_relay_url: None,
+            discovery_dns_origin: None,
             history_enabled: true,
             discoverability: "everyone".to_string(),
         }
@@ -60,6 +70,44 @@ impl Settings {
             },
             _ => engine::RelayModeOption::Default,
         }
+    }
+
+    /// Relay config in the engine's IPC shape, for verify/status/fallback calls.
+    pub fn relay_config_arg(&self) -> engine::RelayConfigArg {
+        engine::RelayConfigArg {
+            mode: self.relay_mode.clone(),
+            urls: self.relay_urls.clone(),
+            auth_token: self.relay_token.clone().filter(|t| !t.trim().is_empty()),
+            fallback: Some(self.relay_fallback.clone()),
+        }
+    }
+
+    pub fn relay_fallback(&self) -> engine::RelayFallbackPolicy {
+        match self.relay_fallback.as_str() {
+            "public" => engine::RelayFallbackPolicy::Public,
+            _ => engine::RelayFallbackPolicy::Strict,
+        }
+    }
+
+    /// Discovery config in the engine's IPC shape, for verify/status calls.
+    pub fn discovery_config_arg(&self) -> engine::DiscoveryConfigArg {
+        engine::DiscoveryConfigArg {
+            mode: self.discovery_mode.clone(),
+            pkarr_relay_url: self
+                .discovery_pkarr_relay_url
+                .clone()
+                .filter(|s| !s.trim().is_empty()),
+            dns_origin: self
+                .discovery_dns_origin
+                .clone()
+                .filter(|s| !s.trim().is_empty()),
+        }
+    }
+
+    /// Resolved discovery mode; invalid persisted config falls back to default.
+    pub fn discovery_mode(&self) -> engine::DiscoveryModeOption {
+        engine::build_discovery_mode(Some(self.discovery_config_arg()))
+            .unwrap_or(engine::DiscoveryModeOption::Default)
     }
 
     pub fn discoverability(&self) -> engine::Discoverability {

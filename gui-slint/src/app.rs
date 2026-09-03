@@ -11,9 +11,11 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use engine::{
-    reclaim_partial, sanitize_folder_name, start_share_items, AddrInfoOptions, AppHandle,
-    DiscoveryModeOption, EventEmitter, NodeService, PairedDeviceInfo, ReceiveOptions, SendOptions,
-    TransferDirection, TransferHistoryStore, TransferPeer, TransferRecord, TransferStatus,
+    get_relay_status, is_reclaimable_partial, reclaim_partial, resolve_relay_mode_with_fallback,
+    sanitize_folder_name, start_share_items, verify_discovery, verify_relays, AddrInfoOptions,
+    AppHandle, DiscoveryConfigArg, DiscoveryModeOption, EventEmitter, NodeService, PairedDeviceInfo,
+    ReceiveOptions, RelayConfigArg, SendOptions, TransferDirection, TransferHistoryStore,
+    TransferPeer, TransferRecord, TransferStatus,
 };
 
 /// Display geometry for the window: desktop defaults, or phone-friendly
@@ -529,6 +531,74 @@ impl engine::EventEmitter for TransferEmitter {
     }
 }
 
+/// Resolve the configured relay (with public fallback when selected) and
+/// discovery mode for a transfer. Mirrors the Tauri shell: custom relays are
+/// probed, and a strict-but-unreachable relay fails the transfer.
+async fn resolve_network(
+    settings: &Arc<Mutex<Settings>>,
+) -> Result<(engine::RelayModeOption, DiscoveryModeOption), String> {
+    let (arg, discovery_mode) = {
+        let guard = settings.lock().unwrap();
+        (guard.relay_config_arg(), guard.discovery_mode())
+    };
+    let (relay_mode, fell_back) = resolve_relay_mode_with_fallback(Some(arg)).await?;
+    if fell_back {
+        tracing::warn!("custom relay unreachable; fell back to public relays");
+    }
+    Ok((relay_mode, discovery_mode))
+}
+
+/// Build a `RelayConfigArg` from the current settings-page fields.
+fn relay_arg_from_state(ui: &AppWindow) -> RelayConfigArg {
+    let state = ui.global::<State>();
+    let arg = RelayConfigArg {
+        mode: match state.get_relay_mode() {
+            1 => "disabled".to_string(),
+            2 => "custom".to_string(),
+            _ => "default".to_string(),
+        },
+        urls: state
+            .get_relay_urls()
+            .to_string()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+        auth_token: {
+            let token = state.get_relay_token().to_string();
+            (!token.trim().is_empty()).then_some(token)
+        },
+        fallback: Some(match state.get_relay_fallback() {
+            1 => "public".to_string(),
+            _ => "strict".to_string(),
+        }),
+    };
+    drop(state);
+    arg
+}
+
+/// Build a `DiscoveryConfigArg` from the current settings-page fields.
+fn discovery_arg_from_state(ui: &AppWindow) -> DiscoveryConfigArg {
+    let state = ui.global::<State>();
+    let arg = DiscoveryConfigArg {
+        mode: match state.get_discovery_mode() {
+            1 => "custom".to_string(),
+            _ => "default".to_string(),
+        },
+        pkarr_relay_url: {
+            let url = state.get_discovery_pkarr_url().to_string();
+            (!url.trim().is_empty()).then_some(url)
+        },
+        dns_origin: {
+            let origin = state.get_discovery_dns_origin().to_string();
+            (!origin.trim().is_empty()).then_some(origin)
+        },
+    };
+    drop(state);
+    arg
+}
+
 fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: String, paths: Vec<PathBuf>) {
     let weak = sync.weak.clone();
     let active_id = peer_id.clone();
@@ -576,12 +646,34 @@ fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: St
             recorder: recorder.clone(),
         });
         let app_handle: AppHandle = Some(emitter as Arc<dyn EventEmitter>);
+        let (relay_mode, discovery_mode) = match resolve_network(&sync_bg.settings).await {
+            Ok(v) => v,
+            Err(e) => {
+                recorder.finalize(
+                    TransferStatus::Failed,
+                    None,
+                    None,
+                    None,
+                    Some(e.clone()),
+                );
+                let msg = format!("Could not configure network: {e}");
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        let state = ui.global::<State>();
+                        state.set_share_starting(false);
+                        state.set_send_status("".into());
+                        state.set_send_error(msg.clone().into());
+                        drop(state);
+                        toast(&ui, &msg, true);
+                    }
+                });
+                return;
+            }
+        };
         let options = SendOptions {
-            relay_mode: {
-                let guard = sync_bg.settings.lock().unwrap();
-                guard.relay_mode()
-            },
-            discovery_mode: DiscoveryModeOption::Default,
+            relay_mode,
+            discovery_mode,
             ticket_type: AddrInfoOptions::RelayAndAddresses,
             magic_ipv4_addr: None,
             magic_ipv6_addr: None,
@@ -719,14 +811,23 @@ fn auto_accept_invite(sync: &Sync, payload: serde_json::Value) {
             return;
         }
 
-        let relay_mode = {
-            let guard = sync_bg.settings.lock().unwrap();
-            guard.relay_mode()
+        let (relay_mode, discovery_mode) = match resolve_network(&sync_bg.settings).await {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("Could not configure network: {e}");
+                let weak = sync_bg.weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        toast(&ui, &msg, true);
+                    }
+                });
+                return;
+            }
         };
         let options = ReceiveOptions {
             output_dir: Some(save_dir.clone()),
             relay_mode,
-            discovery_mode: DiscoveryModeOption::Default,
+            discovery_mode,
             magic_ipv4_addr: None,
             magic_ipv6_addr: None,
         };
@@ -941,16 +1042,27 @@ fn start_node(sync: &Sync) {
     let sync_bg = sync.clone();
 
     sync.rt.spawn(async move {
-        let (relay_mode, discoverability) = {
-            let guard = settings.lock().unwrap();
-            let relay: iroh::endpoint::RelayMode = guard.relay_mode().into();
-            (relay, guard.discoverability())
+        let cfg = settings.lock().unwrap().clone();
+        let discovery_mode = cfg.discovery_mode();
+        let discoverability = cfg.discoverability();
+        let (relay, fell_back) = match resolve_relay_mode_with_fallback(Some(cfg.relay_config_arg()))
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("failed to resolve relay mode at startup: {e}");
+                (engine::RelayModeOption::Default, false)
+            }
         };
+        if fell_back {
+            tracing::warn!("custom relay unreachable at startup; fell back to public relays");
+        }
+        let relay_mode: iroh::endpoint::RelayMode = relay.into();
         let emitter: AppHandle = Some(Arc::new(MainEmitter::new(queue)));
         match NodeService::start(
             &data_dir,
             relay_mode,
-            DiscoveryModeOption::Default,
+            discovery_mode,
             discoverability,
             emitter,
         )
@@ -1420,7 +1532,13 @@ fn register_history(sync: &Sync) {
             sync.rt.spawn_blocking(move || {
                 match sync_bg.history.delete(id.as_ref()) {
                     Ok(Some(record)) => {
-                        reclaim_partial(&record, &engine::storage::temp_dir());
+                        let temp_dir = engine::storage::temp_dir();
+                        if let Some(raw) = record.resumable_store_path.as_deref() {
+                            let path = PathBuf::from(raw);
+                            if is_reclaimable_partial(&path, &temp_dir) {
+                                reclaim_partial(&record, &temp_dir);
+                            }
+                        }
                     }
                     Ok(None) => {}
                     Err(e) => tracing::warn!("failed to delete history row: {e}"),
@@ -1553,6 +1671,22 @@ fn register_settings(sync: &Sync) {
                         let token = state.get_relay_token().to_string();
                         (!token.trim().is_empty()).then_some(token)
                     },
+                    relay_fallback: match state.get_relay_fallback() {
+                        1 => "public".to_string(),
+                        _ => "strict".to_string(),
+                    },
+                    discovery_mode: match state.get_discovery_mode() {
+                        1 => "custom".to_string(),
+                        _ => "default".to_string(),
+                    },
+                    discovery_pkarr_relay_url: {
+                        let url = state.get_discovery_pkarr_url().to_string();
+                        (!url.trim().is_empty()).then_some(url)
+                    },
+                    discovery_dns_origin: {
+                        let origin = state.get_discovery_dns_origin().to_string();
+                        (!origin.trim().is_empty()).then_some(origin)
+                    },
                     history_enabled: state.get_history_enabled(),
                     discoverability: match state.get_discoverability() {
                         1 => "paired-only".to_string(),
@@ -1581,13 +1715,12 @@ fn register_settings(sync: &Sync) {
                     let Some(node) = sync_bg.node.lock().unwrap().clone() else {
                         return;
                     };
-                    let relay = sync_bg.settings.lock().unwrap().relay_mode();
-                    let disc = sync_bg.settings.lock().unwrap().discoverability();
+                    let (relay, discovery, disc) = {
+                        let cfg = sync_bg.settings.lock().unwrap().clone();
+                        (cfg.relay_mode(), cfg.discovery_mode(), cfg.discoverability())
+                    };
                     sync_bg.rt.spawn(async move {
-                        if let Err(e) = node
-                            .reconfigure_network(relay.into(), DiscoveryModeOption::Default)
-                            .await
-                        {
+                        if let Err(e) = node.reconfigure_network(relay.into(), discovery).await {
                             tracing::warn!("reconfigure failed: {e}");
                         }
                         if let Err(e) = node.set_discoverability(disc).await {
@@ -1605,6 +1738,161 @@ fn register_settings(sync: &Sync) {
                         }
                     });
                 }
+            });
+        });
+    }
+
+    {
+        let sync = sync.clone();
+        logic.on_test_relay(move || {
+            let Some(ui) = sync.weak.upgrade() else {
+                return;
+            };
+            let arg = relay_arg_from_state(&ui);
+            let weak = sync.weak.clone();
+            sync.rt.spawn(async move {
+                let _ = slint::invoke_from_event_loop({
+                    let weak = weak.clone();
+                    move || {
+                        if let Some(ui) = weak.upgrade() {
+                            let s = ui.global::<State>();
+                            s.set_relay_testing(true);
+                            s.set_relay_test_status("Testing…".into());
+                        }
+                    }
+                });
+                let result = verify_relays(arg).await;
+                let _ = slint::invoke_from_event_loop({
+                    let weak = weak.clone();
+                    move || {
+                        if let Some(ui) = weak.upgrade() {
+                            let s = ui.global::<State>();
+                            s.set_relay_testing(false);
+                            match result {
+                                Ok(resp) => {
+                                    let msg = match resp.url {
+                                        Some(url) => {
+                                            format!("Connected to {url} ({}ms)", resp.latency_ms)
+                                        }
+                                        None => format!("Connected ({}ms)", resp.latency_ms),
+                                    };
+                                    s.set_relay_test_status(msg.into());
+                                    toast(&ui, "Relay connection verified", false);
+                                }
+                                Err(e) => {
+                                    let msg = format!("Relay check failed: {e}");
+                                    s.set_relay_test_status(msg.clone().into());
+                                    toast(&ui, &msg, true);
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    {
+        let sync = sync.clone();
+        logic.on_check_relay_status(move || {
+            let Some(ui) = sync.weak.upgrade() else {
+                return;
+            };
+            let arg = relay_arg_from_state(&ui);
+            let weak = sync.weak.clone();
+            sync.rt.spawn(async move {
+                match get_relay_status(Some(arg)).await {
+                    Ok(resp) => {
+                        let label = match resp.kind.as_str() {
+                            "disabled" => "Relay disabled".to_string(),
+                            "custom" => format!(
+                                "Custom relay: {}",
+                                resp.url.as_deref().unwrap_or("unreachable")
+                            ),
+                            "public" => format!(
+                                "Public relay: {}",
+                                resp.url.as_deref().unwrap_or("n0")
+                            ),
+                            _ => "Relay unavailable".to_string(),
+                        };
+                        let fell_back = resp.fell_back_to_public;
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                ui.global::<State>().set_relay_status(label.into());
+                                if fell_back {
+                                    toast(
+                                        &ui,
+                                        "Custom relay unreachable — using public relays",
+                                        true,
+                                    );
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        let msg = format!("Relay status failed: {e}");
+                        let _ = slint::invoke_from_event_loop({
+                            let weak = weak.clone();
+                            move || {
+                                if let Some(ui) = weak.upgrade() {
+                                    ui.global::<State>().set_relay_status(msg.clone().into());
+                                    toast(&ui, &msg, true);
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+        });
+    }
+
+    {
+        let sync = sync.clone();
+        logic.on_test_discovery(move || {
+            let Some(ui) = sync.weak.upgrade() else {
+                return;
+            };
+            let arg = discovery_arg_from_state(&ui);
+            let weak = sync.weak.clone();
+            sync.rt.spawn(async move {
+                let _ = slint::invoke_from_event_loop({
+                    let weak = weak.clone();
+                    move || {
+                        if let Some(ui) = weak.upgrade() {
+                            let s = ui.global::<State>();
+                            s.set_discovery_testing(true);
+                            s.set_discovery_test_status("Testing…".into());
+                        }
+                    }
+                });
+                let result = verify_discovery(arg).await;
+                let _ = slint::invoke_from_event_loop({
+                    let weak = weak.clone();
+                    move || {
+                        if let Some(ui) = weak.upgrade() {
+                            let s = ui.global::<State>();
+                            s.set_discovery_testing(false);
+                            match result {
+                                Ok(resp) => {
+                                    let msg = match resp.url {
+                                        Some(url) => format!(
+                                            "Discovery server reachable: {url} ({}ms)",
+                                            resp.latency_ms
+                                        ),
+                                        None => format!("Reachable ({}ms)", resp.latency_ms),
+                                    };
+                                    s.set_discovery_test_status(msg.into());
+                                    toast(&ui, "Discovery server verified", false);
+                                }
+                                Err(e) => {
+                                    let msg = format!("Discovery check failed: {e}");
+                                    s.set_discovery_test_status(msg.clone().into());
+                                    toast(&ui, &msg, true);
+                                }
+                            }
+                        }
+                    }
+                });
             });
         });
     }
@@ -1673,6 +1961,16 @@ pub fn run() {
         });
         state.set_relay_urls(s.relay_urls.join("\n").into());
         state.set_relay_token(s.relay_token.clone().unwrap_or_default().into());
+        state.set_relay_fallback(match s.relay_fallback.as_str() {
+            "public" => 1,
+            _ => 0,
+        });
+        state.set_discovery_mode(match s.discovery_mode.as_str() {
+            "custom" => 1,
+            _ => 0,
+        });
+        state.set_discovery_pkarr_url(s.discovery_pkarr_relay_url.clone().unwrap_or_default().into());
+        state.set_discovery_dns_origin(s.discovery_dns_origin.clone().unwrap_or_default().into());
         state.set_discoverability(match s.discoverability.as_str() {
             "paired-only" => 1,
             "off" => 2,

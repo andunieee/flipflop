@@ -68,6 +68,67 @@ export component SettingsPage inherits Rectangle {
                 text <=> State.relay-token;
                 placeholder-text: "token";
             }
+            FieldLabel { label: "If the relay is unreachable:"; }
+            ComboBox {
+                min-width: 220px;
+                model: ["Fail (strict)", "Fall back to public relays"];
+                current-index <=> State.relay-fallback;
+            }
+        }
+        if State.relay-mode != 1: HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            Button {
+                text: State.relay-testing ? "Testing…" : "Test connection";
+                enabled: !State.relay-testing;
+                clicked => { Logic.test-relay(); }
+            }
+            Button {
+                text: "Relay status";
+                clicked => { Logic.check-relay-status(); }
+            }
+        }
+        if State.relay-test-status != "": StatusText {
+            text: State.relay-test-status;
+            error: false;
+        }
+        if State.relay-status != "": StatusText {
+            text: State.relay-status;
+            error: false;
+        }
+
+        // Discovery
+        FieldLabel { label: "Device discovery"; }
+        ComboBox {
+            min-width: 220px;
+            model: ["Default (n0)", "Custom pkarr relay"];
+            current-index <=> State.discovery-mode;
+        }
+        if State.discovery-mode == 1: VerticalLayout {
+            spacing: 6px;
+            FieldLabel { label: "pkarr relay URL:"; }
+            LineEdit {
+                text <=> State.discovery-pkarr-url;
+                placeholder-text: "https://dns.example.com/pkarr";
+            }
+            FieldLabel { label: "DNS origin (optional):"; }
+            LineEdit {
+                text <=> State.discovery-dns-origin;
+                placeholder-text: "example.com";
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                Button {
+                    text: State.discovery-testing ? "Testing…" : "Test connection";
+                    enabled: !State.discovery-testing;
+                    clicked => { Logic.test-discovery(); }
+                }
+            }
+        }
+        if State.discovery-test-status != "": StatusText {
+            text: State.discovery-test-status;
+            error: false;
         }
 
         // Discoverability
