@@ -1,35 +1,92 @@
 import { Button, ScrollView } from "std-widgets.slint";
 import { State, Logic } from "globals.slint";
 
+// App-wide palette and metrics. Centralized so everything stays consistent.
+export global Theme {
+    // surfaces: dark blue-grey ramp
+    out property <color> window-bg: #15151d;
+    out property <color> sidebar-bg: #1c1c26;
+    out property <color> card-bg: #22222e;
+    out property <color> card-bg-hover: #262635;
+    out property <color> inset-bg: #1a1a24;
+
+    // text
+    out property <color> text-strong: #f0f0f6;
+    out property <color> text: #c8c8d8;
+    out property <color> text-muted: #8f8fa5;
+    out property <color> text-faint: #67677d;
+
+    // accents
+    out property <color> accent: #6c7bff;
+    out property <color> accent-hover: #7e8bff;
+    out property <color> accent-press: #5a66d8;
+    out property <color> accent-soft: #2b2f4a;
+
+    // status
+    out property <color> online: #5fd89a;
+    out property <color> offline: #464654;
+    out property <color> warn: #e0b040;
+    out property <color> info: #4aa8e0;
+    out property <color> error: #ff7a8f;
+    out property <color> success: #7dcf8f;
+
+    // interactive neutrals
+    out property <color> chip-bg: #2b2b38;
+    out property <color> chip-bg-hover: #343444;
+
+    // radii
+    out property <length> radius-sm: 6px;
+    out property <length> radius: 10px;
+    out property <length> radius-lg: 14px;
+}
+
 export component PageTitle inherits Text {
     in property <string> label;
-    font-size: 22px;
-    font-weight: 700;
-    color: white;
+    font-size: 24px;
+    font-weight: 800;
+    color: Theme.text-strong;
     text: root.label;
+}
+
+export component SectionTitle inherits Text {
+    in property <string> label;
+    font-size: 14px;
+    font-weight: 700;
+    color: Theme.text-strong;
+    text: root.label;
+}
+
+export component Card inherits Rectangle {
+    border-radius: Theme.radius;
+    background: Theme.card-bg;
+    drop-shadow-color: #0003;
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 2px;
 }
 
 export component ProgressBar inherits Rectangle {
     in property <float> value; // 0..1
     in property <string> label;
 
-    border-radius: 4px;
-    background: #2a2a35;
-    min-height: 16px;
+    border-radius: self.height / 2;
+    background: Theme.inset-bg;
+    min-height: 14px;
 
     Rectangle {
         x: 0;
         y: 0;
         height: parent.height;
         width: parent.width * clamp(root.value, 0.0, 1.0);
-        border-radius: 4px;
-        background: #4a5fd0;
+        border-radius: parent.border-radius;
+        background: @linear-gradient(90deg, #5a6cff, #8a7bff);
+        animate width { duration: 120ms; }
     }
 
     if root.label != "": Text {
         text: root.label;
         color: white;
         font-size: 10px;
+        font-weight: 600;
         vertical-alignment: center;
         horizontal-alignment: center;
     }
@@ -37,7 +94,7 @@ export component ProgressBar inherits Rectangle {
 
 export component HintText inherits Text {
     in property <string> label;
-    color: #9a9aac;
+    color: Theme.text-muted;
     font-size: 12px;
     text: root.label;
     wrap: word-wrap;
@@ -46,15 +103,114 @@ export component HintText inherits Text {
 export component StatusText inherits Text {
     in property <string> label;
     in property <bool> error;
-    color: root.error ? #ff8a98 : #8fd08f;
+    color: root.error ? Theme.error : Theme.success;
     font-size: 12px;
+    font-weight: 500;
     text: root.label;
     wrap: word-wrap;
 }
 
 export component FieldLabel inherits Text {
     in property <string> label;
-    color: #c8c8d8;
+    color: Theme.text;
     font-size: 12px;
+    font-weight: 600;
     text: root.label;
+}
+
+// Status dot reused everywhere (online indicator, list marker).
+export component Dot inherits Rectangle {
+    in property <bool> online;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: root.online ? Theme.online : Theme.offline;
+}
+
+// Solid accent button.
+export component PrimaryButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    min-height: 32px;
+    border-radius: Theme.radius-sm;
+    background: !root.enabled ? Theme.accent-soft : touch.pressed ? Theme.accent-press : touch.has-hover ? Theme.accent-hover : Theme.accent;
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+    animate background { duration: 90ms; }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 14px;
+        padding-right: 14px;
+
+        Text {
+            text: root.label;
+            color: root.enabled ? white : Theme.text-faint;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Subtle neutral button (secondary actions, dialogs).
+export component GhostButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    min-height: 32px;
+    border-radius: Theme.radius-sm;
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+    background: touch.pressed ? Theme.chip-bg : touch.has-hover ? Theme.chip-bg-hover : transparent;
+    animate background { duration: 90ms; }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 12px;
+        padding-right: 12px;
+
+        Text {
+            text: root.label;
+            color: root.enabled ? Theme.text : Theme.text-faint;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Subtle destructive button (Forget, delete rows).
+export component DangerButton inherits Rectangle {
+    in property <string> label;
+    callback clicked;
+
+    min-height: 32px;
+    border-radius: Theme.radius-sm;
+    ty := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+    background: ty.pressed ? #6a2430 : ty.has-hover ? #3a2430 : transparent;
+    animate background { duration: 90ms; }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 12px;
+        padding-right: 12px;
+
+        Text {
+            text: root.label;
+            color: Theme.error;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
 }

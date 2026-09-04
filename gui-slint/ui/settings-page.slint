@@ -1,162 +1,199 @@
-import { Button, LineEdit, ComboBox, CheckBox } from "std-widgets.slint";
+import { LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
 import { State, Logic } from "globals.slint";
-import { PageTitle, HintText, StatusText, FieldLabel } from "components.slint";
+import {
+    Theme, Card, PageTitle, HintText, StatusText, FieldLabel,
+    SectionTitle, PrimaryButton, GhostButton,
+} from "components.slint";
 
 export component SettingsPage inherits Rectangle {
     background: transparent;
 
-    VerticalLayout {
-        padding: State.touch ? 12px : 16px;
-        spacing: State.touch ? 10px : 14px;
-        alignment: start;
-
-        PageTitle { label: "Settings"; }
-
-        // Our device name
-        FieldLabel { label: "This device's name:"; }
-        HorizontalLayout {
-            spacing: 10px;
+    ScrollView {
+        VerticalLayout {
+            padding: State.touch ? 12px : 18px;
+            spacing: State.touch ? 10px : 14px;
             alignment: start;
-            LineEdit {
-                text <=> State.my-name;
-                min-width: State.touch ? 140px : 260px;
-                horizontal-stretch: 1;
-            }
-            Button {
-                text: "Set name";
-                clicked => { Logic.rename-self-name(); }
-            }
-        }
-        HintText { label: "Peers will see this name when they discover or pair with you."; }
 
-        // Downloads: the folder picker is desktop-only. On Android received
-        // files land in the app-private downloads folder.
-        if !State.touch: FieldLabel { label: "Downloads folder"; }
-        if !State.touch: HorizontalLayout {
-            spacing: 10px;
-            alignment: start;
-            Button { text: "Browse…"; clicked => { Logic.pick-downloads-dir(); } }
-            Text {
-                text: State.downloads-dir;
-                color: #9a9aac;
-                font-size: 11px;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-        }
-        if State.touch: HintText {
-            label: "Received files are saved to the app's private folder; open them from the history list in a file manager.";
-        }
+            PageTitle { label: "Settings"; }
 
-        // Relay
-        FieldLabel { label: "Relay"; }
-        ComboBox {
-            min-width: 220px;
-            model: ["Default (n0)", "Disabled (direct only)", "Custom"];
-            current-index <=> State.relay-mode;
-        }
-        if State.relay-mode == 2: VerticalLayout {
-            spacing: 6px;
-            FieldLabel { label: "Relay URLs (one per line):"; }
-            LineEdit {
-                text <=> State.relay-urls;
-                placeholder-text: "https://relay1.example.com";
-            }
-            FieldLabel { label: "Relay auth token (optional):"; }
-            LineEdit {
-                text <=> State.relay-token;
-                placeholder-text: "token";
-            }
-            FieldLabel { label: "If the relay is unreachable:"; }
-            ComboBox {
-                min-width: 220px;
-                model: ["Fail (strict)", "Fall back to public relays"];
-                current-index <=> State.relay-fallback;
-            }
-        }
-        if State.relay-mode != 1: HorizontalLayout {
-            spacing: 10px;
-            alignment: start;
-            Button {
-                text: State.relay-testing ? "Testing…" : "Test connection";
-                enabled: !State.relay-testing;
-                clicked => { Logic.test-relay(); }
-            }
-            Button {
-                text: "Relay status";
-                clicked => { Logic.check-relay-status(); }
-            }
-        }
-        if State.relay-test-status != "": StatusText {
-            text: State.relay-test-status;
-            error: false;
-        }
-        if State.relay-status != "": StatusText {
-            text: State.relay-status;
-            error: false;
-        }
+            // Our device name
+            Card {
+                VerticalLayout {
+                    padding: State.touch ? 10px : 12px;
+                    spacing: 8px;
 
-        // Discovery
-        FieldLabel { label: "Device discovery"; }
-        ComboBox {
-            min-width: 220px;
-            model: ["Default (n0)", "Custom pkarr relay"];
-            current-index <=> State.discovery-mode;
-        }
-        if State.discovery-mode == 1: VerticalLayout {
-            spacing: 6px;
-            FieldLabel { label: "pkarr relay URL:"; }
-            LineEdit {
-                text <=> State.discovery-pkarr-url;
-                placeholder-text: "https://dns.example.com/pkarr";
-            }
-            FieldLabel { label: "DNS origin (optional):"; }
-            LineEdit {
-                text <=> State.discovery-dns-origin;
-                placeholder-text: "example.com";
-            }
-            HorizontalLayout {
-                spacing: 10px;
-                alignment: start;
-                Button {
-                    text: State.discovery-testing ? "Testing…" : "Test connection";
-                    enabled: !State.discovery-testing;
-                    clicked => { Logic.test-discovery(); }
+                    SectionTitle { label: "Device name"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        LineEdit {
+                            text <=> State.my-name;
+                            min-width: State.touch ? 140px : 260px;
+                            horizontal-stretch: 1;
+                        }
+                        PrimaryButton { label: "Set name"; clicked => { Logic.rename-self-name(); } }
+                    }
+                    HintText { label: "Peers will see this name when they discover or pair with you."; }
                 }
             }
-        }
-        if State.discovery-test-status != "": StatusText {
-            text: State.discovery-test-status;
-            error: false;
-        }
 
-        // Discoverability
-        FieldLabel { label: "Local discovery"; }
-        ComboBox {
-            min-width: 220px;
-            model: ["Discoverable by everyone", "Paired devices only", "Off"];
-            current-index <=> State.discoverability;
-        }
+            // Downloads: the folder picker is desktop-only. On Android received
+            // files land in the app-private downloads folder.
+            if !State.touch: Card {
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
 
-        // History
-        CheckBox {
-            text: "Record transfer history";
-            checked <=> State.history-enabled;
-            toggled => { }
-        }
+                    SectionTitle { label: "Downloads folder"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        GhostButton { label: "Browse…"; clicked => { Logic.pick-downloads-dir(); } }
+                        Text {
+                            text: State.downloads-dir;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+            if State.touch: HintText {
+                label: "Received files are saved to the app's private folder; open them from the history list in a file manager.";
+            }
 
-        HorizontalLayout {
-            spacing: 10px;
-            alignment: start;
-            Button { text: "Save settings"; primary: true; clicked => { Logic.save-settings(); } }
-        }
+            // Relay
+            Card {
+                VerticalLayout {
+                    padding: State.touch ? 10px : 12px;
+                    spacing: 8px;
 
-        if State.settings-status != "": StatusText {
-            text: State.settings-status;
-            error: false;
-        }
+                    SectionTitle { label: "Relay"; }
+                    ComboBox {
+                        min-width: 220px;
+                        model: ["Default (n0)", "Disabled (direct only)", "Custom"];
+                        current-index <=> State.relay-mode;
+                    }
+                    if State.relay-mode == 2: VerticalLayout {
+                        spacing: 6px;
+                        FieldLabel { label: "Relay URLs (one per line):"; }
+                        LineEdit {
+                            text <=> State.relay-urls;
+                            placeholder-text: "https://relay1.example.com";
+                        }
+                        FieldLabel { label: "Relay auth token (optional):"; }
+                        LineEdit {
+                            text <=> State.relay-token;
+                            placeholder-text: "token";
+                        }
+                        FieldLabel { label: "If the relay is unreachable:"; }
+                        ComboBox {
+                            min-width: 220px;
+                            model: ["Fail (strict)", "Fall back to public relays"];
+                            current-index <=> State.relay-fallback;
+                        }
+                    }
+                    if State.relay-mode != 1: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        GhostButton {
+                            label: State.relay-testing ? "Testing…" : "Test connection";
+                            enabled: !State.relay-testing;
+                            clicked => { Logic.test-relay(); }
+                        }
+                        GhostButton { label: "Relay status"; clicked => { Logic.check-relay-status(); } }
+                    }
+                    if State.relay-test-status != "": StatusText {
+                        label: State.relay-test-status;
+                        error: false;
+                    }
+                    if State.relay-status != "": StatusText {
+                        label: State.relay-status;
+                        error: false;
+                    }
+                }
+            }
 
-        Rectangle { vertical-stretch: 1; }
+            // Discovery
+            Card {
+                VerticalLayout {
+                    padding: State.touch ? 10px : 12px;
+                    spacing: 8px;
+
+                    SectionTitle { label: "Device discovery"; }
+                    ComboBox {
+                        min-width: 220px;
+                        model: ["Default (n0)", "Custom pkarr relay"];
+                        current-index <=> State.discovery-mode;
+                    }
+                    if State.discovery-mode == 1: VerticalLayout {
+                        spacing: 6px;
+                        FieldLabel { label: "pkarr relay URL:"; }
+                        LineEdit {
+                            text <=> State.discovery-pkarr-url;
+                            placeholder-text: "https://dns.example.com/pkarr";
+                        }
+                        FieldLabel { label: "DNS origin (optional):"; }
+                        LineEdit {
+                            text <=> State.discovery-dns-origin;
+                            placeholder-text: "example.com";
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            GhostButton {
+                                label: State.discovery-testing ? "Testing…" : "Test connection";
+                                enabled: !State.discovery-testing;
+                                clicked => { Logic.test-discovery(); }
+                            }
+                        }
+                    }
+                    if State.discovery-test-status != "": StatusText {
+                        label: State.discovery-test-status;
+                        error: false;
+                    }
+                }
+            }
+
+            // Discoverability
+            Card {
+                VerticalLayout {
+                    padding: State.touch ? 10px : 12px;
+                    spacing: 8px;
+
+                    SectionTitle { label: "Presence"; }
+                    FieldLabel { label: "Who can find you:"; }
+                    ComboBox {
+                        min-width: 220px;
+                        model: ["Discoverable by everyone", "Paired devices only", "Off"];
+                        current-index <=> State.discoverability;
+                    }
+                    CheckBox {
+                        text: "Record transfer history";
+                        checked <=> State.history-enabled;
+                        toggled => { }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                PrimaryButton {
+                    label: "Save settings";
+                    min-width: 220px;
+                    clicked => { Logic.save-settings(); }
+                }
+                if State.settings-status != "": StatusText {
+                    label: State.settings-status;
+                    error: false;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle { min-height: 8px; }
+        }
     }
 }

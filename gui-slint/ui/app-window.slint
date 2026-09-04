@@ -1,5 +1,6 @@
 import { State, Logic } from "globals.slint";
 import { ScrollView } from "std-widgets.slint";
+import { Theme, Dot } from "components.slint";
 import { PeerPage } from "peer-page.slint";
 import { AddPeerPage } from "add-peer-page.slint";
 import { SettingsPage } from "settings-page.slint";
@@ -12,17 +13,20 @@ component NavButton inherits Rectangle {
     in property <bool> active;
     in property <bool> compact;
 
-    border-radius: root.compact ? 10px : 6px;
-    background: active ? #37374a : transparent;
+    border-radius: root.compact ? Theme.radius : Theme.radius-sm;
+    background: root.active ? Theme.accent-soft
+        : ta.has-hover && !root.compact ? Theme.chip-bg-hover
+        : transparent;
     min-height: root.compact ? 52px : 34px;
 
-    touch := TouchArea {
+    ta := TouchArea {
         clicked => {
             State.page = root.key;
             Logic.page-changed(root.key);
         }
         mouse-cursor: pointer;
     }
+    animate background { duration: 90ms; }
 
     VerticalLayout {
         alignment: center;
@@ -30,13 +34,14 @@ component NavButton inherits Rectangle {
 
         if root.compact: Text {
             text: root.label;
-            color: root.active ? white : #c8c8d0;
+            color: root.active ? Theme.text-strong : Theme.text;
             font-size: 20px;
             horizontal-alignment: center;
         }
         if !root.compact: Text {
             text: root.label;
-            color: root.active ? white : #c8c8d0;
+            color: root.active ? Theme.accent : Theme.text;
+            font-weight: root.active ? 600 : 400;
             vertical-alignment: center;
         }
     }
@@ -48,13 +53,14 @@ component PeerButton inherits Rectangle {
     in property <bool> online;
     in property <bool> compact;
 
-    border-radius: 6px;
+    border-radius: Theme.radius-sm;
     background: State.page == "peer" && State.selected-id == self.endpoint-id
-        ? #4a5fd0
+        ? Theme.accent-soft
+        : ta.has-hover ? Theme.chip-bg-hover
         : transparent;
     min-height: root.compact ? 48px : 34px;
 
-    touch := TouchArea {
+    ta := TouchArea {
         clicked => {
             Logic.select-peer(root.endpoint-id);
             State.page = "peer";
@@ -62,23 +68,18 @@ component PeerButton inherits Rectangle {
         }
         mouse-cursor: pointer;
     }
+    animate background { duration: 90ms; }
 
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 12px;
-        spacing: 6px;
+        spacing: 8px;
         alignment: start;
 
-        Rectangle {
-            y: (parent.height - self.height) / 2;
-            width: 8px;
-            height: 8px;
-            border-radius: 4px;
-            background: root.online ? #7bd88f : #4a4a58;
-        }
+        Dot { online: root.online; }
         Text {
             text: root.label;
-            color: State.selected-id == root.endpoint-id ? white : #c8c8d0;
+            color: State.selected-id == root.endpoint-id ? Theme.text-strong : Theme.text;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -88,17 +89,18 @@ component PeerButton inherits Rectangle {
 component AddPeerButton inherits Rectangle {
     in property <bool> compact;
 
-    border-radius: 6px;
-    background: #37374a;
+    border-radius: Theme.radius-sm;
+    background: ta.has-hover ? Theme.chip-bg-hover : Theme.chip-bg;
     min-height: root.compact ? 48px : 34px;
 
-    touch := TouchArea {
+    ta := TouchArea {
         clicked => {
             State.page = "add-peer";
             Logic.page-changed("add-peer");
         }
         mouse-cursor: pointer;
     }
+    animate background { duration: 90ms; }
 
     HorizontalLayout {
         padding-left: 12px;
@@ -106,7 +108,8 @@ component AddPeerButton inherits Rectangle {
 
         Text {
             text: "+ Add peer";
-            color: white;
+            color: Theme.text-strong;
+            font-weight: 600;
             vertical-alignment: center;
         }
     }
@@ -114,7 +117,7 @@ component AddPeerButton inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "TunnelManager";
-    background: #1b1b23;
+    background: Theme.window-bg;
     // Single-pane layout (no sidebar) with a bottom nav instead.
     property <bool> compact;
 
@@ -133,45 +136,57 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             // Sidebar: desktop + wide tablets only.
             if !root.compact: Rectangle {
-                min-width: 210px;
-                max-width: 210px;
-                background: #20202b;
+                min-width: 220px;
+                max-width: 220px;
+                background: Theme.sidebar-bg;
 
                 VerticalLayout {
-                    padding: 12px;
+                    padding: 14px;
                     spacing: 6px;
                     alignment: start;
 
-                    Text {
-                        text: "TunnelManager";
-                        font-size: 18px;
-                        font-weight: 700;
-                        color: white;
-                    }
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
+                    // App header
+                    VerticalLayout {
+                        spacing: 4px;
                         Text {
-                            text: State.my-name;
-                            color: #9a9aac;
-                            font-size: 11px;
-                            overflow: elide;
-                            vertical-alignment: center;
+                            text: "TunnelManager";
+                            font-size: 17px;
+                            font-weight: 800;
+                            color: Theme.text-strong;
                         }
-                        if !State.node-ready: Text {
-                            text: "(starting…)";
-                            color: #d0a040;
-                            font-size: 11px;
-                            vertical-alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            Dot { online: State.node-ready; }
+                            Text {
+                                text: State.my-name == "" ? "…" : State.my-name;
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            if !State.node-ready: Text {
+                                text: "starting…";
+                                color: Theme.warn;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
                         }
                     }
 
-                    Rectangle { min-height: 6px; }
+                    Rectangle { min-height: 10px; }
 
                     AddPeerButton { compact: false; }
 
-                    if State.peers.length > 0: Rectangle { min-height: 6px; }
+                    if State.peers.length > 0: Rectangle { min-height: 10px; }
+
+                    if State.peers.length > 0: Text {
+                        text: "Peers";
+                        color: Theme.text-faint;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
 
                     ScrollView {
                         VerticalLayout {
@@ -190,9 +205,11 @@ export component AppWindow inherits Window {
 
                     NavButton { label: "Settings"; key: "settings"; active: State.page == "settings"; compact: false; }
 
+                    Rectangle { min-height: 4px; }
+
                     Text {
                         text: State.presence-label;
-                        color: #6a6a78;
+                        color: Theme.text-faint;
                         font-size: 10px;
                     }
                 }
@@ -220,7 +237,7 @@ export component AppWindow inherits Window {
         if root.compact: Rectangle {
             min-height: 64px;
             max-height: 64px;
-            background: #20202b;
+            background: Theme.sidebar-bg;
 
             HorizontalLayout {
                 padding-left: 8px;
