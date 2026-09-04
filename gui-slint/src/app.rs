@@ -603,6 +603,8 @@ fn discovery_arg_from_state(ui: &AppWindow) -> DiscoveryConfigArg {
 }
 
 fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: String, paths: Vec<PathBuf>) {
+    let size_bytes: u64 = paths.iter().map(|p| dir_size(p)).sum();
+    tracing::info!(%peer_id, paths = paths.len(), size_bytes, "send: starting flow");
     let weak = sync.weak.clone();
     let active_id = peer_id.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -675,12 +677,13 @@ fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: St
             }
         };
         let options = SendOptions {
-            relay_mode,
-            discovery_mode,
+            relay_mode: relay_mode.clone(),
+            discovery_mode: discovery_mode.clone(),
             ticket_type: AddrInfoOptions::RelayAndAddresses,
             magic_ipv4_addr: None,
             magic_ipv6_addr: None,
         };
+        tracing::info!(?relay_mode, ?discovery_mode, "send: options resolved, creating share");
         let share = match tokio::time::timeout(
             std::time::Duration::from_secs(60),
             start_share_items(paths, options, &app_handle, Some(metadata)),
@@ -711,6 +714,7 @@ fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: St
             }
         };
         let ticket = share.ticket.clone();
+        tracing::info!(%peer_id, ticket_prefix = ticket.chars().take(24).collect::<String>(), share_size = share.size, "send: share created, delivering invite");
         let handle = ShareHandle {
             send_result: share,
             recorder: Some(recorder),
@@ -740,8 +744,18 @@ fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: St
             .invite_paired_device(&peer_id, &ticket, item_count, byte_count)
             .await
         {
-            Ok(true) => true,
-            Ok(false) | Err(_) => false,
+            Ok(true) => {
+                tracing::info!(%peer_id, "send: invite delivered, waiting for peer to pull");
+                true
+            }
+            Ok(false) => {
+                tracing::warn!(%peer_id, "send: invite not delivered (peer unreachable)");
+                false
+            }
+            Err(e) => {
+                tracing::warn!(%peer_id, "send: invite delivery failed: {e:#}");
+                false
+            }
         };
         let peer_name = peer_name.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -784,6 +798,7 @@ fn auto_accept_invite(sync: &Sync, payload: serde_json::Value) {
 
     let sync_bg = sync.clone();
     sync.rt.spawn(async move {
+        tracing::info!(%id, "receive: invite payload parsed, starting auto-accept");
         // Peer display name: their stored name, else the invite's claim.
                 let peer_name = node
                     .list_paired()
@@ -808,11 +823,21 @@ fn auto_accept_invite(sync: &Sync, payload: serde_json::Value) {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(sanitize_folder_name(&peer_name, &short_id(&id)))
         };
+        tracing::info!(%id, save = %save_dir.display(), "receive: save directory");
+        let _ = std::fs::create_dir_all(&save_dir);
 
         if let Err(e) = node.respond_paired_invite(&id, true).await {
-            tracing::warn!("failed to accept invite from {id}: {e}");
+            tracing::warn!(%id, "receive: accept handshake failed, download skipped: {e}");
+            let msg = format!("Could not accept files from {peer_name}: {e}");
+            let weak = sync_bg.weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    toast(&ui, &msg, true);
+                }
+            });
             return;
         }
+        tracing::info!(%id, "receive: accept handed to sender, resolving network");
 
         let (relay_mode, discovery_mode) = match resolve_network(&sync_bg.settings).await {
             Ok(v) => v,
@@ -880,6 +905,7 @@ fn auto_accept_invite(sync: &Sync, payload: serde_json::Value) {
         let weak2 = sync_bg.weak.clone();
         let id_done = id.clone();
         let peer_done = peer_name.clone();
+        tracing::info!(%id, "receive: starting download from sender's share endpoint");
         match engine::download(ticket, options, app_handle, cancel_rx).await {
             Ok(_) => {
                 sync_bg.recv_cancels.lock().remove(&id_done);
