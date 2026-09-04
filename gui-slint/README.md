@@ -54,9 +54,11 @@ Platform integration (see `src/android.rs`):
   Java main thread.
 - **Sending**: pick files through the system share sheet — "Share →
   TunnelManager" from any app stages the content into an app-private outbox;
-  the app offers those files to send to any peer (a hint shows the count).
-  A lazy SAF picker is not possible because `android-activity` does not
-  forward `onActivityResult`.
+  the app immediately opens the peer picker and a toast shows the count, and
+  "Send files…" on a peer sends the staged content. A native SAF picker is not
+  possible because `android-activity` does not forward `onActivityResult`.
+  Sharing while the app is only in the background cannot be observed either
+  (no `onNewIntent` forwarding); that share restarts the activity.
 - **Receiving** land in the app-private downloads folder; opening rows is a
   no-op on Android (use a file manager). The Settings page hides the folder
   picker accordingly.

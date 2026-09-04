@@ -51,6 +51,7 @@ mod imp {
     }
 
     /// Number of files currently staged in the outbox (for the UI hint).
+    #[allow(dead_code)]
     pub fn outbox_count() -> usize {
         std::fs::read_dir(outbox_dir())
             .map(|entries| entries.flatten().filter(|e| e.path().is_file()).count())
@@ -102,6 +103,9 @@ mod imp {
     /// keeps the lock object (and thus the held lock) alive for the process
     /// lifetime.
     static MULTICAST_LOCK: OnceLock<GlobalRef> = OnceLock::new();
+
+    /// Marks the launch intent as consumed; stages it exactly once per process.
+    static INTENT_STAGED: OnceLock<()> = OnceLock::new();
 
     pub fn acquire_multicast_lock() {
         match with_env(acquire_multicast_lock_with_env) {
@@ -273,6 +277,33 @@ mod imp {
                 Vec::new()
             }
         }
+    }
+
+    /// Shares-into-the-app entry point ("intent listener"): stages whatever the
+    /// launch intent carries (ACTION_SEND / ACTION_SEND_MULTIPLE) into the
+    /// outbox, then returns every staged file. Called once at startup (so a
+    /// share launched from another app prompts immediately) and again from the
+    /// send button; a process-local guard keeps the same intent from being
+    /// staged twice. NOTE: sharing while the app is already running in the
+    /// background cannot be observed — android-activity does not forward
+    /// `onNewIntent` — so that case restarts the activity with the share.
+    pub fn pick_send_files() -> Vec<PathBuf> {
+        let first = INTENT_STAGED.set(()).map(|_| true).unwrap_or(false);
+        if first {
+            pick_shared_files();
+        }
+        let dir = outbox_dir();
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.path().is_file())
+                    .map(|e| e.path())
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files
     }
 
     fn collect_shared_files_with_env(env: &mut jni::JNIEnv) -> Result<Vec<PathBuf>, String> {

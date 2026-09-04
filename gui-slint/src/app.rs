@@ -112,7 +112,10 @@ fn toast(_ui: &AppWindow, msg: &str, error: bool) {
 /// Files/folders the user wants to send. Empty = cancelled.
 #[cfg(target_os = "android")]
 fn pick_send_paths() -> Vec<PathBuf> {
-    android::pick_shared_files()
+    // Android has no native file-picker result plumbing, so sending means
+    // staging via the system share sheet ("Send to TunnelManager"); this
+    // returns the launch intent's content plus everything already staged.
+    android::pick_send_files()
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1269,10 +1272,28 @@ fn register_peers(sync: &Sync) {
                 (p, n)
             };
             let sync_bg = sync.clone();
-            let rt_here = sync_bg.rt.clone();
+            let touch = {
+                let Some(ui) = sync.weak.upgrade() else { return };
+                ui.global::<State>().get_touch()
+            };
+            let rt_here = sync.rt.clone();
+            let weak_bg = sync.weak.clone();
             rt_here.spawn_blocking(move || {
                 let picked = pick_send_paths();
                 if picked.is_empty() {
+                    // Touch devices pick content through the system share
+                    // sheet; say so instead of silently doing nothing.
+                    if touch {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_bg.upgrade() {
+                                toast(
+                                    &ui,
+                                    "Use the system share sheet (\"Send to TunnelManager\") to stage files, then pick a peer here.",
+                                    false,
+                                );
+                            }
+                        });
+                    }
                     return;
                 }
                 *sync_bg.outbox.lock().unwrap() = picked.clone();
@@ -1984,8 +2005,13 @@ pub fn run() {
     let state = ui.global::<State>();
     state.set_touch(WINDOW_TOUCH);
     state.set_compact(WINDOW_TOUCH);
+    // Android "intent listener": content shared into the app ("Send to
+    // TunnelManager") is staged at startup, the outbox hint appears on the
+    // peer page and the user is nudged to select a peer to send to. Files
+    // shared while only the app was in the background cannot be observed
+    // (android-activity drops onNewIntent); that share restarts the activity.
     #[cfg(target_os = "android")]
-    state.set_outbox_count(android::outbox_count().try_into().unwrap());
+    let staged = android::pick_send_files();
 
     let sync = Sync {
         weak: ui.as_weak(),
@@ -2001,6 +2027,21 @@ pub fn run() {
         queue: main_queue.clone(),
         outbox: Arc::new(Mutex::new(Vec::new())),
     };
+    refresh_peers(&sync);
+
+    #[cfg(target_os = "android")]
+    if !staged.is_empty() {
+        *sync.outbox.lock().unwrap() = staged.clone();
+        let count: i32 = staged.len() as i32;
+        state.set_outbox_count(count);
+        state.set_page("peer".into());
+        // Auto-act: opening the compact peer picker lets the user choose a
+        // peer for the staged files in one tap.
+        state.set_show_peer_picker(true);
+        toast(&ui, &format!("{count} file(s) shared — pick a peer to send them"), false);
+    }
+    #[cfg(not(target_os = "android"))]
+    state.set_outbox_count(0);
 
     register_node(&sync);
     register_peers(&sync);
