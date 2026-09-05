@@ -18,11 +18,13 @@ Implemented:
 - **Send** — pick files/folders, share them, deliver directly to the peer with
   `invite_paired_device`; live progress, stop sharing.
 - **Receive** — automatic: paired peers' file invites are accepted and
-  downloaded into `downloads/<peer-name>` without prompts; progress + cancel;
-  conflict renaming recorded.
+  downloaded into `<downloads folder>/tunnelmanager/<peer-name>` without
+  prompts; progress + cancel; conflict renaming recorded.
 - **Settings** — downloads folder, own device name, relay mode (default /
   disabled / custom URLs + auth token), local discovery (everyone / paired
   only / off), history toggle; persisted to `settings.json`.
+- **Notifications** — toasts: an in-window overlay on desktop, native
+  `Toast`s on Android.
 
 Not implemented (v1): tray, autostart, updater. Engine-level transfer behavior
 (iroh, BLAKE3 verification, resume, relay fallback, history partial stores) is
@@ -84,8 +86,9 @@ intent filters, INTERNET permission) is generated from
 
 ## Toolchain note
 
-The repo pins rustc 1.91 for the engine, but Slint 1.17 needs 1.92, so this
-crate carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
+The repo pins rustc 1.91 for the engine, but Slint (pinned to `=1.16.1`; 1.17.x
+depends on an unpublished android backend crate) needs 1.92, so this crate
+carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
 1.10.0 in `Cargo.lock` because 1.13 fails to compile on 1.92.
 
 ## Layout
@@ -100,7 +103,7 @@ crate carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
   clipboard/open hooks.
 - `src/android.rs` — Android platform services (JNI clipboard + toast,
   share-sheet outbox, `android_main`).
-- `src/emitter.rs` — implements the engine's `EventEmitter` on a Slint window
-  handle: engine events update the UI.
+- `src/emitter.rs` — the node service's `EventEmitter` (an event queue the UI
+  drains on a timer) and the transfer-event → UI-state mapping.
 - `src/recorder.rs` — slim port of the Tauri shell's history recorder.
 - `src/settings.rs` — settings persistence.

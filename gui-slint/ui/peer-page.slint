@@ -88,6 +88,7 @@ component TransferPanel inherits Card {
     in property <string> status: "";
     in property <string> error: "";
     in property <bool> can-cancel: false;
+    in property <string> cancel-label: "Stop";
     callback cancel();
 
     min-height: State.touch ? 88px : 76px;
@@ -106,7 +107,7 @@ component TransferPanel inherits Card {
             }
             Rectangle { horizontal-stretch: 1; }
             if root.can-cancel: GhostButton {
-                label: "Stop";
+                label: root.cancel-label;
                 clicked => { root.cancel(); }
             }
         }
@@ -271,7 +272,10 @@ export component PeerPage inherits Rectangle {
             progress-label: State.send-progress-label;
             status: State.send-status;
             error: State.send-error;
-            can-cancel: State.share-starting || State.send-status == "Transferring…" || State.send-peers > 0;
+            // Always closable: the share stays open after delivery (and after
+            // a failed delivery), so this is the only way to release it.
+            can-cancel: true;
+            cancel-label: State.send-error != "" ? "Close" : "Stop";
             cancel() => { Logic.stop-share(); }
         }
 
@@ -284,6 +288,8 @@ export component PeerPage inherits Rectangle {
             status: State.receive-speed == "" ? State.receive-status
                 : State.receive-status + " · " + State.receive-speed;
             error: State.receive-error;
+            can-cancel: true;
+            cancel-label: "Cancel";
             cancel() => { Logic.cancel-receive(); }
         }
 

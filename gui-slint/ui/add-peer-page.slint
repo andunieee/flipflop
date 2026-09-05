@@ -99,7 +99,7 @@ export component AddPeerPage inherits Rectangle {
                         clicked => { Logic.pair-with-pasted(); }
                     }
                     if State.pairing-busy: HintText { label: "Connecting…"; vertical-alignment: center; }
-                    if State.pairing-status != "": StatusText {
+                    if !State.pairing-busy && State.pairing-status != "": StatusText {
                         label: State.pairing-status;
                         error: State.pairing-error;
                         vertical-alignment: center;
