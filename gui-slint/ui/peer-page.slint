@@ -1,141 +1,175 @@
 import { ScrollView, LineEdit } from "std-widgets.slint";
-import { State, Logic, HistoryRow } from "globals.slint";
+import { State, Logic, HistoryRow, TransferRow } from "globals.slint";
 import {
-    Theme, Dot, Card, ProgressBar, HintText, StatusText,
-    PrimaryButton, GhostButton, DangerButton, SectionTitle,
+    Theme, Dot, Card, ProgressBar, HintText, Avatar, Badge, DirectionIcon,
+    PrimaryButton, SecondaryButton, GhostButton, DangerButton, SectionTitle,
 } from "components.slint";
 
-component HistoryItem inherits Card {
+component HistoryItem inherits Rectangle {
     in property <HistoryRow> entry;
-    min-height: State.touch ? 76px : 64px;
 
-    VerticalLayout {
-        padding: State.touch ? 12px : 10px;
-        spacing: 4px;
+    border-radius: Theme.radius;
+    background: ta.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    animate background { duration: 90ms; }
+    ta := TouchArea { }
 
-        HorizontalLayout {
-            spacing: 8px;
-            Rectangle {
-                width: 18px;
-                border-radius: Theme.radius-sm;
-                label := Text {
-                    text: root.entry.direction == "send" ? "↑" : "↓";
-                    color: root.entry.direction == "send" ? Theme.warn : Theme.info;
-                    font-weight: 800;
-                    font-size: State.touch ? 15px : 13px;
-                    vertical-alignment: center;
-                    horizontal-alignment: center;
-                }
-            }
+    HorizontalLayout {
+        padding: Theme.space-3;
+        padding-left: Theme.space-3 + 2px;
+        spacing: Theme.space-3;
+
+        VerticalLayout {
+            alignment: center;
+            DirectionIcon { sending: root.entry.direction == "send"; size: 30px; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+            horizontal-stretch: 1;
+
             Text {
                 text: root.entry.title;
                 color: Theme.text-strong;
                 font-weight: 600;
-                vertical-alignment: center;
                 overflow: elide;
-                horizontal-stretch: 1;
             }
             Text {
-                text: root.entry.status;
-                color: root.entry.failed ? Theme.error : Theme.success;
-                font-size: State.touch ? 13px : 11px;
-                font-weight: 500;
-                vertical-alignment: center;
+                text: State.touch ? root.entry.size + " · " + root.entry.date
+                    : root.entry.detail == "" ? root.entry.size
+                    : root.entry.size + " · " + root.entry.detail;
+                color: Theme.text-muted;
+                font-size: Theme.font-xs;
+                overflow: elide;
             }
         }
-        HorizontalLayout {
-            spacing: State.touch ? 8px : 12px;
-            Text {
-                text: root.entry.detail;
-                color: Theme.text-muted;
-                font-size: State.touch ? 13px : 11px;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: root.entry.size;
-                color: Theme.text-muted;
-                font-size: State.touch ? 13px : 11px;
-                vertical-alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+            HorizontalLayout {
+                alignment: end;
+                Badge { label: root.entry.status; tone: root.entry.tone; }
             }
             if !State.touch: Text {
                 text: root.entry.date;
                 color: Theme.text-faint;
-                font-size: 11px;
-                vertical-alignment: center;
+                font-size: Theme.font-xs;
+                horizontal-alignment: right;
             }
-            if root.entry.can-open && !State.touch: GhostButton {
-                label: "Open";
-                clicked => { Logic.open-row(root.entry.id); }
+        }
+
+        // Fixed-width action column keeps badges aligned across rows.
+        HorizontalLayout {
+            width: State.touch ? Theme.control-height : 112px;
+            alignment: end;
+            spacing: Theme.space-1;
+            if root.entry.can-open && !State.touch: VerticalLayout {
+                alignment: center;
+                GhostButton {
+                    label: "Open";
+                    clicked => { Logic.open-row(root.entry.id); }
+                }
             }
-            if State.touch: GhostButton {
-                label: root.entry.can-open ? "Open" : "Delete";
-                clicked => { root.entry.can-open ? Logic.open-row(root.entry.id) : Logic.delete-row(root.entry.id); }
-            }
-            if !State.touch: DangerButton {
-                label: "✕";
-                clicked => { Logic.delete-row(root.entry.id); }
+            if root.entry.tone != "active": VerticalLayout {
+                alignment: center;
+                GhostButton {
+                    label: "×";
+                    clicked => { Logic.delete-row(root.entry.id); }
+                }
             }
         }
     }
 }
 
-component TransferPanel inherits Card {
-    in property <bool> sending: true;
-    in property <float> progress: 0.0;
-    in property <string> progress-label: "";
-    in property <string> status: "";
-    in property <string> error: "";
-    in property <bool> can-cancel: false;
-    in property <string> cancel-label: "Stop";
-    callback cancel();
-
-    min-height: State.touch ? 88px : 76px;
+component TransferCard inherits Card {
+    in property <TransferRow> transfer;
 
     VerticalLayout {
-        padding: State.touch ? 12px : 10px;
-        spacing: 6px;
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
 
         HorizontalLayout {
-            spacing: 8px;
-            Text {
-                text: root.sending ? "↑ Sending" : "↓ Receiving";
-                color: Theme.text-strong;
-                font-weight: 700;
-                vertical-alignment: center;
+            spacing: Theme.space-3;
+
+            VerticalLayout {
+                alignment: center;
+                DirectionIcon { sending: root.transfer.sending; size: 36px; }
             }
-            Rectangle { horizontal-stretch: 1; }
-            if root.can-cancel: GhostButton {
-                label: root.cancel-label;
-                clicked => { root.cancel(); }
+            VerticalLayout {
+                alignment: center;
+                spacing: 3px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: (root.transfer.sending ? "Sending " : "Receiving ") + root.transfer.title;
+                    color: Theme.text-strong;
+                    font-weight: 650;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.transfer.speed == "" ? root.transfer.status
+                        : root.transfer.status + " · " + root.transfer.speed;
+                    color: root.transfer.error != "" ? Theme.error : Theme.text-muted;
+                    font-size: Theme.font-sm;
+                    overflow: elide;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                if root.transfer.active: SecondaryButton {
+                    label: root.transfer.sending ? "Stop" : "Cancel";
+                    clicked => {
+                        if root.transfer.sending {
+                            Logic.stop-share(root.transfer.key);
+                        } else {
+                            Logic.cancel-receive(root.transfer.key);
+                        }
+                    }
+                }
+                if !root.transfer.active: GhostButton {
+                    label: "Dismiss";
+                    clicked => { Logic.dismiss-transfer(root.transfer.key); }
+                }
             }
         }
 
-        ProgressBar { value: root.progress; label: root.progress-label; }
-
-        Text {
-            text: root.status;
-            color: Theme.text-muted;
-            font-size: State.touch ? 13px : 11px;
-            overflow: elide;
-            wrap: State.touch ? word-wrap : no-wrap;
+        if root.transfer.active || root.transfer.progress > 0: VerticalLayout {
+            spacing: 6px;
+            ProgressBar {
+                value: root.transfer.progress;
+                tint: root.transfer.error != "" ? Theme.error
+                    : !root.transfer.active ? Theme.success
+                    : Theme.accent;
+            }
+            if root.transfer.progress-label != "": Text {
+                text: root.transfer.progress-label;
+                color: Theme.text-faint;
+                font-size: Theme.font-xs;
+            }
         }
 
-        if root.error != "": StatusText { label: root.error; error: true; }
+        if root.transfer.note != "": HintText { label: root.transfer.note; }
+        if root.transfer.error != "": Text {
+            text: root.transfer.error;
+            color: Theme.error;
+            font-size: Theme.font-sm;
+            wrap: word-wrap;
+        }
     }
 }
 
-// Compact-mode peer switcher chip (opens the picker below it).
+// Compact-mode peer switcher entry.
 component PeerChip inherits Rectangle {
     in property <string> endpoint-id;
     in property <string> label;
+    in property <string> initials;
     in property <bool> online;
 
     border-radius: Theme.radius;
     background: State.selected-id == root.endpoint-id ? Theme.accent-soft
         : ta.has-hover ? Theme.card-bg-hover : Theme.card-bg;
-    min-height: State.touch ? 48px : 40px;
+    height: Theme.control-height + 8px;
 
     ta := TouchArea {
         clicked => {
@@ -144,86 +178,64 @@ component PeerChip inherits Rectangle {
         }
         mouse-cursor: pointer;
     }
-    animate background { duration: 90ms; }
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
-        spacing: 8px;
-        alignment: start;
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-3;
+        spacing: Theme.space-3;
 
-        Dot { online: root.online; }
+        VerticalLayout {
+            alignment: center;
+            Avatar { initials: root.initials; size: 30px; show-presence: true; online: root.online; }
+        }
         Text {
             text: root.label;
             color: State.selected-id == root.endpoint-id ? Theme.text-strong : Theme.text;
             vertical-alignment: center;
             overflow: elide;
+            horizontal-stretch: 1;
         }
     }
 }
 
 export component PeerPage inherits Rectangle {
-    background: transparent;
+    property <bool> has-peer: State.selected-name != "";
+    property <bool> confirm-forget: false;
+    // A pending "Forget?" never carries over to another peer.
+    property <string> selected-id: State.selected-id;
+    changed selected-id => { root.confirm-forget = false; }
 
     VerticalLayout {
-        padding: State.touch ? 12px : 18px;
-        spacing: State.touch ? 10px : 14px;
-        alignment: start;
-
-        // Header
-        HorizontalLayout {
-            spacing: 10px;
-            VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: State.selected-name == "" ? "No peer selected" : State.selected-name;
-                    color: Theme.text-strong;
-                    font-size: State.touch ? 19px : 24px;
-                    font-weight: 800;
-                    vertical-stretch: 0;
-                    overflow: elide;
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    alignment: start;
-                    Dot { online: State.selected-online; }
-                    Text {
-                        text: State.selected-detail == "" ? "Select a peer, or add one." : State.selected-detail;
-                        color: State.selected-detail == "" ? Theme.text-muted : Theme.text-faint;
-                        font-size: State.touch ? 13px : 12px;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            if State.selected-name != "" && State.rename-mode == false: HorizontalLayout {
-                spacing: 6px;
-                GhostButton { label: "Rename"; clicked => { Logic.rename-peer(); } }
-                DangerButton { label: "Forget"; clicked => { Logic.remove-peer(); } }
-            }
-        }
+        padding: Theme.page-padding;
+        spacing: Theme.space-4;
 
         // Compact layout has no sidebar: pick the peer here.
         if State.compact && State.peers.length > 0: Rectangle {
             border-radius: Theme.radius;
             background: Theme.card-bg;
-            min-height: 48px;
+            border-width: 1px;
+            border-color: Theme.border;
+            height: Theme.control-height + 4px;
 
-            chip-touch := TouchArea {
+            TouchArea {
                 clicked => { State.show-peer-picker = !State.show-peer-picker; }
                 mouse-cursor: pointer;
             }
-
             HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                spacing: 8px;
+                padding-left: Theme.space-3;
+                padding-right: Theme.space-3;
+                spacing: Theme.space-2;
 
-                Dot { online: State.selected-online; }
                 Text {
-                    text: State.selected-name == "" ? "Choose a peer" : State.selected-name;
+                    text: "Peer";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-sm;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.has-peer ? State.selected-name : "Choose a peer";
                     color: Theme.text-strong;
+                    font-weight: 600;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
@@ -231,31 +243,131 @@ export component PeerPage inherits Rectangle {
                 Text {
                     text: State.show-peer-picker ? "▲" : "▼";
                     color: Theme.text-muted;
+                    font-size: Theme.font-xs;
                     vertical-alignment: center;
                 }
             }
         }
 
         if State.compact && State.show-peer-picker: ScrollView {
-            max-height: 240px;
+            max-height: 260px;
             VerticalLayout {
-                spacing: 4px;
+                spacing: Theme.space-1;
                 alignment: start;
                 for peer in State.peers: PeerChip {
                     endpoint-id: peer.endpoint-id;
                     label: peer.name;
+                    initials: peer.initials;
                     online: peer.online;
+                }
+            }
+        }
+
+        // Header
+        if root.has-peer: HorizontalLayout {
+            spacing: Theme.space-3 + 2px;
+
+            VerticalLayout {
+                alignment: center;
+                Avatar {
+                    initials: State.selected-initials;
+                    size: State.touch ? 44px : 52px;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: Theme.space-1;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: State.selected-name;
+                    color: Theme.text-strong;
+                    font-size: Theme.font-xl;
+                    font-weight: 700;
+                    overflow: elide;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Dot { online: State.selected-online; size: 7px; }
+                    }
+                    Text {
+                        text: State.selected-online ? "Online" : "Offline";
+                        color: State.selected-online ? Theme.online : Theme.text-muted;
+                        font-size: Theme.font-sm;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    if !State.compact: Text {
+                        text: "· " + State.selected-detail;
+                        color: Theme.text-faint;
+                        font-size: Theme.font-sm;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+            if !State.rename-mode && !root.confirm-forget: HorizontalLayout {
+                spacing: Theme.space-1;
+                alignment: end;
+                VerticalLayout {
+                    alignment: center;
+                    GhostButton { label: "Rename"; clicked => { Logic.rename-peer(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    DangerButton { label: "Forget"; clicked => { root.confirm-forget = true; } }
+                }
+            }
+        }
+
+        // Forget confirmation
+        if root.has-peer && root.confirm-forget: Rectangle {
+            border-radius: Theme.radius;
+            background: Theme.error-soft;
+            border-width: 1px;
+            border-color: #5a2a32;
+
+            HorizontalLayout {
+                padding: Theme.space-3;
+                padding-left: Theme.space-4;
+                spacing: Theme.space-2;
+
+                Text {
+                    text: "Forget " + State.selected-name + "? You'll need to pair again to exchange files.";
+                    color: Theme.text-strong;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    GhostButton { label: "Cancel"; clicked => { root.confirm-forget = false; } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    DangerButton {
+                        label: "Forget";
+                        solid: true;
+                        clicked => {
+                            root.confirm-forget = false;
+                            Logic.remove-peer();
+                        }
+                    }
                 }
             }
         }
 
         // Inline rename
         if State.rename-mode: HorizontalLayout {
-            spacing: 8px;
-            alignment: start;
+            spacing: Theme.space-2;
             LineEdit {
                 text <=> State.rename-input;
-                min-width: State.touch ? 140px : 260px;
+                placeholder-text: "Peer name";
                 horizontal-stretch: 1;
                 accepted => { Logic.rename-peer-confirm(); }
             }
@@ -263,75 +375,113 @@ export component PeerPage inherits Rectangle {
             GhostButton { label: "Cancel"; clicked => { Logic.rename-peer-cancel(); } }
         }
 
-        // Active transfers
-        if State.selected-id != "" && State.send-active-id == State.selected-id
-           && (State.share-starting || State.send-status != "" || State.send-error != ""):
-        TransferPanel {
-            sending: true;
-            progress: State.send-progress;
-            progress-label: State.send-progress-label;
-            status: State.send-status;
-            error: State.send-error;
-            // Always closable: the share stays open after delivery (and after
-            // a failed delivery), so this is the only way to release it.
-            can-cancel: true;
-            cancel-label: State.send-error != "" ? "Close" : "Stop";
-            cancel() => { Logic.stop-share(); }
-        }
-
-        if State.selected-id != "" && State.receive-active-id == State.selected-id
-           && (State.receive-status != "" || State.receive-error != ""):
-        TransferPanel {
-            sending: false;
-            progress: State.receive-progress;
-            progress-label: State.receive-progress-label;
-            status: State.receive-speed == "" ? State.receive-status
-                : State.receive-status + " · " + State.receive-speed;
-            error: State.receive-error;
-            can-cancel: true;
-            cancel-label: "Cancel";
-            cancel() => { Logic.cancel-receive(); }
-        }
-
-        // Send button (no transfer in flight for this peer)
-        if State.selected-name != "" && State.send-active-id != State.selected-id:
-        PrimaryButton {
-            label: "Send files…";
-            min-height: State.touch ? 46px : 36px;
-            clicked => { Logic.send-to-peer(); }
-        }
-
-        // Content shared into the app via the system share sheet.
-        if State.touch && State.outbox-count > 0:
-            HintText { label: State.outbox-count + " file(s) staged from the share sheet — pick a peer and send."; }
-
-        // History for this peer
-        Rectangle { min-height: 6px; }
-
-        HorizontalLayout {
-            spacing: 8px;
-            SectionTitle { label: "Transfers"; vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; }
-            GhostButton { label: "Refresh"; clicked => { Logic.refresh-history(); } }
-        }
-
-        if State.selected-name == "":
-            HintText { label: "Add a peer with the + button to start sending files."; }
-
-        if State.selected-name != "" && State.history.length == 0:
-            HintText { label: "No transfers with this peer yet."; }
-
-        ScrollView {
+        // No peer at all: a friendly empty state.
+        if !root.has-peer && !State.compact: Card {
             VerticalLayout {
-                spacing: 8px;
-                alignment: start;
+                padding: Theme.space-5;
+                spacing: Theme.space-3;
+                alignment: center;
 
-                for entry in State.history: HistoryItem {
-                    entry: entry;
+                Text {
+                    text: State.peers.length == 0 ? "Pair your first device" : "Choose a peer";
+                    color: Theme.text-strong;
+                    font-size: Theme.font-lg;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                HintText {
+                    label: State.peers.length == 0
+                        ? "Peers are devices you trust. Once paired, files you send them arrive automatically — no codes to type."
+                        : "Pick a peer in the sidebar to send files or see your history with them.";
+                    horizontal-alignment: center;
+                }
+                if State.peers.length == 0: HorizontalLayout {
+                    alignment: center;
+                    PrimaryButton {
+                        label: "Add a peer";
+                        clicked => {
+                            State.page = "add-peer";
+                            Logic.page-changed("add-peer");
+                        }
+                    }
+                }
+            }
+        }
+        if !root.has-peer && State.compact && State.peers.length == 0: HintText {
+            label: "No peers yet. Use “Add peer” below to pair your first device.";
+        }
+
+        // Send action (hidden while a send to this peer is in flight).
+        if root.has-peer && !State.selected-sending: Card {
+            HorizontalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-4;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: State.touch && State.outbox-count > 0
+                            ? State.outbox-count + " file(s) ready to send"
+                            : "Send files to " + State.selected-name;
+                        color: Theme.text-strong;
+                        font-weight: 650;
+                        overflow: elide;
+                    }
+                    HintText {
+                        label: State.touch && State.outbox-count == 0
+                            ? "Share files to TunnelManager from any app, then send them here."
+                            : State.selected-online
+                                ? "They're online — files arrive right away."
+                                : "They're offline — sending works once they're back.";
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    PrimaryButton {
+                        label: State.touch ? "Send" : "Send files…";
+                        clicked => { Logic.send-to-peer(); }
+                    }
                 }
             }
         }
 
-        Rectangle { vertical-stretch: 1; }
+        // In-flight and finished transfers for this peer.
+        for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
+
+        // History for this peer
+        if root.has-peer: HorizontalLayout {
+            padding-top: Theme.space-2;
+            SectionTitle { label: "History"; horizontal-stretch: 1; }
+            GhostButton { label: "Refresh"; clicked => { Logic.refresh-history(); } }
+        }
+
+        if root.has-peer && State.history.length == 0: Rectangle {
+            border-radius: Theme.radius;
+            border-width: 1px;
+            border-color: Theme.border;
+            height: 64px;
+            Text {
+                text: "No transfers with " + State.selected-name + " yet.";
+                color: Theme.text-faint;
+                font-size: Theme.font-sm;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.has-peer && State.history.length > 0: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 6px;
+                alignment: start;
+                // Room for the scrollbar so it never covers row actions.
+                padding-right: Theme.space-3;
+                for entry in State.history: HistoryItem { entry: entry; }
+            }
+        }
+
+        if !root.has-peer || State.history.length == 0: Rectangle { vertical-stretch: 1; }
     }
 }

@@ -50,6 +50,21 @@ mod imp {
         data_dir().join("outbox")
     }
 
+    /// Files currently staged in the outbox, sorted.
+    pub fn outbox_files() -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(outbox_dir())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files
+    }
+
     /// Remove staged outbox files after they have been shared.
     pub fn clear_outbox(paths: &[PathBuf]) {
         let dir = outbox_dir();
@@ -70,7 +85,14 @@ mod imp {
             .map_err(|e| format!("JavaVM: {e}"))?;
         let mut guard = vm.attach_current_thread().map_err(|e| e.to_string())?;
         let env = &mut *guard;
-        f(env)
+        let result = f(env);
+        // A failed call leaves its Java exception pending; any later JNI call
+        // on this thread (or returning into Java) would then abort the app.
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+        }
+        result
     }
 
     /// Activity object for JNI calls. `AndroidApp` holds a global reference
@@ -284,18 +306,7 @@ mod imp {
         if first {
             pick_shared_files();
         }
-        let dir = outbox_dir();
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .filter(|e| e.path().is_file())
-                    .map(|e| e.path())
-                    .collect()
-            })
-            .unwrap_or_default();
-        files.sort();
-        files
+        outbox_files()
     }
 
     fn collect_shared_files_with_env(env: &mut jni::JNIEnv) -> Result<Vec<PathBuf>, String> {
@@ -395,7 +406,7 @@ mod imp {
             .map_err(|e| e.to_string())?;
         let mut staged = Vec::new();
         for uri in &uris {
-            let name = uri_display_name(env, uri)?;
+            let name = uri_display_name(env, &resolver, uri)?;
             let input = env
                 .call_method(
                     &resolver,
@@ -418,7 +429,22 @@ mod imp {
         Ok(staged)
     }
 
-    fn uri_display_name(env: &mut jni::JNIEnv, uri: &JObject) -> Result<String, String> {
+    /// The file name the sharing app advertises (`OpenableColumns.DISPLAY_NAME`);
+    /// falls back to the URI's last path segment, which for `content://` URIs
+    /// is usually an opaque id like `image:1234`.
+    fn uri_display_name(
+        env: &mut jni::JNIEnv,
+        resolver: &JObject,
+        uri: &JObject,
+    ) -> Result<String, String> {
+        match query_display_name(env, resolver, uri) {
+            Ok(Some(name)) if !name.trim().is_empty() => return Ok(name),
+            Ok(_) => {}
+            Err(e) => {
+                let _ = env.exception_clear();
+                tracing::debug!("display name query failed: {e}");
+            }
+        }
         let seg = env
             .call_method(uri, "getLastPathSegment", "()Ljava/lang/String;", &[])
             .map_err(|e| e.to_string())?
@@ -432,6 +458,67 @@ mod imp {
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .into_owned())
+    }
+
+    fn query_display_name(
+        env: &mut jni::JNIEnv,
+        resolver: &JObject,
+        uri: &JObject,
+    ) -> Result<Option<String>, String> {
+        let column = env.new_string("_display_name").map_err(|e| e.to_string())?;
+        let projection = env
+            .new_object_array(1, "java/lang/String", &column)
+            .map_err(|e| e.to_string())?;
+        let null = JObject::null();
+        // resolver.query(uri, {"_display_name"}, null, null, null)
+        let cursor = env
+            .call_method(
+                resolver,
+                "query",
+                "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+                &[
+                    JValue::Object(uri),
+                    JValue::Object(&projection),
+                    JValue::Object(&null),
+                    JValue::Object(&null),
+                    JValue::Object(&null),
+                ],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if cursor.is_null() {
+            return Ok(None);
+        }
+        let name = (|| {
+            let has_row = env
+                .call_method(&cursor, "moveToFirst", "()Z", &[])
+                .map_err(|e| e.to_string())?
+                .z()
+                .map_err(|e| e.to_string())?;
+            if !has_row {
+                return Ok(None);
+            }
+            let value = env
+                .call_method(
+                    &cursor,
+                    "getString",
+                    "(I)Ljava/lang/String;",
+                    &[JValue::Int(0)],
+                )
+                .map_err(|e| e.to_string())?
+                .l()
+                .map_err(|e| e.to_string())?;
+            if value.is_null() {
+                return Ok(None);
+            }
+            env.get_string(&JString::from(value))
+                .map(|s| Some(s.to_string_lossy().into_owned()))
+                .map_err(|e| e.to_string())
+        })();
+        let _ = env.exception_clear();
+        let _ = env.call_method(&cursor, "close", "()V", &[]);
+        name
     }
 
     fn unique_outbox_path(file_name: &str) -> PathBuf {
@@ -512,11 +599,96 @@ mod imp {
     /// No-op on desktop (the Android app handle is never set there).
     pub fn show_toast(_msg: &str, _error: bool) {}
 
+    /// Always empty on desktop (no share-sheet staging).
+    pub fn outbox_files() -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Unused on desktop.
     pub fn clear_outbox(_paths: &[PathBuf]) {}
 }
 #[cfg(not(target_os = "android"))]
 pub use imp::*;
+
+// ---------------------------------------------------------------- logcat
+
+/// `tracing` writer that sends each formatted event to logcat (tag
+/// `tunnelmanager`) with the event's level as the log priority.
+#[cfg(target_os = "android")]
+pub struct Logcat;
+
+#[cfg(target_os = "android")]
+pub struct LogcatLine {
+    priority: std::ffi::c_int,
+    buf: Vec<u8>,
+}
+
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+extern "C" {
+    fn __android_log_write(
+        prio: std::ffi::c_int,
+        tag: *const std::ffi::c_char,
+        text: *const std::ffi::c_char,
+    ) -> std::ffi::c_int;
+}
+
+#[cfg(target_os = "android")]
+impl std::io::Write for LogcatLine {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Drop for LogcatLine {
+    // The fmt layer writes one whole event, then drops the writer.
+    fn drop(&mut self) {
+        let text = String::from_utf8_lossy(&self.buf).replace('\0', "");
+        let text = text.trim_end();
+        if text.is_empty() {
+            return;
+        }
+        let Ok(text) = std::ffi::CString::new(text) else {
+            return;
+        };
+        // SAFETY: both pointers are valid NUL-terminated strings for the call.
+        unsafe {
+            __android_log_write(self.priority, c"tunnelmanager".as_ptr(), text.as_ptr());
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Logcat {
+    type Writer = LogcatLine;
+
+    fn make_writer(&'a self) -> LogcatLine {
+        LogcatLine {
+            priority: 4, // ANDROID_LOG_INFO
+            buf: Vec::new(),
+        }
+    }
+
+    fn make_writer_for(&'a self, meta: &tracing::Metadata<'_>) -> LogcatLine {
+        let priority = match *meta.level() {
+            tracing::Level::ERROR => 6,
+            tracing::Level::WARN => 5,
+            tracing::Level::INFO => 4,
+            tracing::Level::DEBUG => 3,
+            tracing::Level::TRACE => 2,
+        };
+        LogcatLine {
+            priority,
+            buf: Vec::new(),
+        }
+    }
+}
 
 // ------------------------------------------------------------- entry point
 

@@ -1,110 +1,166 @@
-import { LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
+import { LineEdit, TextEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
 import { State, Logic } from "globals.slint";
 import {
-    Theme, Card, PageTitle, HintText, StatusText, FieldLabel,
-    SectionTitle, PrimaryButton, GhostButton,
+    Theme, Card, PageTitle, HintText, StatusText, FieldLabel, Divider,
+    SectionTitle, PrimaryButton, SecondaryButton,
 } from "components.slint";
 
-export component SettingsPage inherits Rectangle {
-    background: transparent;
+// Label + control stacked, with an optional hint underneath.
+component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: 6px;
 
-    ScrollView {
+    FieldLabel { label: root.label; }
+    @children
+    if root.hint != "": HintText { label: root.hint; font-size: Theme.font-xs; }
+}
+
+component SettingsCard inherits Card {
+    in property <string> title;
+    in property <string> description;
+
+    VerticalLayout {
+        padding: Theme.card-padding + 2px;
+        spacing: Theme.space-4;
+
         VerticalLayout {
-            padding: State.touch ? 12px : 18px;
-            spacing: State.touch ? 10px : 14px;
+            spacing: Theme.space-1;
+            SectionTitle { label: root.title; }
+            if root.description != "": HintText { label: root.description; }
+        }
+        @children
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    ScrollView {
+        HorizontalLayout {
             alignment: start;
+            padding: Theme.page-padding;
 
-            PageTitle { label: "Settings"; }
+            VerticalLayout {
+                // Comfortable reading width on wide windows.
+                preferred-width: 680px;
+                max-width: 680px;
+                horizontal-stretch: 1;
+                spacing: Theme.space-4;
+                alignment: start;
 
-            // Our device name
-            Card {
-                VerticalLayout {
-                    padding: State.touch ? 10px : 12px;
-                    spacing: 8px;
+                PageTitle { title: "Settings"; subtitle: "Device name is saved on its own; everything else with “Save settings”."; }
 
-                    SectionTitle { label: "Device name"; }
+                SettingsCard {
+                    title: "This device";
+                    description: "Peers see this name when they discover or pair with you.";
+
                     HorizontalLayout {
-                        spacing: 8px;
-                        alignment: start;
+                        spacing: Theme.space-2;
                         LineEdit {
-                            text <=> State.my-name;
-                            min-width: State.touch ? 140px : 260px;
+                            text <=> State.name-input;
+                            placeholder-text: "Device name";
                             horizontal-stretch: 1;
+                            accepted => { Logic.rename-self-name(); }
                         }
-                        PrimaryButton { label: "Set name"; clicked => { Logic.rename-self-name(); } }
-                    }
-                    HintText { label: "Peers will see this name when they discover or pair with you."; }
-                }
-            }
-
-            // Downloads: the folder picker is desktop-only. On Android received
-            // files land in the app-private downloads folder.
-            if !State.touch: Card {
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 8px;
-
-                    SectionTitle { label: "Downloads folder"; }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: start;
-                        GhostButton { label: "Browse…"; clicked => { Logic.pick-downloads-dir(); } }
-                        Text {
-                            text: State.downloads-dir;
-                            color: Theme.text-muted;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            horizontal-stretch: 1;
+                        SecondaryButton {
+                            label: "Save name";
+                            enabled: State.name-input != "" && State.name-input != State.my-name;
+                            clicked => { Logic.rename-self-name(); }
                         }
                     }
-                    HintText { label: "Received files go into a “tunnelmanager” subfolder, one folder per peer."; }
                 }
-            }
-            if State.touch: HintText {
-                label: "Received files are saved to the app's private folder; open them from the history list in a file manager.";
-            }
 
-            // Relay
-            Card {
-                VerticalLayout {
-                    padding: State.touch ? 10px : 12px;
-                    spacing: 8px;
+                SettingsCard {
+                    title: "Received files";
 
-                    SectionTitle { label: "Relay"; }
+                    // The folder picker is desktop-only; on Android received
+                    // files land in the app-private downloads folder.
+                    if !State.touch: Field {
+                        label: "Save to";
+                        hint: "Files go into a “tunnelmanager” subfolder there, one folder per peer.";
+                        HorizontalLayout {
+                            spacing: Theme.space-2;
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                border-radius: Theme.radius-sm + 2px;
+                                background: Theme.inset-bg;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                min-height: Theme.control-height;
+                                HorizontalLayout {
+                                    padding-left: Theme.space-3;
+                                    padding-right: Theme.space-3;
+                                    Text {
+                                        text: State.downloads-dir;
+                                        color: Theme.text;
+                                        font-size: Theme.font-sm;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                            SecondaryButton { label: "Browse…"; clicked => { Logic.pick-downloads-dir(); } }
+                        }
+                    }
+                    if State.touch: HintText {
+                        label: "Received files are saved to the app's private folder; open them with a file manager.";
+                    }
+                    CheckBox {
+                        text: "Keep a transfer history";
+                        checked <=> State.history-enabled;
+                    }
+                }
+
+                SettingsCard {
+                    title: "Privacy";
+                    description: "Who can see this device on the local network.";
+
                     ComboBox {
-                        min-width: 220px;
-                        model: ["Default (n0)", "Disabled (direct only)", "Custom"];
+                        model: ["Everyone nearby", "Paired devices only", "Nobody (hidden)"];
+                        current-index <=> State.discoverability;
+                    }
+                }
+
+                SettingsCard {
+                    title: "Relay";
+                    description: "Relays help peers connect when a direct connection isn't possible.";
+
+                    ComboBox {
+                        model: ["Default (n0 public relays)", "Disabled (direct connections only)", "Custom relays"];
                         current-index <=> State.relay-mode;
                     }
-                    if State.relay-mode == 2: VerticalLayout {
-                        spacing: 6px;
-                        FieldLabel { label: "Relay URLs (one per line):"; }
-                        LineEdit {
+                    if State.relay-mode == 2: Field {
+                        label: "Relay URLs";
+                        hint: "One per line.";
+                        TextEdit {
                             text <=> State.relay-urls;
-                            placeholder-text: "https://relay1.example.com";
+                            height: 72px;
+                            wrap: no-wrap;
                         }
-                        FieldLabel { label: "Relay auth token (optional):"; }
+                    }
+                    if State.relay-mode == 2: Field {
+                        label: "Auth token (optional)";
                         LineEdit {
                             text <=> State.relay-token;
-                            placeholder-text: "token";
+                            input-type: password;
+                            placeholder-text: "Token";
                         }
-                        FieldLabel { label: "If the relay is unreachable:"; }
+                    }
+                    if State.relay-mode == 2: Field {
+                        label: "If the relay is unreachable";
                         ComboBox {
-                            min-width: 220px;
-                            model: ["Fail (strict)", "Fall back to public relays"];
+                            model: ["Fail the transfer (strict)", "Fall back to public relays"];
                             current-index <=> State.relay-fallback;
                         }
                     }
                     if State.relay-mode != 1: HorizontalLayout {
-                        spacing: 8px;
+                        spacing: Theme.space-2;
                         alignment: start;
-                        GhostButton {
+                        SecondaryButton {
                             label: State.relay-testing ? "Testing…" : "Test connection";
                             enabled: !State.relay-testing;
                             clicked => { Logic.test-relay(); }
                         }
-                        GhostButton { label: "Relay status"; clicked => { Logic.check-relay-status(); } }
+                        SecondaryButton { label: "Show status"; clicked => { Logic.check-relay-status(); } }
                     }
                     if State.relay-test-status != "": StatusText {
                         label: State.relay-test-status;
@@ -115,40 +171,35 @@ export component SettingsPage inherits Rectangle {
                         error: State.relay-status-failed;
                     }
                 }
-            }
 
-            // Discovery
-            Card {
-                VerticalLayout {
-                    padding: State.touch ? 10px : 12px;
-                    spacing: 8px;
+                SettingsCard {
+                    title: "Discovery";
+                    description: "How peers look up your current address.";
 
-                    SectionTitle { label: "Device discovery"; }
                     ComboBox {
-                        min-width: 220px;
                         model: ["Default (n0)", "Custom pkarr relay"];
                         current-index <=> State.discovery-mode;
                     }
-                    if State.discovery-mode == 1: VerticalLayout {
-                        spacing: 6px;
-                        FieldLabel { label: "pkarr relay URL:"; }
+                    if State.discovery-mode == 1: Field {
+                        label: "pkarr relay URL";
                         LineEdit {
                             text <=> State.discovery-pkarr-url;
                             placeholder-text: "https://dns.example.com/pkarr";
                         }
-                        FieldLabel { label: "DNS origin (optional):"; }
+                    }
+                    if State.discovery-mode == 1: Field {
+                        label: "DNS origin (optional)";
                         LineEdit {
                             text <=> State.discovery-dns-origin;
                             placeholder-text: "example.com";
                         }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: start;
-                            GhostButton {
-                                label: State.discovery-testing ? "Testing…" : "Test connection";
-                                enabled: !State.discovery-testing;
-                                clicked => { Logic.test-discovery(); }
-                            }
+                    }
+                    if State.discovery-mode == 1: HorizontalLayout {
+                        alignment: start;
+                        SecondaryButton {
+                            label: State.discovery-testing ? "Testing…" : "Test connection";
+                            enabled: !State.discovery-testing;
+                            clicked => { Logic.test-discovery(); }
                         }
                     }
                     if State.discovery-test-status != "": StatusText {
@@ -156,44 +207,22 @@ export component SettingsPage inherits Rectangle {
                         error: State.discovery-test-failed;
                     }
                 }
-            }
 
-            // Discoverability
-            Card {
-                VerticalLayout {
-                    padding: State.touch ? 10px : 12px;
-                    spacing: 8px;
-
-                    SectionTitle { label: "Presence"; }
-                    FieldLabel { label: "Who can find you:"; }
-                    ComboBox {
-                        min-width: 220px;
-                        model: ["Discoverable by everyone", "Paired devices only", "Off"];
-                        current-index <=> State.discoverability;
+                HorizontalLayout {
+                    spacing: Theme.space-3;
+                    alignment: start;
+                    padding-bottom: Theme.space-4;
+                    PrimaryButton {
+                        label: "Save settings";
+                        clicked => { Logic.save-settings(); }
                     }
-                    CheckBox {
-                        text: "Record transfer history";
-                        checked <=> State.history-enabled;
+                    if State.settings-status != "": StatusText {
+                        label: State.settings-status;
+                        error: State.settings-failed;
+                        vertical-alignment: center;
                     }
                 }
             }
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                PrimaryButton {
-                    label: "Save settings";
-                    min-width: 220px;
-                    clicked => { Logic.save-settings(); }
-                }
-                if State.settings-status != "": StatusText {
-                    label: State.settings-status;
-                    error: State.settings-failed;
-                    vertical-alignment: center;
-                }
-            }
-
-            Rectangle { min-height: 8px; }
         }
     }
 }
