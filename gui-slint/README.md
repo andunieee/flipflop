@@ -61,12 +61,21 @@ Platform integration (see `src/android.rs`):
 - **Clipboard / toasts** go through JNI (`ClipboardManager`, `Toast`) on the
   Java main thread.
 - **Sending**: pick files through the system share sheet — "Share →
-  TunnelManager" from any app stages the content into an app-private outbox;
-  the app immediately opens the peer picker and a toast shows the count, and
-  "Send files…" on a peer sends the staged content. A native SAF picker is not
-  possible because `android-activity` does not forward `onActivityResult`.
-  Sharing while the app is only in the background cannot be observed either
-  (no `onNewIntent` forwarding); that share restarts the activity.
+  TunnelManager" from any app stages the content (files, or shared text/links
+  as a `.txt`) into an app-private outbox; the app opens the peer picker, a
+  toast shows the count, and "Send" on a peer sends the staged content. A
+  native SAF picker is not possible because `android-activity` does not
+  forward `onActivityResult`.
+- **Shares while running**: the share sheet starts a second activity instance
+  in the sharing app's task, and android-activity runs `android_main` again
+  for it in the same process. That instance does not start Slint; it stages
+  its intent's content, hands it to the running UI, moves the UI's task to the
+  front (`REORDER_TASKS`) and finishes itself. The process exits when the main
+  activity is destroyed, so a later launch always starts a fresh UI.
+- **Look**: launcher icon (adaptive), a branded launch screen and the dark
+  system-bar colors come from `android/res`; the PNGs there are generated
+  from the SVGs in `android/icon` by `android/gen-res.sh`. The UI pads itself
+  by the window's safe-area insets, since it is drawn edge-to-edge.
 - **Receiving** land in the app-private downloads folder; opening rows is a
   no-op on Android (use a file manager). The Settings page hides the folder
   picker accordingly.
@@ -87,7 +96,7 @@ Logs: `adb logcat -s tunnelmanager RustStdoutStderr` (`tracing` output goes
 to logcat under the `tunnelmanager` tag; `RustStdoutStderr` shows panics).
 
 The manifest (package `dev.tunnelmanager.slint`, min SDK 26, share-sheet
-intent filters, INTERNET permission) is generated from
+intent filters, permissions, icon and theme) is generated from
 `[package.metadata.android*]` in `Cargo.toml`.
 
 ## Toolchain note
@@ -101,7 +110,10 @@ carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
 
 - `ui/` — Slint markup (`globals.slint` holds shared state + logic callbacks,
   one file per page; `State.compact`/`State.touch` drive the responsive
-  single-pane/touch layout).
+  single-pane/touch layout). `ui/icons/` holds the line icons, exposed through
+  the `Icons` global in `components.slint`.
+- `android/` — Android resources (launcher icon, launch theme) and their
+  sources.
 - `src/lib.rs` — crate root: shared by the desktop bin and the Android
   `cdylib`.
 - `src/main.rs` — desktop entry point.

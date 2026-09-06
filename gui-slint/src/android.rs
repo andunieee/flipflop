@@ -2,21 +2,30 @@
 //! outbox.
 //!
 //! The UI runs on the `android_main` thread; anything that must touch the
-//! JVM (ClipboardManager, Toast, ContentResolver) is bridged with JNI on
-//! the Java main thread via `AndroidApp::run_on_java_main_thread`.
+//! JVM (ClipboardManager, Toast) is bridged with JNI on the Java main thread
+//! via `AndroidApp::run_on_java_main_thread`. Shared content is copied on a
+//! worker thread so a large file never stalls either thread.
+//!
+//! android-activity runs `android_main` once per activity *instance*, all in
+//! one process. The first instance owns the UI; the system share sheet,
+//! however, starts a fresh instance inside the sharing app's task while ours
+//! is running. Such a later instance only forwards its share to the UI and
+//! closes itself (see `forward_to_primary`).
 //!
 //! On non-Android builds this module compiles to no-ops so the rest of the
 //! app can reference it unconditionally.
 
 #[cfg(target_os = "android")]
 mod imp {
+    use std::cell::RefCell;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
+    use std::time::Duration;
 
     use jni::objects::{GlobalRef, JObject, JString, JValue};
     use jni::JavaVM;
 
-    use slint::android::android_activity::AndroidApp;
+    use slint::android::android_activity::{AndroidApp, MainEvent, PollEvent};
 
     static ANDROID_APP: OnceLock<AndroidApp> = OnceLock::new();
 
@@ -99,7 +108,12 @@ mod imp {
     /// that lives as long as the app handle; the returned lifetime is
     /// chosen by the caller's JNI scope.
     fn activity<'local>() -> Result<JObject<'local>, String> {
-        let raw = app().activity_as_ptr() as jni::sys::jobject;
+        activity_of(app())
+    }
+
+    /// Like [`activity`], for any activity instance (see `forward_to_primary`).
+    fn activity_of<'local>(app: &AndroidApp) -> Result<JObject<'local>, String> {
+        let raw = app.activity_as_ptr() as jni::sys::jobject;
         if raw.is_null() {
             return Err("activity handle is null".to_string());
         }
@@ -268,9 +282,36 @@ mod imp {
 
     // ----------------------------------------------------- shared content
 
+    thread_local! {
+        /// Receives staged outbox files; lives on the UI (event loop) thread.
+        static ON_SHARED: RefCell<Option<Box<dyn Fn(Vec<PathBuf>)>>> = RefCell::new(None);
+    }
+
+    /// Register the UI's handler for shared content: called on the event loop
+    /// with every staged outbox file each time something is shared in. Must be
+    /// called on the UI thread.
+    pub fn on_shared(handler: impl Fn(Vec<PathBuf>) + 'static) {
+        ON_SHARED.with(|h| *h.borrow_mut() = Some(Box::new(handler)));
+    }
+
+    /// Hand the outbox to the UI's [`on_shared`] handler.
+    fn deliver_outbox() {
+        let staged = outbox_files();
+        let posted = slint::invoke_from_event_loop(move || {
+            ON_SHARED.with(|h| {
+                if let Some(handler) = h.borrow().as_ref() {
+                    handler(staged);
+                }
+            })
+        });
+        if let Err(e) = posted {
+            tracing::warn!("could not report staged files: {e}");
+        }
+    }
+
     /// Shares-into-the-app entry point ("intent listener"): stages whatever the
     /// launch intent carries (ACTION_SEND / ACTION_SEND_MULTIPLE) into the
-    /// outbox, then hands every staged file to `done` on the Slint event loop.
+    /// outbox, then hands every staged file to the [`on_shared`] handler.
     ///
     /// A lazy SAF picker needs activity-result plumbing that android-activity
     /// does not forward, so "Send to TunnelManager" from the system share
@@ -279,31 +320,112 @@ mod imp {
     ///
     /// Never blocks: called at startup, before the event loop runs, while the
     /// Java main thread is still inside onStart/onResume waiting for this
-    /// thread to acknowledge the lifecycle change. Waiting for the posted
-    /// closure here would deadlock (black screen). A process-local guard keeps
-    /// the same intent from being staged twice. NOTE: sharing while the app is
-    /// already running in the background cannot be observed — android-activity
-    /// does not forward `onNewIntent` — so that case restarts the activity
-    /// with the share.
-    pub fn stage_launch_intent(done: impl FnOnce(Vec<PathBuf>) + Send + 'static) {
+    /// thread to acknowledge the lifecycle change. Waiting on it here would
+    /// deadlock (black screen). A process-local guard keeps the same intent
+    /// from being staged twice.
+    pub fn stage_launch_intent() {
         if INTENT_STAGED.set(()).is_err() {
             return;
         }
-        app().run_on_java_main_thread(Box::new(move || {
-            if let Err(e) = with_env(collect_shared_files_with_env) {
-                tracing::warn!("staging shared files failed: {e}");
-            }
-            let staged = outbox_files();
-            if let Err(e) = slint::invoke_from_event_loop(move || done(staged)) {
-                tracing::warn!("could not report staged files: {e}");
-            }
-        }));
+        let app = app().clone();
+        std::thread::spawn(move || {
+            stage_intent_of(&app);
+            deliver_outbox();
+        });
     }
 
-    fn collect_shared_files_with_env(env: &mut jni::JNIEnv) -> Result<Vec<PathBuf>, String> {
-        let activity = activity()?;
+    /// Copy what `app`'s launch intent shares into the outbox.
+    fn stage_intent_of(app: &AndroidApp) {
+        if let Err(e) = with_env(|env| collect_shared_files_with_env(env, &activity_of(app)?)) {
+            tracing::warn!("staging shared files failed: {e}");
+        }
+    }
+
+    /// `android_main` for every activity instance after the first.
+    ///
+    /// The share sheet starts a new instance in the sharing app's task while
+    /// ours keeps running; launching the app while the first instance lives
+    /// in another app's task (it was started by a share) does the same. This
+    /// instance stages its intent's content for the running UI, brings the
+    /// UI's task to the front and finishes itself.
+    ///
+    /// The instance must keep polling its events until destroyed: its Java
+    /// lifecycle callbacks wait for this thread to acknowledge them.
+    pub fn forward_to_primary(this: AndroidApp) {
+        let worker = this.clone();
+        std::thread::spawn(move || {
+            // Stage before finishing: the sender's URI grant only lasts as
+            // long as this activity does.
+            stage_intent_of(&worker);
+            deliver_outbox();
+            let closer = worker.clone();
+            worker.run_on_java_main_thread(Box::new(move || {
+                if let Err(e) = with_env(|env| show_primary_and_finish(env, &closer)) {
+                    tracing::warn!("could not hand over to the main window: {e}");
+                }
+            }));
+        });
+
+        let mut destroyed = false;
+        while !destroyed {
+            this.poll_events(Some(Duration::from_millis(250)), |event| {
+                if let PollEvent::Main(MainEvent::Destroy) = event {
+                    destroyed = true;
+                }
+            });
+        }
+    }
+
+    /// Move the UI's task to the front, then finish the forwarding activity
+    /// (always, so a failed hand-over never leaves a dead window behind).
+    fn show_primary_and_finish(env: &mut jni::JNIEnv, this: &AndroidApp) -> Result<(), String> {
+        let forwarder = activity_of(this)?;
+        let moved = move_primary_to_front(env, &forwarder);
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        env.call_method(&forwarder, "finish", "()V", &[])
+            .map_err(|e| e.to_string())?;
+        moved
+    }
+
+    fn move_primary_to_front(env: &mut jni::JNIEnv, context: &JObject) -> Result<(), String> {
+        let task_id = env
+            .call_method(&activity()?, "getTaskId", "()I", &[])
+            .map_err(|e| e.to_string())?
+            .i()
+            .map_err(|e| e.to_string())?;
+        // Context.ACTIVITY_SERVICE == "activity"; needs REORDER_TASKS.
+        let service_name = env.new_string("activity").map_err(|e| e.to_string())?;
+        let manager = env
+            .call_method(
+                context,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[JValue::Object(&service_name)],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if manager.is_null() {
+            return Err("ActivityManager unavailable".to_string());
+        }
+        env.call_method(
+            &manager,
+            "moveTaskToFront",
+            "(II)V",
+            &[JValue::Int(task_id), JValue::Int(0)],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn collect_shared_files_with_env(
+        env: &mut jni::JNIEnv,
+        activity: &JObject,
+    ) -> Result<Vec<PathBuf>, String> {
         let intent = env
-            .call_method(&activity, "getIntent", "()Landroid/content/Intent;", &[])
+            .call_method(activity, "getIntent", "()Landroid/content/Intent;", &[])
             .map_err(|e| e.to_string())?
             .l()
             .map_err(|e| e.to_string())?;
@@ -378,16 +500,81 @@ mod imp {
             _ => {}
         }
         if uris.is_empty() {
+            // Shared text or a link (ACTION_SEND with EXTRA_TEXT only).
+            if action == "android.intent.action.SEND" {
+                return stage_text(env, &intent).map(|p| p.into_iter().collect());
+            }
             return Ok(Vec::new());
         }
-        stage_uris(env, uris)
+        stage_uris(env, activity, uris)
     }
 
-    fn stage_uris(env: &mut jni::JNIEnv, uris: Vec<JObject>) -> Result<Vec<PathBuf>, String> {
-        let activity = activity()?;
+    /// Save a text share (`EXTRA_TEXT`, named after `EXTRA_SUBJECT` when
+    /// given) as a `.txt` file in the outbox.
+    fn stage_text(env: &mut jni::JNIEnv, intent: &JObject) -> Result<Option<PathBuf>, String> {
+        let Some(text) = string_extra(env, intent, "android.intent.extra.TEXT")? else {
+            return Ok(None);
+        };
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
+        let subject = string_extra(env, intent, "android.intent.extra.SUBJECT")?
+            .map(|s| s.trim().chars().take(60).collect::<String>())
+            .filter(|s| !s.is_empty());
+        let name = match subject {
+            Some(subject) => format!("{subject}.txt"),
+            None if text.trim().starts_with("http") => "shared-link.txt".to_string(),
+            None => "shared-text.txt".to_string(),
+        };
+        let path = unique_outbox_path(&name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, text.trim()).map_err(|e| e.to_string())?;
+        Ok(Some(path))
+    }
+
+    /// `intent.getCharSequenceExtra(key)` as a string.
+    fn string_extra(
+        env: &mut jni::JNIEnv,
+        intent: &JObject,
+        key: &str,
+    ) -> Result<Option<String>, String> {
+        let jkey = env.new_string(key).map_err(|e| e.to_string())?;
+        let value = env
+            .call_method(
+                intent,
+                "getCharSequenceExtra",
+                "(Ljava/lang/String;)Ljava/lang/CharSequence;",
+                &[JValue::Object(&jkey)],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let text = env
+            .call_method(&value, "toString", "()Ljava/lang/String;", &[])
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        Ok(Some(
+            env.get_string(&JString::from(text))
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned(),
+        ))
+    }
+
+    fn stage_uris(
+        env: &mut jni::JNIEnv,
+        activity: &JObject,
+        uris: Vec<JObject>,
+    ) -> Result<Vec<PathBuf>, String> {
         let resolver = env
             .call_method(
-                &activity,
+                activity,
                 "getContentResolver",
                 "()Landroid/content/ContentResolver;",
                 &[],
@@ -686,8 +873,21 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Logcat {
 #[cfg(target_os = "android")]
 #[no_mangle]
 fn android_main(app: slint::android::android_activity::AndroidApp) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static PRIMARY_STARTED: AtomicBool = AtomicBool::new(false);
+
+    // A later activity instance (share sheet while running): Slint, logging
+    // and the node already belong to the first one.
+    if PRIMARY_STARTED.swap(true, Ordering::SeqCst) {
+        imp::forward_to_primary(app);
+        return;
+    }
     slint::android::init(app.clone()).expect("Slint Android init");
     imp::set_app(app);
     imp::acquire_multicast_lock();
     crate::app::run();
+    // Slint's loop ends when the activity is destroyed. Exit rather than
+    // linger without a UI: the next launch then starts a fresh primary
+    // instead of being mistaken for a share to forward.
+    std::process::exit(0);
 }

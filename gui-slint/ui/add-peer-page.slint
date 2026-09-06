@@ -1,8 +1,8 @@
 import { ScrollView, LineEdit } from "std-widgets.slint";
 import { State, Logic, PeerRow } from "globals.slint";
 import {
-    Theme, Card, HintText, StatusText, SectionTitle, PageTitle, Avatar,
-    PrimaryButton, SecondaryButton, GhostButton,
+    Theme, Card, HintText, StatusText, SectionHeader, PageTitle, Avatar,
+    Icons, PrimaryButton, SecondaryButton, GhostButton,
 } from "components.slint";
 
 component SuggestionRow inherits Rectangle {
@@ -96,7 +96,7 @@ export component AddPeerPage inherits Rectangle {
                     padding: Theme.card-padding;
                     spacing: Theme.space-3;
 
-                    SectionTitle { label: "Nearby and requests"; }
+                    SectionHeader { label: "Nearby and requests"; icon: Icons.nearby; }
                     HintText {
                         label: State.nearby-note != "" ? State.nearby-note
                             : "Devices on your network running TunnelManager, and anyone who asked to pair with you.";
@@ -124,7 +124,7 @@ export component AddPeerPage inherits Rectangle {
                     padding: Theme.card-padding;
                     spacing: Theme.space-3;
 
-                    SectionTitle { label: "Connect with an address"; }
+                    SectionHeader { label: "Connect with an address"; icon: Icons.link; }
                     HintText { label: "Paste the address your peer copied from their “Your address” box."; }
                     HorizontalLayout {
                         spacing: Theme.space-2;
@@ -149,7 +149,7 @@ export component AddPeerPage inherits Rectangle {
                     padding: Theme.card-padding;
                     spacing: Theme.space-3;
 
-                    SectionTitle { label: "Your address"; }
+                    SectionHeader { label: "Your address"; icon: Icons.device; }
                     HintText { label: "Or let them add you: send this to your peer."; }
                     HorizontalLayout {
                         spacing: Theme.space-2;
@@ -176,6 +176,7 @@ export component AddPeerPage inherits Rectangle {
                         }
                         SecondaryButton {
                             label: "Copy";
+                            icon: Icons.copy;
                             enabled: State.my-ticket != "";
                             clicked => { Logic.copy-my-ticket(); }
                         }

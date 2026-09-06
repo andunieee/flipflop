@@ -197,12 +197,30 @@ fn main() {
     render(&window, desktop, &out.join("empty.ppm"));
     populate(&state);
 
-    // Phone layout.
+    // Phone layout, with room for the status and navigation bars.
     state.set_touch(true);
     state.set_compact(true);
+    ui.set_preview_inset_top(24.0);
+    ui.set_preview_inset_bottom(48.0);
     let phone = (412, 860);
     for page in ["peer", "add-peer", "settings"] {
         state.set_page(page.into());
         render(&window, phone, &out.join(format!("phone-{page}.ppm")));
     }
+
+    // Files shared in from another app, peer picker open.
+    state.set_page("peer".into());
+    state.set_selected_sending(false);
+    state.set_visible_transfers(model(Vec::new()));
+    state.set_outbox_count(3);
+    state.set_show_peer_picker(true);
+    render(&window, phone, &out.join("phone-outbox.ppm"));
+    state.set_show_peer_picker(false);
+    state.set_outbox_count(0);
+
+    // No peers yet.
+    state.set_peers(model(Vec::new()));
+    state.set_selected_name("".into());
+    state.set_selected_id("".into());
+    render(&window, phone, &out.join("phone-empty.ppm"));
 }

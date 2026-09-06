@@ -2,7 +2,7 @@ import { LineEdit, TextEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.
 import { State, Logic } from "globals.slint";
 import {
     Theme, Card, PageTitle, HintText, StatusText, FieldLabel, Divider,
-    SectionTitle, PrimaryButton, SecondaryButton,
+    SectionHeader, Icons, PrimaryButton, SecondaryButton,
 } from "components.slint";
 
 // Label + control stacked, with an optional hint underneath.
@@ -19,6 +19,7 @@ component Field inherits VerticalLayout {
 component SettingsCard inherits Card {
     in property <string> title;
     in property <string> description;
+    in property <image> icon;
 
     VerticalLayout {
         padding: Theme.card-padding + 2px;
@@ -26,7 +27,7 @@ component SettingsCard inherits Card {
 
         VerticalLayout {
             spacing: Theme.space-1;
-            SectionTitle { label: root.title; }
+            SectionHeader { label: root.title; icon: root.icon; }
             if root.description != "": HintText { label: root.description; }
         }
         @children
@@ -51,6 +52,7 @@ export component SettingsPage inherits Rectangle {
 
                 SettingsCard {
                     title: "This device";
+                    icon: Icons.device;
                     description: "Peers see this name when they discover or pair with you.";
 
                     HorizontalLayout {
@@ -71,6 +73,7 @@ export component SettingsPage inherits Rectangle {
 
                 SettingsCard {
                     title: "Received files";
+                    icon: Icons.folder;
 
                     // The folder picker is desktop-only; on Android received
                     // files land in the app-private downloads folder.
@@ -98,7 +101,7 @@ export component SettingsPage inherits Rectangle {
                                     }
                                 }
                             }
-                            SecondaryButton { label: "Browse…"; clicked => { Logic.pick-downloads-dir(); } }
+                            SecondaryButton { label: "Browse…"; icon: Icons.folder; clicked => { Logic.pick-downloads-dir(); } }
                         }
                     }
                     if State.touch: HintText {
@@ -112,6 +115,7 @@ export component SettingsPage inherits Rectangle {
 
                 SettingsCard {
                     title: "Privacy";
+                    icon: Icons.shield;
                     description: "Who can see this device on the local network.";
 
                     ComboBox {
@@ -122,6 +126,7 @@ export component SettingsPage inherits Rectangle {
 
                 SettingsCard {
                     title: "Relay";
+                    icon: Icons.relay;
                     description: "Relays help peers connect when a direct connection isn't possible.";
 
                     ComboBox {
@@ -174,6 +179,7 @@ export component SettingsPage inherits Rectangle {
 
                 SettingsCard {
                     title: "Discovery";
+                    icon: Icons.globe;
                     description: "How peers look up your current address.";
 
                     ComboBox {
