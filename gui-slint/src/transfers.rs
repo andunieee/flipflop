@@ -26,7 +26,7 @@ use crate::format::fmt_bytes;
 use crate::platform::{self, toast, toast_later};
 use crate::recorder::{Ctx, Recorder};
 use crate::settings::Settings;
-use crate::{android, AppWindow, Logic, State, TransferRow};
+use crate::{android, AppWindow, Logic, OutboxRow, State, TransferRow};
 
 /// Cross-thread transfer bookkeeping, shared through `AppCtx`.
 #[derive(Clone, Default)]
@@ -38,6 +38,9 @@ pub struct Transfers {
     next_key: Arc<AtomicU64>,
     /// A file picker is open (ignore further "Send files…" clicks).
     picking: Arc<AtomicBool>,
+    /// Share-sheet files a send has taken from the queue; they leave the
+    /// queue for good once that send completes, or return if it does not.
+    claimed: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 #[derive(Default)]
@@ -357,6 +360,11 @@ fn start_send(
         },
     );
 
+    claim(ctx, &staged);
+    let mut claim_guard = ClaimGuard {
+        ctx: ctx.clone(),
+        paths: staged.clone(),
+    };
     let ctx = ctx.clone();
     let weak = ctx.weak.clone();
     ctx.rt.clone().spawn(async move {
@@ -444,10 +452,12 @@ fn start_send(
             if shares.stopped.remove(&key) {
                 // Stopped while preparing: the row is already gone.
                 drop(shares);
-                shutdown_share(&ctx, handle).await;
+                shutdown_share(&ctx, handle, false).await;
                 return;
             }
             shares.open.insert(key.clone(), handle);
+            // The open share now owns the files (see `shutdown_share`).
+            claim_guard.disarm();
         }
 
         post_update(&weak, &key, |row| row.status = "Contacting peer…".into());
@@ -474,7 +484,7 @@ fn start_send(
             tracing::warn!(%peer_id, "send: invite not delivered (peer unreachable)");
             // Nobody else knows the ticket: the share is useless.
             if let Some(handle) = take_share(&ctx, &key).await {
-                shutdown_share(&ctx, handle).await;
+                shutdown_share(&ctx, handle, false).await;
                 fail(
                     &weak,
                     &key,
@@ -493,25 +503,95 @@ async fn forget_stopped(ctx: &AppCtx, key: &str) {
     ctx.transfers.shares.lock().await.stopped.remove(key);
 }
 
-/// Close the share's endpoint and release share-sheet files nothing else uses.
-async fn shutdown_share(ctx: &AppCtx, handle: ShareHandle) {
+/// Close the share's endpoint. Its share-sheet files are deleted once the
+/// peer has them (`sent`); otherwise they go back to the queue for a retry.
+async fn shutdown_share(ctx: &AppCtx, handle: ShareHandle, sent: bool) {
     handle.stop().await;
     if handle.staged.is_empty() {
         return;
     }
-    let unused: Vec<PathBuf> = {
-        let shares = ctx.transfers.shares.lock().await;
-        handle
-            .staged
-            .iter()
-            .filter(|p| !shares.open.values().any(|h| h.staged.contains(p)))
-            .cloned()
-            .collect()
-    };
-    android::clear_outbox(&unused);
-    let _ = ctx.weak.upgrade_in_event_loop(|ui| {
-        ui.global::<State>()
-            .set_outbox_count(android::outbox_files().len() as i32);
+    if sent {
+        android::clear_outbox(&handle.staged);
+    }
+    release(ctx, &handle.staged);
+}
+
+// ---------------------------------------------------- share-sheet queue
+
+/// Queued share-sheet files: staged, and not taken by a send in flight.
+fn queued_files(ctx: &AppCtx) -> Vec<PathBuf> {
+    let claimed = ctx.transfers.claimed.lock().unwrap();
+    android::outbox_files()
+        .into_iter()
+        .filter(|p| !claimed.contains(p))
+        .collect()
+}
+
+fn claim(ctx: &AppCtx, paths: &[PathBuf]) {
+    ctx.transfers
+        .claimed
+        .lock()
+        .unwrap()
+        .extend(paths.iter().cloned());
+    refresh_outbox(ctx);
+}
+
+fn release(ctx: &AppCtx, paths: &[PathBuf]) {
+    {
+        let mut claimed = ctx.transfers.claimed.lock().unwrap();
+        for path in paths {
+            claimed.remove(path);
+        }
+    }
+    refresh_outbox(ctx);
+}
+
+/// Returns a send's files to the queue unless the send got far enough to
+/// own them (`disarm`), e.g. when share setup fails.
+struct ClaimGuard {
+    ctx: AppCtx,
+    paths: Vec<PathBuf>,
+}
+
+impl ClaimGuard {
+    fn disarm(&mut self) {
+        self.paths.clear();
+    }
+}
+
+impl Drop for ClaimGuard {
+    fn drop(&mut self) {
+        if !self.paths.is_empty() {
+            release(&self.ctx, &self.paths);
+        }
+    }
+}
+
+/// Mirror the queue into `State.outbox`. Callable from any thread.
+pub(crate) fn refresh_outbox(ctx: &AppCtx) {
+    let rows: Vec<(String, String, String)> = queued_files(ctx)
+        .iter()
+        .map(|p| {
+            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            (
+                p.to_string_lossy().into_owned(),
+                path_name(p),
+                fmt_bytes(size),
+            )
+        })
+        .collect();
+    let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
+        let state = ui.global::<State>();
+        state.set_outbox_count(rows.len() as i32);
+        let rows: Vec<OutboxRow> = rows
+            .into_iter()
+            .map(|(path, name, size)| OutboxRow {
+                path: path.into(),
+                name: name.into(),
+                size: size.into(),
+            })
+            .collect();
+        state.set_outbox(ModelRc::from(Rc::new(VecModel::from(rows))));
     });
 }
 
@@ -523,7 +603,7 @@ async fn finish_send(ctx: AppCtx, key: String) {
         return;
     };
     let peer_name = handle.peer_name.clone();
-    shutdown_share(&ctx, handle).await;
+    shutdown_share(&ctx, handle, true).await;
     let ctx_ui = ctx.clone();
     let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
         update_row(&ui, &key, |row| {
@@ -552,7 +632,7 @@ fn stop_send(ctx: &AppCtx, key: String) {
             handle
                 .recorder
                 .finalize(TransferStatus::Cancelled, None, None, None, None);
-            shutdown_share(&ctx, handle).await;
+            shutdown_share(&ctx, handle, false).await;
         }
         let ctx_ui = ctx.clone();
         let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
@@ -673,8 +753,12 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
             let settings = ctx.settings.lock().unwrap();
             let save_dir = settings
                 .downloads_path()
-                .unwrap_or_else(|| PathBuf::from("."))
+                .unwrap_or_else(|| platform::default_data_dir().join("downloads"))
                 .join(sanitize_folder_name(&peer_name, &short_id(&id)));
+            // The blob store only exports to absolute paths (a relative one
+            // fails as a bare "Error::Io"), and a folder typed into Settings
+            // may be relative.
+            let save_dir = std::path::absolute(&save_dir).unwrap_or(save_dir);
             (save_dir, settings.history_enabled)
         };
         if let Err(e) = std::fs::create_dir_all(&save_dir) {
@@ -764,6 +848,7 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
                     None,
                     Some(format!("{e:#}")),
                 );
+                tracing::warn!(%id, "receive: failed: {e:#}");
                 let msg = format!("Receive from {peer_name} failed: {e:#}");
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     toast(&ui, &msg, true);
@@ -789,6 +874,26 @@ pub(crate) fn register(ctx: &AppCtx) {
     let logic = ui.global::<Logic>();
 
     {
+        // Drop one queued share-sheet file.
+        let ctx = ctx.clone();
+        logic.on_outbox_remove(move |path| {
+            let path = PathBuf::from(path.as_str());
+            if queued_files(&ctx).contains(&path) {
+                android::clear_outbox(&[path]);
+            }
+            refresh_outbox(&ctx);
+        });
+    }
+    {
+        // Drop the whole queue (files being sent stay).
+        let ctx = ctx.clone();
+        logic.on_outbox_clear(move || {
+            android::clear_outbox(&queued_files(&ctx));
+            refresh_outbox(&ctx);
+        });
+    }
+
+    {
         // Pick files, share them and deliver to the selected peer.
         let ctx = ctx.clone();
         logic.on_send_to_peer(move || {
@@ -808,6 +913,10 @@ pub(crate) fn register(ctx: &AppCtx) {
             }
             let ctx = ctx.clone();
             ctx.rt.clone().spawn_blocking(move || {
+                // Android sends the share-sheet queue; desktop opens a picker.
+                #[cfg(target_os = "android")]
+                let picked = queued_files(&ctx);
+                #[cfg(not(target_os = "android"))]
                 let picked = platform::pick_send_paths();
                 ctx.transfers.picking.store(false, Ordering::SeqCst);
                 if picked.is_empty() {
@@ -816,7 +925,7 @@ pub(crate) fn register(ctx: &AppCtx) {
                     if platform::TOUCH {
                         toast_later(
                             &ctx.weak,
-                            "Use the system share sheet (\"Send to TunnelManager\") to stage files, then pick a peer here.",
+                            "Share files to TunnelManager from any app first, then send them here.",
                             false,
                         );
                     }

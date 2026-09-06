@@ -1285,6 +1285,8 @@ fn register_settings(ctx: &AppCtx) {
 /// Called from `main()` on desktop and `android_main()` on Android.
 pub fn run() {
     platform::init_logging();
+    #[cfg(target_os = "android")]
+    crate::android::use_cache_dir_for_blob_stores();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1326,30 +1328,33 @@ pub fn run() {
     };
 
     // Android "intent listener": content shared into the app ("Send to
-    // TunnelManager") is staged into the outbox, the outbox hint appears on
-    // the peer page and the user is nudged to select a peer to send to. This
-    // fires for the launch intent and for every later share, including ones
-    // made while the app is running.
+    // TunnelManager") is queued, and the peer list opens so the user can pick
+    // who gets it. This fires for the launch intent and for every later
+    // share, including ones made while the app is running.
     #[cfg(target_os = "android")]
     {
-        let weak = ui.as_weak();
-        crate::android::on_shared(move |staged| {
-            let Some(ui) = weak.upgrade() else { return };
+        let ctx_shared = ctx.clone();
+        crate::android::on_shared(move |staged, origin| {
+            transfers::refresh_outbox(&ctx_shared);
+            let Some(ui) = ctx_shared.weak.upgrade() else {
+                return;
+            };
             if staged.is_empty() {
                 return;
             }
-            let state = ui.global::<State>();
-            let count = staged.len();
-            state.set_outbox_count(count as i32);
-            state.set_page("peer".into());
-            // Opening the compact peer picker lets the user choose a peer
-            // for the staged files in one tap.
-            state.set_show_peer_picker(true);
-            let what = if count == 1 {
+            let what = if staged.len() == 1 {
                 "1 file".to_string()
             } else {
-                format!("{count} files")
+                format!("{} files", staged.len())
             };
+            // Picked files: the user is already where they want to send from.
+            if origin == crate::android::Origin::Picker {
+                toast(&ui, &format!("{what} ready to send"), false);
+                return;
+            }
+            let state = ui.global::<State>();
+            state.set_page("peer".into());
+            state.set_peer_open(false);
             toast(
                 &ui,
                 &format!("{what} ready — pick a peer to send to"),
@@ -1358,6 +1363,11 @@ pub fn run() {
         });
         crate::android::stage_launch_intent();
     }
+    ui.global::<Logic>()
+        .on_back_at_root(crate::android::move_to_background);
+    #[cfg(target_os = "android")]
+    ui.global::<Logic>()
+        .on_pick_files(crate::android::pick_files);
 
     register_node(&ctx);
     register_peers(&ctx);

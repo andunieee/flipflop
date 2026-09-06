@@ -14,7 +14,7 @@ use slint::platform::software_renderer::{
 };
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, ModelRc, PhysicalSize, VecModel};
-use tunnelmanager_slint::{AppWindow, HistoryRow, PeerRow, State, TransferRow};
+use tunnelmanager_slint::{AppWindow, HistoryRow, OutboxRow, PeerRow, State, TransferRow};
 
 struct Headless(Rc<MinimalSoftwareWindow>);
 
@@ -203,20 +203,37 @@ fn main() {
     ui.set_preview_inset_top(24.0);
     ui.set_preview_inset_bottom(48.0);
     let phone = (412, 860);
+    state.set_peer_open(true);
     for page in ["peer", "add-peer", "settings"] {
         state.set_page(page.into());
         render(&window, phone, &out.join(format!("phone-{page}.ppm")));
     }
 
-    // Files shared in from another app, peer picker open.
+    // Phone: the peer list (Peers tab top level), then a peer's own screen,
+    // both with files shared in from another app.
     state.set_page("peer".into());
     state.set_selected_sending(false);
-    state.set_visible_transfers(model(Vec::new()));
-    state.set_outbox_count(3);
-    state.set_show_peer_picker(true);
+    let outbox = vec![
+        OutboxRow {
+            path: "/outbox/IMG_2041.jpg".into(),
+            name: "IMG_2041.jpg".into(),
+            size: "3.2 MB".into(),
+        },
+        OutboxRow {
+            path: "/outbox/notes.pdf".into(),
+            name: "notes.pdf".into(),
+            size: "180 KB".into(),
+        },
+    ];
+    state.set_outbox_count(outbox.len() as i32);
+    state.set_outbox(model(outbox));
+    state.set_peer_open(false);
+    render(&window, phone, &out.join("phone-peers.ppm"));
+    state.set_peer_open(true);
     render(&window, phone, &out.join("phone-outbox.ppm"));
-    state.set_show_peer_picker(false);
     state.set_outbox_count(0);
+    state.set_outbox(model(Vec::new()));
+    state.set_peer_open(false);
 
     // No peers yet.
     state.set_peers(model(Vec::new()));

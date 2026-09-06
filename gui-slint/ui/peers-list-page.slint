@@ -1,0 +1,94 @@
+import { ScrollView } from "std-widgets.slint";
+import { State, Logic, PeerRow } from "globals.slint";
+import { Theme, Avatar, Icon, Icons, PageTitle } from "components.slint";
+import { EmptyPeersCard, OutboxCard } from "peer-page.slint";
+
+// One peer; opens its page.
+component PeerListItem inherits Rectangle {
+    in property <PeerRow> peer;
+
+    height: 68px;
+    border-radius: Theme.radius-lg;
+    background: ta.pressed ? Theme.card-bg-hover : Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    animate background { duration: 90ms; }
+
+    ta := TouchArea {
+        clicked => {
+            Logic.select-peer(root.peer.endpoint-id);
+            State.peer-open = true;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-2;
+        spacing: Theme.space-3;
+
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                initials: root.peer.initials;
+                size: 42px;
+                show-presence: true;
+                online: root.peer.online;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.peer.name;
+                color: Theme.text-strong;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: root.peer.sending && root.peer.receiving ? "Sending and receiving…"
+                    : root.peer.sending ? "Sending…"
+                    : root.peer.receiving ? "Receiving…"
+                    : root.peer.online ? "Online" : "Offline";
+                color: root.peer.sending ? Theme.warn
+                    : root.peer.receiving ? Theme.info
+                    : root.peer.online ? Theme.online : Theme.text-muted;
+                font-size: Theme.font-sm;
+                overflow: elide;
+            }
+        }
+        if root.peer.sending: VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.arrow-up; size: 18px; tint: Theme.warn; }
+        }
+        if root.peer.receiving: VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.arrow-down; size: 18px; tint: Theme.info; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.chevron-right; size: 20px; tint: Theme.text-faint; }
+        }
+    }
+}
+
+// Phone layout: the Peers tab's top level.
+export component PeersListPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-3;
+            alignment: start;
+
+            PageTitle {
+                title: "Peers";
+                subtitle: State.peers.length == 0 ? "" : State.presence-label;
+            }
+
+            if State.outbox-count > 0: OutboxCard { can-send: false; }
+
+            if State.peers.length == 0: EmptyPeersCard { }
+            for peer in State.peers: PeerListItem { peer: peer; }
+        }
+    }
+}

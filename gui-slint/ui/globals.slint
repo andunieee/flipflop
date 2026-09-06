@@ -49,6 +49,13 @@ export struct HistoryRow {
     can-open: bool,
 }
 
+// A file shared into the app (Android share sheet), queued until sent.
+export struct OutboxRow {
+    path: string,
+    name: string,
+    size: string,
+}
+
 export global State {
     // navigation: "peer" | "add-peer" | "settings"
     in-out property <string> page: "peer";
@@ -58,9 +65,11 @@ export global State {
     in-out property <bool> compact: false;
     // true on touch devices (Android): bigger hit targets, native toasts.
     in-out property <bool> touch: false;
-    // Compact peer switcher open (single-pane layout only).
-    in-out property <bool> show-peer-picker: false;
-    // Shared content staged from the system share sheet.
+    // Compact layout: the selected peer's page is open over the peer list.
+    in-out property <bool> peer-open: false;
+    // Shared content staged from the system share sheet and not yet being
+    // sent; `outbox-count` is its length.
+    in-out property <[OutboxRow]> outbox;
     in-out property <int> outbox-count: 0;
     // Desktop in-app toast (Android uses native toasts); "" = hidden.
     in-out property <string> toast-text: "";
@@ -126,6 +135,8 @@ export global State {
 export global Logic {
     // navigation
     callback page-changed(string);
+    // Android Back on a top-level page: leave the app (keeps running).
+    callback back-at-root();
 
     // peers
     callback refresh-peers();
@@ -138,6 +149,12 @@ export global Logic {
     callback stop-share(string);
     callback cancel-receive(string);
     callback dismiss-transfer(string);
+
+    // share-sheet queue (Android)
+    callback outbox-remove(string);
+    callback outbox-clear();
+    // Android: add files to the queue with the system file picker.
+    callback pick-files();
 
     // per-peer history
     callback refresh-history();

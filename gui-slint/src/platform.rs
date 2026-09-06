@@ -84,16 +84,6 @@ pub fn toast_later(weak: &slint::Weak<AppWindow>, msg: impl Into<String>, error:
 
 /// Files/folders the user wants to send. Empty = cancelled. Blocks on a
 /// native dialog, so call it off the UI thread.
-#[cfg(target_os = "android")]
-pub fn pick_send_paths() -> Vec<PathBuf> {
-    // Android has no native file-picker result plumbing, so sending means
-    // staging via the system share sheet ("Send to TunnelManager"); the
-    // launch intent is staged at startup, so this is everything staged.
-    android::outbox_files()
-}
-
-/// Files/folders the user wants to send. Empty = cancelled. Blocks on a
-/// native dialog, so call it off the UI thread.
 #[cfg(not(target_os = "android"))]
 pub fn pick_send_paths() -> Vec<PathBuf> {
     // Try the multi-file picker first; if nothing was picked, offer the
