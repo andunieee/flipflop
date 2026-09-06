@@ -92,6 +92,18 @@ fn populate(state: &State<'_>) {
         status: "Transferring…".into(),
         ..Default::default()
     };
+    let pasted = TransferRow {
+        key: "recv-3".into(),
+        peer_id: "a".into(),
+        sending: false,
+        active: false,
+        title: "text".into(),
+        progress: 1.0,
+        status: "Saved".into(),
+        text: "https://example.com/articles/how-tunnels-work".into(),
+        is_link: true,
+        ..Default::default()
+    };
     let received = TransferRow {
         key: "recv-2".into(),
         peer_id: "a".into(),
@@ -104,8 +116,13 @@ fn populate(state: &State<'_>) {
         note: "2 files renamed to avoid overwriting".into(),
         ..Default::default()
     };
-    state.set_transfers(model(vec![sending.clone(), received.clone()]));
-    state.set_visible_transfers(model(vec![sending, received]));
+    state.set_transfers(model(vec![
+        sending.clone(),
+        pasted.clone(),
+        received.clone(),
+    ]));
+    state.set_visible_transfers(model(vec![sending, pasted, received]));
+    state.set_paste_input("Door code is 4711 — see you at 8!".into());
 
     state.set_history(model(vec![
         history("quarterly-report.pdf", true, "Completed", "ok", "2.4 MB"),

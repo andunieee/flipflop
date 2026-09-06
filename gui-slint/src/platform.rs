@@ -117,6 +117,36 @@ pub fn pick_downloads_folder() -> Option<PathBuf> {
         .pick_folder()
 }
 
+/// Read the clipboard's text; `done` runs on the UI thread (`None`: no text).
+#[cfg(target_os = "android")]
+pub fn read_clipboard(done: impl FnOnce(Option<String>) + Send + 'static) {
+    android::read_clipboard(done)
+}
+
+/// Read the clipboard's text; `done` runs on the UI thread (`None`: no text).
+#[cfg(not(target_os = "android"))]
+pub fn read_clipboard(done: impl FnOnce(Option<String>) + Send + 'static) {
+    let text = arboard::Clipboard::new()
+        .and_then(|mut cb| cb.get_text())
+        .map_err(|e| tracing::debug!("clipboard read failed: {e}"))
+        .ok();
+    done(text)
+}
+
+/// Open a link in the browser.
+#[cfg(target_os = "android")]
+pub fn open_url(url: &str) {
+    android::open_url(url)
+}
+
+/// Open a link in the browser.
+#[cfg(not(target_os = "android"))]
+pub fn open_url(url: &str) {
+    if let Err(e) = open::that(url) {
+        tracing::warn!("failed to open {url:?}: {e}");
+    }
+}
+
 /// Hand a saved file back to the OS (file manager / viewer).
 #[cfg(target_os = "android")]
 pub fn open_path(_path: &str) {

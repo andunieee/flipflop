@@ -1,4 +1,4 @@
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit, TextEdit } from "std-widgets.slint";
 import { State, Logic, HistoryRow, TransferRow } from "globals.slint";
 import {
     Theme, Dot, Card, ProgressBar, HintText, Avatar, Badge, DirectionIcon,
@@ -104,7 +104,8 @@ component TransferCard inherits Card {
                 horizontal-stretch: 1;
 
                 Text {
-                    text: (root.transfer.sending ? "Sending " : "Receiving ") + root.transfer.title;
+                    text: root.transfer.text != "" ? "Received text"
+                        : (root.transfer.sending ? "Sending " : "Receiving ") + root.transfer.title;
                     color: Theme.text-strong;
                     font-weight: 650;
                     overflow: elide;
@@ -136,7 +137,43 @@ component TransferCard inherits Card {
             }
         }
 
-        if root.transfer.active || root.transfer.progress > 0: VerticalLayout {
+        // Received pasted text, with Copy / Open.
+        if root.transfer.text != "": VerticalLayout {
+            spacing: Theme.space-2;
+            Rectangle {
+                border-radius: Theme.radius-sm + 2px;
+                background: Theme.inset-bg;
+                border-width: 1px;
+                border-color: Theme.border;
+                height: min(body.preferred-height + 2 * Theme.space-3, 220px);
+                ScrollView {
+                    VerticalLayout {
+                        padding: Theme.space-3;
+                        body := Text {
+                            text: root.transfer.text;
+                            color: root.transfer.is-link ? Theme.accent-text : Theme.text-strong;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: Theme.space-2;
+                SecondaryButton {
+                    label: "Copy";
+                    icon: Icons.copy;
+                    clicked => { Logic.copy-text(root.transfer.text); }
+                }
+                if root.transfer.is-link: PrimaryButton {
+                    label: "Open link";
+                    icon: Icons.open;
+                    clicked => { Logic.open-link(root.transfer.text); }
+                }
+            }
+        }
+
+        if root.transfer.text == "" && (root.transfer.active || root.transfer.progress > 0): VerticalLayout {
             spacing: 6px;
             ProgressBar {
                 value: root.transfer.progress;
@@ -338,6 +375,59 @@ export component OutboxCard inherits Card {
     }
 }
 
+// Type or paste text and send it as-is (arrives as text, not a file).
+component SendTextCard inherits Card {
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+
+        HorizontalLayout {
+            spacing: Theme.space-3;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 10px;
+                    background: Theme.accent-soft;
+                    Icon { source: Icons.text; size: 18px; tint: Theme.accent-text; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "Send text";
+                    color: Theme.text-strong;
+                    font-weight: 650;
+                }
+            }
+        }
+        TextEdit {
+            text <=> State.paste-input;
+            placeholder-text: "Type or paste text…";
+            wrap: word-wrap;
+            height: 96px;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            GhostButton {
+                label: "Paste";
+                icon: Icons.copy;
+                clicked => { Logic.paste-clipboard(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            PrimaryButton {
+                label: "Send text";
+                icon: Icons.send;
+                enabled: State.paste-input != "" && !State.selected-sending;
+                clicked => { Logic.send-text(); }
+            }
+        }
+    }
+}
+
 component HistoryHeader inherits HorizontalLayout {
     padding-top: Theme.space-2;
     SectionTitle { label: "History"; horizontal-stretch: 1; }
@@ -488,6 +578,8 @@ component WidePeerView inherits Rectangle {
             }
         }
 
+        if root.has-peer: SendTextCard { }
+
         for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
 
         if root.has-peer: HistoryHeader { }
@@ -598,6 +690,8 @@ component PhonePeerView inherits Rectangle {
                     }
                 }
             }
+
+            SendTextCard { }
 
             for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
 

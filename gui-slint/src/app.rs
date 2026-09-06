@@ -70,6 +70,11 @@ fn row_from_record(record: &TransferRecord) -> HistoryRow {
             .cloned()
             .unwrap_or_else(|| "Transfer".to_string())
     };
+    let title = if title == transfers::PASTE_FILE_NAME {
+        "Pasted text".to_string()
+    } else {
+        title
+    };
     let mut detail = String::new();
     if record.item_count > 1 {
         detail.push_str(&format!("{} items", record.item_count));
