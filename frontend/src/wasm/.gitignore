@@ -1,2 +1,0 @@
-pkg/*
-!pkg/wasm_bridge.d.ts

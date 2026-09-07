@@ -1,1 +1,0 @@
-Android release 0.3.4. P2P file transfer with end-to-end encryption; no cloud or accounts required.
