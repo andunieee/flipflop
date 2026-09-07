@@ -4,6 +4,14 @@
 gui:
     cargo run --release
 
+# Unit tests for the app and each engine crate (no shared workspace, so run
+# each manifest; engine integration tests live in src/engine/tests).
+test:
+    cargo test --manifest-path Cargo.toml --lib
+    cargo test --manifest-path src/engine/Cargo.toml --lib
+    cargo test --manifest-path src/protocol/Cargo.toml --lib
+    cargo test --manifest-path src/native/Cargo.toml --lib
+
 # Build a debug APK and install it on the connected device/emulator.
 # Prereqs: cargo-apk (`cargo install cargo-apk`), Android SDK + NDK.
 # ANDROID_HOME defaults to /opt/android-sdk; ANDROID_NDK_ROOT defaults to
