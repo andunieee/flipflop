@@ -74,10 +74,7 @@ export component AddPeerPage inherits Rectangle {
             spacing: Theme.space-4;
             alignment: start;
 
-            PageTitle {
-                title: "Add a peer";
-                subtitle: "Pair once, then send files to each other without codes or prompts.";
-            }
+            PageTitle { title: "Add a peer"; }
 
             // Outcome of the last pairing attempt (address or nearby).
             if !State.pairing-busy && State.pairing-status != "": Rectangle {
@@ -97,10 +94,7 @@ export component AddPeerPage inherits Rectangle {
                     spacing: Theme.space-3;
 
                     SectionHeader { label: "Nearby and requests"; icon: Icons.nearby; }
-                    HintText {
-                        label: State.nearby-note != "" ? State.nearby-note
-                            : "Devices on your network running TunnelManager, and anyone who asked to pair with you.";
-                    }
+                    if State.nearby-note != "": HintText { label: State.nearby-note; }
                     if State.suggestions.length == 0: Rectangle {
                         height: 56px;
                         border-radius: Theme.radius;
@@ -125,7 +119,6 @@ export component AddPeerPage inherits Rectangle {
                     spacing: Theme.space-3;
 
                     SectionHeader { label: "Connect with an address"; icon: Icons.link; }
-                    HintText { label: "Paste the address your peer copied from their “Your address” box."; }
                     HorizontalLayout {
                         spacing: Theme.space-2;
                         LineEdit {
@@ -150,7 +143,6 @@ export component AddPeerPage inherits Rectangle {
                     spacing: Theme.space-3;
 
                     SectionHeader { label: "Your address"; icon: Icons.device; }
-                    HintText { label: "Or let them add you: send this to your peer."; }
                     HorizontalLayout {
                         spacing: Theme.space-2;
                         Rectangle {

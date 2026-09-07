@@ -48,12 +48,11 @@ export component SettingsPage inherits Rectangle {
                 spacing: Theme.space-4;
                 alignment: start;
 
-                PageTitle { title: "Settings"; subtitle: "Device name is saved on its own; everything else with “Save settings”."; }
+                PageTitle { title: "Settings"; }
 
                 SettingsCard {
                     title: "This device";
                     icon: Icons.device;
-                    description: "Peers see this name when they discover or pair with you.";
 
                     HorizontalLayout {
                         spacing: Theme.space-2;
@@ -79,7 +78,6 @@ export component SettingsPage inherits Rectangle {
                     // files land in the app-private downloads folder.
                     if !State.touch: Field {
                         label: "Save to";
-                        hint: "Files go into a “tunnelmanager” subfolder there, one folder per peer.";
                         HorizontalLayout {
                             spacing: Theme.space-2;
                             Rectangle {
@@ -104,9 +102,6 @@ export component SettingsPage inherits Rectangle {
                             SecondaryButton { label: "Browse…"; icon: Icons.folder; clicked => { Logic.pick-downloads-dir(); } }
                         }
                     }
-                    if State.touch: HintText {
-                        label: "Received files are saved to the app's private folder; open them with a file manager.";
-                    }
                     CheckBox {
                         text: "Keep a transfer history";
                         checked <=> State.history-enabled;
@@ -116,7 +111,6 @@ export component SettingsPage inherits Rectangle {
                 SettingsCard {
                     title: "Privacy";
                     icon: Icons.shield;
-                    description: "Who can see this device on the local network.";
 
                     ComboBox {
                         model: ["Everyone nearby", "Paired devices only", "Nobody (hidden)"];
@@ -127,7 +121,6 @@ export component SettingsPage inherits Rectangle {
                 SettingsCard {
                     title: "Relay";
                     icon: Icons.relay;
-                    description: "Relays help peers connect when a direct connection isn't possible.";
 
                     ComboBox {
                         model: ["Default (n0 public relays)", "Disabled (direct connections only)", "Custom relays"];
@@ -135,7 +128,6 @@ export component SettingsPage inherits Rectangle {
                     }
                     if State.relay-mode == 2: Field {
                         label: "Relay URLs";
-                        hint: "One per line.";
                         TextEdit {
                             text <=> State.relay-urls;
                             height: 72px;
@@ -180,7 +172,6 @@ export component SettingsPage inherits Rectangle {
                 SettingsCard {
                     title: "Discovery";
                     icon: Icons.globe;
-                    description: "How peers look up your current address.";
 
                     ComboBox {
                         model: ["Default (n0)", "Custom pkarr relay"];

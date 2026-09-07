@@ -265,12 +265,6 @@ export component EmptyPeersCard inherits Card {
             font-weight: 700;
             horizontal-alignment: center;
         }
-        HintText {
-            label: State.peers.length == 0
-                ? "Peers are devices you trust. Once paired, files you send them arrive automatically — no codes to type."
-                : "Pick a peer in the sidebar to send files or see your history with them.";
-            horizontal-alignment: center;
-        }
         if State.peers.length == 0: HorizontalLayout {
             alignment: center;
             PrimaryButton {
@@ -316,10 +310,6 @@ export component OutboxCard inherits Card {
                     color: Theme.text-strong;
                     font-weight: 650;
                     overflow: elide;
-                }
-                HintText {
-                    label: root.can-send ? "Waiting to be sent." : "Pick a peer below to send them.";
-                    font-size: Theme.font-xs;
                 }
             }
             VerticalLayout {
@@ -559,20 +549,19 @@ component WidePeerView inherits Rectangle {
                         font-weight: 650;
                         overflow: elide;
                     }
-                    HintText {
-                        label: State.touch
-                            ? "Share files to TunnelManager from any app — they'll be ready to send here."
-                            : State.selected-online
-                                ? "They're online — files arrive right away."
-                                : "They're offline — sending works once they're back.";
-                    }
                 }
-                if !State.touch: VerticalLayout {
+                VerticalLayout {
                     alignment: center;
                     PrimaryButton {
-                        label: "Send files…";
-                        icon: Icons.send;
-                        clicked => { Logic.send-to-peer(); }
+                        label: State.touch ? "Choose files…" : "Send files…";
+                        icon: State.touch ? Icons.folder : Icons.send;
+                        clicked => {
+                            if State.touch {
+                                Logic.pick-files();
+                            } else {
+                                Logic.send-to-peer();
+                            }
+                        }
                     }
                 }
             }
@@ -677,10 +666,6 @@ component PhonePeerView inherits Rectangle {
                                 font-weight: 650;
                                 overflow: elide;
                             }
-                            HintText {
-                                label: "Choose them here, or share them to TunnelManager from any app.";
-                                font-size: Theme.font-xs;
-                            }
                         }
                     }
                     PrimaryButton {
@@ -715,7 +700,6 @@ component PhonePeerView inherits Rectangle {
                             color: Theme.text-strong;
                             font-weight: 600;
                         }
-                        HintText { label: "Unpairs " + State.selected-name + " — you would have to pair again."; font-size: Theme.font-xs; }
                     }
                     VerticalLayout {
                         alignment: center;
