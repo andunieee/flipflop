@@ -1,7 +1,3 @@
-[workspace]
-members = [".", "protocol", "native", "wasm-io"]
-resolver = "2"
-
 [package]
 name = "engine"
 version = "0.1.0"
@@ -10,8 +6,8 @@ authors = ["Tony Antony <tonyantony300@gmail.com>"]
 keywords = ["scp", "sftp", "network", "p2p", "holepunching"]
 categories = ["network-programming"]
 license = "AGPL-3.0-only"
-repository = "https://github.com/tonyantony300/dashbeam"
-description = "DashBeam - Frictionless peer-to-peer file transfer desktop application with NAT hole punching"
+repository = "https://github.com/andunieee/tunnelmanager"
+description = "TunnelManager P2P transfer engine (NAT hole punching, relay fallback, resume)"
 readme = "README.md"
 rust-version = "1.91"
 
@@ -20,10 +16,10 @@ name = "engine"
 crate-type = ["lib", "staticlib"]
 
 [dependencies]
-protocol = { path = "protocol", package = "sendme-protocol" }
+protocol = { path = "../protocol", package = "sendme-protocol" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-native = { path = "native", package = "sendme-native" }
+native = { path = "../native", package = "sendme-native" }
 clap = { version = "4.4.10", features = ["derive"] }
 console = "0.15.7"
 crossterm = { version = "0.29.0", features = [
@@ -33,9 +29,6 @@ crossterm = { version = "0.29.0", features = [
 indicatif = "0.17.7"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 irpc = "0.17.0"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-io = { path = "wasm-io", package = "sendme-wasm-io" }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2.174", optional = true }

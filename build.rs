@@ -4,7 +4,7 @@ fn main() {
     // The app is dark-only: pin the std-widgets to the dark Fluent variant so
     // LineEdit/ComboBox/CheckBox don't follow a light system theme.
     let config = slint_build::CompilerConfiguration::new().with_style("fluent-dark".into());
-    slint_build::compile_with_config("ui/app-window.slint", config)
+    slint_build::compile_with_config("src/ui/app-window.slint", config)
         .expect("failed to compile Slint UI");
 
     if std::env::var("TARGET")
@@ -15,13 +15,13 @@ fn main() {
     }
 }
 
-/// Compile `android/java` into `$OUT_DIR/classes.dex`, which src/android.rs
+/// Compile `src/android/java` into `$OUT_DIR/classes.dex`, which src/android.rs
 /// embeds and loads at runtime (cargo-apk packages no Java code itself).
 /// Same toolchain as Slint's own Android helper: javac + d8 from the SDK.
 fn build_java_helpers() {
     use android_build::{Dexer, JavaBuild};
 
-    let src = "android/java/dev/tunnelmanager/slint/FilePicker.java";
+    let src = "src/android/java/dev/tunnelmanager/slint/FilePicker.java";
     println!("cargo:rerun-if-changed={src}");
     let release = std::env::var("PROFILE").as_deref() == Ok("release");
     let out_dir: PathBuf = std::env::var_os("OUT_DIR").unwrap().into();

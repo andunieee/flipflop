@@ -1,336 +1,140 @@
-**Language:** English | [中文](docs/readme/README.zh-CN.md) | [Русский](docs/readme/README.ru.md) | [Português](docs/readme/README.pt-BR.md) | [Español](docs/readme/README.es.md) | [Deutsch](docs/readme/README.de.md) | [Français](docs/readme/README.fr.md) | [日本語](docs/readme/README.ja.md) | [한국어](docs/readme/README.ko.md) | [Polski](docs/readme/README.pl.md) | [العربية](docs/readme/README.ar.md)
-
-<div align="center">
-
-# File transfer doesn't need to be complicated
-
-</div>
-
-
-![DashBeam Header](assets/header.png)
-
-<div align="center">
-
-![DashBeam working demo](assets/demo.gif)
-
-</div>
-
-<div align="center">
-
-
-[![Discord][badge-discord]](https://discord.gg/xwb7z22Eve)
-[![Version][badge-version]](https://github.com/tonyantony300/dashbeam/releases/latest)
-![Website][badge-website]
-![Platforms][badge-platforms]
-[![Sponsor][badge-sponsor]](https://github.com/sponsors/tonyantony300)
-
-
-
-</div>
-
-A free and open-source file transfer tool that harnesses the power of [cutting-edge peer-to-peer networking](https://www.iroh.computer), letting you transfer files directly without storing them on cloud servers.
-
-Why rely on WeTransfer, Dropbox, or Google Drive when you can reliably and easily transfer files directly, end-to-end encrypted and without revealing any personal information?
-
-Pick whichever route is closest to hand: **send a link or a QR code** that opens on any device, **send to a device you paired once**, or **send to a device already on your network**. All three move the same bytes the same way - directly, encrypted end to end.
-
-
-## Features
-
-- **Cross-platform** - Desktop, Android, CLI, and browser - no install on the web
-- **Any file, any size** - Files or folders, BLAKE3-verified
-- **Multi-gigabit speeds** - Saturates fast connections
-- **Nearby** - LAN auto-discovery; Pair & Send
-- **Paired devices** - Pair once with a code (remote) or Nearby; send without tickets
-- **Trusted devices** - Opt a paired device into auto-accept; its files land without a prompt
-- **Resumable & multi-peer** - Resume interrupted transfers; share to many at once
-- **Dial by key** - Connect by device identity, not IP address
-- **Roaming** - Switch Wi-Fi, cellular, or networks mid-transfer without dropping
-- **Code, Link or QR** - Receiver needs no install (browser or app)
-- **Preview & history** - See before download; local transfer log
-- **Advanced debug mode** - Opt-in diagnostics for under the hood transparency
-- **Private** - No accounts, tracking, or ads; direct device-to-device
-- **Encrypted** - TLS 1.3 end-to-end; authenticated tickets
-- **Self-host relays** - Unthrottled remote transfers via your own relay (Settings → Infra)
-- **Always reachable** - Background tray/service, notifications, start at login
-- **Lightweight & free** - Small installs; open source, no limits
-
-
-## Real-world stats
-
-
-| Metric | Reported |
-|--------|--------|
-| **Largest transfer** | 452 GB |
-| **Fastest large transfer** | 54 GB @ 123 MB/s (~1 Gbps) |
-| **High-speed bulk transfer** | 328 GB @ 93 MB/s |
-| **Peak speed measured** | 125 MB/s (1 Gbps) |
-
-*Transfer throughput depends on your device, network, and connection path.*
-
-
-
-## Installation
-
-The easiest way to get started is by downloading one of the following versions for your respective operating system:
-
-<table>
-  <tr>
-    <td><b>Platform</b></td>
-    <td><b>Recommended</b></td>
-    <td><b>Other formats</b></td>
-    <td><b>Size</b></td>
-  </tr>
-  <tr>
-    <td>💻 <b>Windows (x64)</b></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_x64-setup.exe'>Setup.exe</a></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_x64_en-US.msi'>MSI</a>, <a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_x64-portable.zip'>Portable ZIP</a></td>
-    <td>~10 MB</td>
-  </tr>
-  <tr>
-    <td>💻 <b>macOS (Universal)</b></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_universal.dmg'>DashBeam.dmg</a></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_aarch64.dmg'>Apple Silicon</a>, <a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_x64.dmg'>Intel</a></td>
-    <td>~15 MB</td>
-  </tr>
-  <tr>
-    <td>💻 <b>Linux (amd64)</b></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_amd64.deb'>DashBeam.deb</a></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam-0.7.1-1.x86_64.rpm'>.rpm</a>, <a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam_0.7.1_amd64.AppImage'>AppImage</a></td>
-    <td>~13 MB</td>
-  </tr>
-  <tr>
-    <td>📱 <b>Android (arm64)</b></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam-v0.7.1-arm64.apk'>DashBeam.apk</a></td>
-    <td><a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam-v0.7.1-armv7.apk'>armv7</a>, <a href='https://github.com/tonyantony300/dashbeam/releases/download/v0.7.1/DashBeam-v0.7.1-universal.apk'>universal</a></td>
-    <td>~50 MB</td>
-  </tr>
-  <tr>
-    <td>⌨️ <b>CLI</b></td>
-    <td><a href='https://www.dashbeam.net/en/downloads'>Downloads</a></td>
-    <td>-</td>
-    <td>~4-5 MB</td>
-  </tr>
-  <tr>
-    <td>🌐 <b>Web (Limited throughput)</b></td>
-    <td><a href='https://app.dashbeam.net'>app.dashbeam.net</a></td>
-    <td>-</td>
-    <td>~2 MB</td>
-  </tr>
-</table>
-
-More options at [GitHub Releases](https://github.com/tonyantony300/dashbeam/releases) or in [Downloads](https://www.dashbeam.net/en/downloads) page.
-
-Running into problems? See [Troubleshooting](docs/troubleshooting.md) for common issues and how to collect logs.
-
-
-
-## Partners
-
-<a href="https://www.testmuai.com" rel="nofollow">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://www.dashbeam.net/assets/sponsors/testmu-light.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://www.dashbeam.net/assets/sponsors/testmu-dark.svg">
-    <img src="https://www.dashbeam.net/assets/sponsors/testmu-dark.svg" height="80" alt="TestMuAI">
-  </picture>
-</a>
-
-We're looking for Partners to join our mission! Partner with us and support while we push the boundaries of peer-to-peer file transfer.
-
-[**LET'S CHAT**](https://www.dashbeam.net/en/contact)
-
-
-## Supported Languages
- 🇺🇸 🇷🇺 🇫🇷 🇨🇳 🇩🇪 🇯🇵 🇮🇳 🇹🇭 🇮🇹 🇨🇿 🇪🇸 🇧🇷 🇸🇦 🇮🇷 🇰🇷  🇵🇱 🇺🇦 🇹🇷 🇳🇴 🇧🇩 🇭🇺 🇷🇸 🇹🇼 🇰🇭 🇺🇿
-
- 
-## Ways to send
-### Nearby devices (Recommended)
-
-Same-network apps appear under **Nearby** in **Settings → Devices** and in the **Send to a device** list while you're sharing. Pick a nearby device and **Pair & Send** to pair and start the transfer in one step - you can also pair from Settings without sharing. First contact shows a verification code on both screens. Set who can find you in **Settings → Network → Your discoverability**.
-
-Uses [mDNS](https://en.wikipedia.org/wiki/Multicast_DNS) - often blocked on guest Wi-Fi and VPNs. See [Troubleshooting](docs/troubleshooting.md#the-nearby-list-is-empty) if the list stays empty.
-
-### Paired devices
-
-Pair in **Settings → Devices** with a pairing code (works remotely, over the internet) or via a Nearby request on the same network. After pairing, **Send** appears next to that device while sharing - no ticket to copy. The receiver gets an in-app prompt. Desktop can keep running in the background and show online paired devices in the tray (**Settings → General → Startup & background**). Manual tickets and the [sendme CLI](https://www.iroh.computer/sendme) still work.
-
-### Share ticket, link or QR code (One time transfer)
-
-While sharing: **QR** for a camera scan, **Share** for the system sheet, **Copy** for the raw ticket. Links use `https://app.dashbeam.net/receive?ticket=…` - on Android they open the app; elsewhere the web app, so nothing to install (large files are better in the native app). Paste a ticket, link, or full share message into Receive.
-
-
-
-
-## Comparison
-
-| | **DashBeam** | **Blip** | **LocalSend** | **Magic Wormhole** | **PairDrop** |
-|:---|:---:|:---:|:---:|:---:|:---:|
-| Networking | QUIC via Iroh | Unknown | HTTPS/REST over TCP | encrypted TCP | WebRTC/DTLS (SCTP) |
-| Works over the internet | ✅ | ✅ | LAN only | ✅ | ✅ |
-| Saturates gigabit connections | ✅ | ✅ | LAN only | ✅ | ❌ (SCTP/browser ceiling) |
-| Discover devices on LAN | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Persistent paired devices | ✅  | ✅ (account) | ❌ | ❌ | ✅ |
-| Send folders | ✅ | ✅ | ✅ | ✅ | ✅ (CLI only, not in browser) |
-| Resumable transfers | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Roaming mid-transfer | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Send to multiple receivers | ✅ (broadcast) | ❌ | ✅ | ✅ | ❌ |
-| Unlimited file size | ✅ | ✅ | ✅ | ✅ | Limited by browser memory |
-| Open source | ✅ | ❌ | ✅ | ✅ | ✅ |
-| No account required | ✅ | ❌ | ✅ | ✅ | ✅ |
-| End-to-end encryption | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Platforms | CLI + desktop + mobile + web | Desktop + mobile (no web/CLI) | Desktop + mobile (no web/CLI) | CLI only | Web/PWA + Android app + CLI |
-| The catch | WIP | Closed source; data handling cannot be audited | Same-network only, no resume | CLI-only; GUI front-ends are separate, community-maintained | WebRTC/SCTP throughput ceiling; browser memory limits |
-
-[Know more →](https://www.dashbeam.net/en/compare)
-
-## Under the hood
-
-DashBeam is built on [Iroh](https://www.iroh.computer), a modern peer-to-peer networking stack that simplifies direct device-to-device communication. In practice, that means devices talk over encrypted QUIC, files move with content-addressed blobs, and relays help when a direct path isn’t available.
-
-> **The long version:** [Under the hood](https://dashbeam.net/en/under-the-hood) walks the same architecture as a narrative - fingerprints instead of filenames, names instead of addresses, hole punching, roaming, and what each intermediary can and cannot see.
-
-### The building blocks
-
-| Piece | What it does here |
-|-------|-------------------|
-| **Blobs** (`iroh-blobs`) | Store and stream file data; every chunk is verified with BLAKE3 |
-| **Tickets** | One string that tells a peer *who* to dial and *what* to fetch |
-| **Endpoints** | Each device’s Iroh identity (Ed25519 key → endpoint id) |
-| **QUIC + TLS 1.3** | Encrypted transport; multiplexing without head-of-line blocking |
-| **Relays + hole punching** | Bootstrap connections across NATs; the relay carries data while a direct path is negotiated |
-| **Control protocol** (pairing) | Long-lived channel to remember devices and deliver share invites |
-| **Local discovery** (mDNS) | Optional LAN advertising so Nearby devices can find each other without a ticket |
-| **Receive links** | A ticket wrapped in an ordinary https URL - an App Link on Android, the web app everywhere else |
-
-### Blobs
-
-Files aren’t uploaded to a server. They’re published as **blobs**: opaque byte sequences addressed by a BLAKE3 hash.
-
-- A **link** is that 32-byte hash: if the hash matches, the content matches.
-- Folders and large files use a **HashSeq** (a blob that points at other blobs).
-- The sender is the **provider**; the receiver is the **requester**. Either side can do both.
-
-Because that hash is a BLAKE3 tree rather than one digest over the whole file, every chunk verifies on its own against the root. That is what makes resume cheap: a receiver coming back after a dropped connection knows exactly which chunks it already holds *and has verified*, so it asks only for the gap. Nothing already received is re-sent, and nothing arriving is taken on trust.
-
-### Tickets
-
-A share **ticket** is a single token that packs:
-
-1. The sender’s endpoint id (so you know you’re talking to the right device)
-2. Enough address / relay info to dial them
-3. The blob hash to download
-
-You only connect to people you share a ticket with: no broadcasting your IP to strangers. That’s the default “cozy network” model Iroh encourages, vs. flooding discovery to the whole swarm.
-
-Tickets that carry only an endpoint id lean on public-key discovery (Pkarr) to find current addresses. Those records are signed by the endpoint key itself, so a tampered one fails verification rather than misdirecting you - the lookup service is trusted for **availability, not integrity**.
-
-
-### Connecting across networks
-
-When two devices need to meet:
-
-1. Each registers with a public (or self-hosted) **relay** so peers can find a path through firewalls and NATs.
-2. Iroh tries **QUIC hole punching** to upgrade to a direct peer-to-peer link.
-3. If a direct path works, traffic moves over to it. If not, the relay stays in the path as a fallback UDP hop.
-
-Those steps overlap rather than queue. The relay is already carrying your data while hole punching negotiates, so nothing waits on the direct path to succeed - the transfer just gets faster if and when it does. Roughly one transfer in ten never gets a direct path at all (symmetric NAT, locked-down corporate networks) and rides the relay start to finish.
-
-Either way, the payload is end-to-end encrypted. Relays see ciphertext, not your files. [More on Iroh relays →](https://docs.iroh.computer/about/faq)
-
-### Roaming across networks
-
-A connection is bound to the peer’s key, not to its IP address, so changing networks does not end it. Switch from Wi-Fi to cellular mid-transfer and iroh notices the address change, learns the new candidates, and republishes them to the peer. The relay carries the data throughout, and hole punching simply runs again on the new path.
-
-Addresses are disposable hints, not identity. That is the practical payoff of naming devices by key instead of by location.
-
-### QUIC & encryption
-
-QUIC (UDP-based, same foundation as HTTP/3) brings TLS 1.3 into the transport. For DashBeam that buys encryption and authentication, multiple streams with shared congestion control, and fast reconnects when you’ve talked to a peer before.
-
-### Paired devices
-
-Pairing doesn’t replace tickets; it delivers them for you.
-
-1. Devices exchange a short **pairing code** (the host’s endpoint id) over a dedicated control ALPN.
-2. Each side proves identity by signing connection-bound keying material with its device secret, then remembers the peer locally.
-3. A persistent control connection keeps presence (online/offline).
-4. When you share, DashBeam still creates a normal one-time blob ticket; choosing a paired device ships that ticket as an in-app **invite** instead of making you copy-paste it.
-
-Manual tickets and the [sendme CLI](https://www.iroh.computer/sendme) keep working exactly as before.
-
-### Nearby (local discovery)
-
-On the same local network, DashBeam can advertise and browse peers with mDNS (desktop and Android; not the web app).
-
-1. When discoverability is **Everyone**, the device publishes enough metadata for others to show its name in Nearby.
-2. **Paired only** still announces presence without exposing the display name to strangers on the LAN.
-3. **Off** stops advertising; you can still browse and send to others who remain discoverable.
-4. First-contact file invites show a short verification code derived from both devices' public keys so each side can confirm they're talking to the intended peer before accepting.
-5. Accepting a Nearby pair request or file invite creates the same local paired-device records as code-based pairing.
-
-### Self-hosting relays and discovery
-
-For how to run your own iroh relay and discovery server, configure DashBeam to use them, and how mixed public/self-hosted setups behave, see [`infra/README.md`](infra/README.md) (relay: [`infra/relay/README.md`](infra/relay/README.md#using-self-hosted-relays-with-dashbeam), discovery: [`infra/dns/README.md`](infra/dns/README.md)).
-
-For the illustrated version of everything above - including a full account of what a relay operator, your ISP, and the lookup service each learn from a transfer - read [Under the hood](https://dashbeam.net/en/under-the-hood).
-
+# TunnelManager — Slint GUI
+
+Native Rust GUI built with [Slint](https://slint.dev), replacing the Tauri + React
+frontend. It drives the same P2P engine crate (`src/engine`) directly — no Tauri,
+no webview, no JavaScript.
+
+## Scope
+
+Implemented:
+
+- **Peers** — sidebar lists known peers from the paired-device store with
+  presence dots; rename/forget a peer; rename your own device in Settings
+  (set via `set_device_display_name`); per-peer pages show history and a
+  "Send files…" button.
+- **Add peer** — paste the peer's iroh address/ticket (`join_pairing`), or add
+  one of the suggested peers: LAN mDNS neighbours and inbound pair requests
+  (`request_nearby_pair` / `accept_nearby_invite`, decline supported).
+- **Send** — pick files/folders, share them, deliver directly to the peer with
+  `invite_paired_device`; live progress and speed, stop sharing. The share
+  closes by itself once the peer has everything.
+- **Receive** — automatic: paired peers' file invites are accepted and
+  downloaded into `<downloads folder>/tunnelmanager/<peer-name>` without
+  prompts; progress + cancel; conflict renaming recorded. Cancelled/failed
+  receives keep their partial store for resume; deleting the history row
+  frees it.
+- **Transfers** — any number of sends and receives run at once (different
+  peers); each peer's page shows its own transfer cards, and the sidebar marks
+  peers with a transfer in flight (↑/↓).
+- **Settings** — downloads folder, own device name, relay mode (default /
+  disabled / custom URLs + auth token), local discovery (everyone / paired
+  only / off), history toggle; persisted to `settings.json`.
+- **Notifications** — toasts: an in-window overlay on desktop, native
+  `Toast`s on Android.
+
+Not implemented (v1): tray, autostart, updater. Engine-level transfer behavior
+(iroh, BLAKE3 verification, resume, relay fallback, history partial stores) is
+identical to the Tauri app because it is the same code path.
+
+## Build & run
+
+```sh
+cargo run --release
+```
+
+Data dir: `$XDG_DATA_HOME/tunnelmanager-slint` (override with
+`TUNNELMANAGER_SLINT_DATA_DIR`). Own per-peer history entries (rows carrying
+peer info) are not shared with the Tauri app's ticket-era history file; by
+default this GUI keeps its own history.
+
+## Android
+
+The same UI runs on Android through Slint's `android-activity` backend. The
+crate builds as a `cdylib` (`src/lib.rs`) plus the desktop bin; the window
+switches to a single-pane layout with a bottom nav bar when there is no room
+for the sidebar (`State.compact`), and uses larger touch-sized rows and
+buttons on Android (`State.touch`).
+
+Platform integration (see `src/android.rs`):
+
+- **Clipboard / toasts** go through JNI (`ClipboardManager`, `Toast`) on the
+  Java main thread.
+- **Sending**: pick files through the system share sheet — "Share →
+  TunnelManager" from any app stages the content (files, or shared text/links
+  as a `.txt`) into an app-private outbox; the app opens the peer picker, a
+  toast shows the count, and "Send" on a peer sends the staged content. A
+  native SAF picker is not possible because `android-activity` does not
+  forward `onActivityResult`.
+- **Shares while running**: the share sheet starts a second activity instance
+  in the sharing app's task, and android-activity runs `android_main` again
+  for it in the same process. That instance does not start Slint; it stages
+  its intent's content, hands it to the running UI, moves the UI's task to the
+  front (`REORDER_TASKS`) and finishes itself. The process exits when the main
+  activity is destroyed, so a later launch always starts a fresh UI.
+- **Look**: launcher icon (adaptive), a branded launch screen and the dark
+  system-bar colors come from `android/res`; the PNGs there are generated
+  from the SVGs in `android/icon` by `android/gen-res.sh`. The UI pads itself
+  by the window's safe-area insets, since it is drawn edge-to-edge.
+- **Receiving** land in the app-private downloads folder; opening rows is a
+  no-op on Android (use a file manager). The Settings page hides the folder
+  picker accordingly.
+- **Data dir** is `/data/data/dev.tunnelmanager.slint/files`.
+
+Prerequisites: Android SDK + NDK, `ANDROID_HOME`/`ANDROID_NDK_ROOT` set, and
+the rust targets `rustup target add aarch64-linux-android x86_64-linux-android`.
+
+Build & run on a device/emulator with [cargo-apk](https://crates.io/crates/cargo-apk):
+
+```sh
+cargo install cargo-apk
+cargo apk run -p tunnelmanager-slint
+```
+
+Logs: `adb logcat -s tunnelmanager RustStdoutStderr` (`tracing` output goes
+to logcat under the `tunnelmanager` tag; `RustStdoutStderr` shows panics).
+
+The manifest (package `dev.tunnelmanager.slint`, min SDK 26, share-sheet
+intent filters, permissions, icon and theme) is generated from
+`[package.metadata.android*]` in `Cargo.toml`.
+
+## Toolchain note
+
+The repo pins rustc 1.91 for the engine, but Slint (pinned to `=1.16.1`; 1.17.x
+depends on an unpublished android backend crate) needs 1.92, so this crate
+carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
+1.10.0 in `Cargo.lock` because 1.13 fails to compile on 1.92.
+
+## Layout
+
+- `ui/` — Slint markup (`globals.slint` holds shared state + logic callbacks,
+  one file per page; `State.compact`/`State.touch` drive the responsive
+  single-pane/touch layout). `ui/icons/` holds the line icons, exposed through
+  the `Icons` global in `components.slint`.
+- `android/` — Android resources (launcher icon, launch theme) and their
+  sources.
+- `src/lib.rs` — crate root: shared by the desktop bin and the Android
+  `cdylib`.
+- `src/main.rs` — desktop entry point.
+- `src/app.rs` — startup, node events, peers/pairing/history/settings wiring.
+- `src/transfers.rs` — send and receive flows; one `TransferRow` per transfer.
+- `src/platform.rs` — per-platform clipboard, toasts, dialogs, "open", data
+  dir and logging.
+- `src/android.rs` — Android platform services (JNI clipboard + toast,
+  share-sheet outbox, `android_main`).
+- `src/emitter.rs` — the node service's `EventEmitter` (an event queue the UI
+  drains on a timer) and `apply_transfer_event`, the engine event → transfer
+  row mapping.
+- `src/recorder.rs` — slim port of the Tauri shell's history recorder.
+- `src/settings.rs` — settings persistence.
+- `examples/screenshots.rs` — renders every page with sample data, headless.
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md#development-setup) for prerequisites, local setup, build instructions, and testing.
+```sh
+cargo test                       # pure logic: formatting, event mapping, recorder, settings
+cargo run --example screenshots -- /tmp/shots   # PPM renders of each page (desktop + phone)
+```
 
-## Join our [Discord](https://discord.gg/xwb7z22Eve) to contribute
-
-The best way to contribute is to join our Discord and say hi. Introduce yourself and share what skills or interests you have - whether that’s coding, testing, design, or something else. You can also raise issues, suggest fixes, or pitch ideas. Maintainers are there to guide you every step of the way.
-
-It’s the best place to get context, align on direction, and collaborate with the [community](https://discord.gg/xwb7z22Eve).
-
-## License
-
-AGPL-3.0
-
-## Privacy Policy
-
-See [PRIVACY.md](PRIVACY.md) for information about how DashBeam handles your data and privacy.
-
-[![Sponsor](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/tonyantony300) [![Buy Me Coffee](https://img.shields.io/badge/Buy%20Me%20Coffee-FF5A5F?style=for-the-badge&logo=coffee&logoColor=FFFFFF)](https://buymeacoffee.com/tny_antny)
-
-
-## Contributors
-
-<a href="https://github.com/tonyantony300/dashbeam/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=tonyantony300/dashbeam" />
-</a>
-
-
-## Contact
-
-Reach me [here](https://www.dashbeam.net/en/contact) for suggestions, feedback or media related communication.
-
-
-Thank you for checking out this project! If you find it useful, consider giving it a star and helping spread the word.
-
-
-
-
-## Built on
-
-<div align="left">
-  <a href="https://iroh.computer">
-    <img alt="iroh" src="https://raw.githubusercontent.com/n0-computer/iroh/main/.img/iroh_wordmark.svg" width="200">
-  </a>
-</div>
-
-
-
-
-<!-- <div align="center" style="color: gray;"></div> -->
-
-[badge-website]: https://img.shields.io/badge/website-dashbeam.net-orange
-[badge-version]: https://img.shields.io/badge/version-0.7.1-blue
-[badge-discord]: https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white
-[badge-platforms]: https://img.shields.io/badge/platforms-macOS%2C%20Windows%2C%20Linux%2C%20Android%2C%20CLI%2C%20-green
-[badge-sponsor]: https://img.shields.io/badge/sponsor-ff69b4
-
-
+The screenshot example uses Slint's software renderer, so it needs no display
+and starts no node — handy for checking layout changes. The std-widgets are
+pinned to the `fluent-dark` style in `build.rs`.
