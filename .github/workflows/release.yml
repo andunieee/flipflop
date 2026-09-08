@@ -8,8 +8,9 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  android:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -33,11 +34,22 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install NDK
+      # android-actions/setup-android is broken (tries to install the
+      # long-gone "tools" package), so install cmdline-tools directly.
+      - name: Setup Android SDK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
-          sdkmanager --install "ndk;27.2.12479018"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -sSLo cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+          unzip -q cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          rm cmdtools.zip
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
@@ -48,6 +60,8 @@ jobs:
         run: rustup target add aarch64-linux-android x86_64-linux-android
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android
 
       - name: Install cargo-apk
         run: cargo install cargo-apk --version 0.10.0 --locked
@@ -86,8 +100,105 @@ jobs:
           mkdir dist
           cp "$RUNNER_TEMP/signed.apk" "dist/tunnelmanager-${{ steps.version.outputs.name }}.apk"
 
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: dist/*.apk
+
+  desktop:
+    name: desktop (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            slug: linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            slug: windows-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            slug: macos-aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            slug: macos-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ ! "$tag" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Tag must look like v1.2.3, got '$GITHUB_REF_NAME'"
+            exit 1
+          fi
+          echo "name=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp Cargo version
+        shell: bash
+        run: |
+          sed -i 's/^version = "0\.1\.0"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libfontconfig-dev libssl-dev clang ninja-build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.92"
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir dist
+          tar -czf "dist/tunnelmanager-${{ steps.version.outputs.name }}-${{ matrix.slug }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" tunnelmanager-slint
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          mkdir dist
+          Compress-Archive -Path "target/${{ matrix.target }}/release/tunnelmanager-slint.exe" `
+            -DestinationPath "dist/tunnelmanager-${{ steps.version.outputs.name }}-${{ matrix.slug }}.zip"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: [android, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          merge-multiple: true
+          path: dist
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.apk
+          ls dist
+          gh release create "$GITHUB_REF_NAME" dist/*
