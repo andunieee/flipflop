@@ -26,7 +26,8 @@ jobs:
 
       - name: Stamp Cargo version
         run: |
-          sed -i 's/^version = "0\.1\.0"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
+          sed -i.bak 's/^version = "0\.1\.0"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
+          rm -f Cargo.toml.bak
           grep -q "^version = \"${{ steps.version.outputs.name }}\"$" Cargo.toml
 
       - uses: actions/setup-java@v4
@@ -66,39 +67,31 @@ jobs:
       - name: Install cargo-apk
         run: cargo install cargo-apk --version 0.10.0 --locked
 
-      - name: Build release APK
-        run: cargo apk build --release --lib -p tunnelmanager-slint
-
       - name: Restore signing key
-        env:
-          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
+          if [ -z "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
             echo "::error::The SIGNING_KEYSTORE_BASE64 secret is not set"
             exit 1
           fi
-          echo "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
-          echo "SIGNING_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/release.jks"
 
-      - name: Sign APK
+      # cargo-apk signs the release APK itself during the build; the
+      # keystore comes from the environment (no manifest changes needed).
+      - name: Build signed release APK
         env:
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          ANDROID_PLATFORM: android-35
+          ANDROID_BUILD_TOOLS_VERSION: 35.0.0
+          CARGO_APK_RELEASE_KEYSTORE: ${{ runner.temp }}/release.jks
+          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+        run: cargo apk build --release --lib -p tunnelmanager-slint
+
+      - name: Verify APK signature
         run: |
           build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           apk=$(ls target/release/apk/*.apk | head -1)
-          "$build_tools/zipalign" -f 4 "$apk" "$RUNNER_TEMP/aligned.apk"
-          "$build_tools/apksigner" sign \
-            --ks "$SIGNING_STORE_FILE" \
-            --ks-pass:env SIGNING_STORE_PASSWORD \
-            --ks-key-alias "$SIGNING_KEY_ALIAS" \
-            --key-pass:env SIGNING_KEY_PASSWORD \
-            --out "$RUNNER_TEMP/signed.apk" \
-            "$RUNNER_TEMP/aligned.apk"
-          "$build_tools/apksigner" verify --print-certs "$RUNNER_TEMP/signed.apk"
+          "$build_tools/apksigner" verify --print-certs "$apk"
           mkdir dist
-          cp "$RUNNER_TEMP/signed.apk" "dist/tunnelmanager-${{ steps.version.outputs.name }}.apk"
+          cp "$apk" "dist/tunnelmanager-${{ steps.version.outputs.name }}.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -143,7 +136,8 @@ jobs:
       - name: Stamp Cargo version
         shell: bash
         run: |
-          sed -i 's/^version = "0\.1\.0"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
+          sed -i.bak 's/^version = "0\.1\.0"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
+          rm -f Cargo.toml.bak
 
       - name: Install Linux build deps
         if: runner.os == 'Linux'
