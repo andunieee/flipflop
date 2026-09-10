@@ -153,6 +153,48 @@ fn emit_active_connection_count(app_handle: &AppHandle, count: usize) {
     }
 }
 
+/// Upper bound on waiting for the relay before minting a ticket.
+const RELAY_WAIT: Duration = Duration::from_secs(30);
+/// How long to hold out for the relay once LAN addresses are known.
+const LAN_ONLY_GRACE: Duration = Duration::from_secs(3);
+
+/// Waits until the endpoint's address is worth putting in a ticket: the relay
+/// is connected, or (after a short grace) it has direct IP addresses the
+/// ticket will carry. Never fails, so a device without internet can still
+/// share with a LAN peer.
+async fn wait_for_ticket_addrs(
+    endpoint: &Endpoint,
+    relay_mode: &RelayMode,
+    ticket_type: AddrInfoOptions,
+) {
+    if matches!(relay_mode, RelayMode::Disabled) {
+        return;
+    }
+    let ticket_has_ip_addrs = matches!(
+        ticket_type,
+        AddrInfoOptions::RelayAndAddresses | AddrInfoOptions::Addresses
+    );
+    let has_direct_addrs = async {
+        if !ticket_has_ip_addrs {
+            return std::future::pending().await;
+        }
+        sleep(LAN_ONLY_GRACE).await;
+        while !endpoint
+            .addr()
+            .addrs
+            .iter()
+            .any(|addr| matches!(addr, iroh::TransportAddr::Ip(_)))
+        {
+            sleep(Duration::from_millis(100)).await;
+        }
+        tracing::info!("relay not reachable yet; sharing with direct addresses only");
+    };
+    let ready = n0_future::future::race(endpoint.online(), has_direct_addrs);
+    if timeout(RELAY_WAIT, ready).await.is_err() {
+        tracing::warn!("relay not reachable; sharing ticket may be unusable");
+    }
+}
+
 /// Shared send orchestration after blobs are imported into the store.
 pub struct ShareSessionOutcome<S> {
     pub ticket: String,
@@ -200,13 +242,7 @@ where
         .accept(METADATA_ALPN, MetadataProtocol { metadata })
         .spawn();
 
-    let ep = router.endpoint();
-    timeout(Duration::from_secs(30), async move {
-        if !matches!(relay_mode, RelayMode::Disabled) {
-            let _ = ep.online().await;
-        }
-    })
-    .await?;
+    wait_for_ticket_addrs(router.endpoint(), &relay_mode, ticket_type).await;
 
     let hash = temp_tag.hash();
 
@@ -249,12 +285,7 @@ pub async fn run_share_on_endpoint(
         completed_peers.clone(),
     ));
 
-    timeout(Duration::from_secs(30), async move {
-        if !matches!(relay_mode, RelayMode::Disabled) {
-            let _ = endpoint.online().await;
-        }
-    })
-    .await?;
+    wait_for_ticket_addrs(endpoint, &relay_mode, ticket_type).await;
 
     let hash = temp_tag.hash();
     let mut addr = endpoint.addr();
