@@ -35,6 +35,12 @@ component HistoryItem inherits Rectangle {
                 font-weight: 600;
                 overflow: elide;
             }
+            if root.entry.preview != "": Text {
+                text: root.entry.preview;
+                color: Theme.text;
+                font-size: Theme.font-sm;
+                overflow: elide;
+            }
             Text {
                 text: State.touch ? root.entry.size + " · " + root.entry.date
                     : root.entry.detail == "" ? root.entry.size
