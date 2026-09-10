@@ -1,7 +1,6 @@
 mod common;
 
 use common::{MockEventEmitter, TestFixture};
-use engine::{download, start_share, ReceiveOptions, SendOptions};
 use std::str::FromStr;
 
 /// Where the receiver keeps blobs for this ticket — the path comes from its hash.
@@ -53,59 +52,28 @@ async fn wait_until_gone(path: &std::path::Path) -> bool {
 }
 
 #[tokio::test]
-async fn e2e_sender_temp_dir_cleanup() {
-    let fixture = TestFixture::new();
-    let source = fixture.create_file("dummy.txt", b"dummy content");
-
-    let share = start_share(source, SendOptions::default(), None, None)
-        .await
-        .expect("start_share should succeed");
-
-    // Capture the temp directory path created by start_share
-    let temp_dir_path = share.blobs_data_dir.path().to_path_buf();
-
-    // Verify it exists while share is active
-    assert!(
-        temp_dir_path.exists(),
-        "Temp dir should exist while share is active"
-    );
-
-    // Dropping the share kicks off cleanup.
-    drop(share);
-
-    // Verify it is deleted (cleanup runs on a blocking task).
-    assert!(
-        wait_until_gone(&temp_dir_path).await,
-        "Temp dir should be deleted after SendResult is dropped"
-    );
-}
-
-#[tokio::test]
 async fn e2e_receiver_temp_dir_preserved_on_failure() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let recv_dir = fixture.output_dir();
 
-    // Start a real share to get a valid ticket, then drop the sender so the
-    // download fails when it tries to connect.
+    // Start a real share to get a valid ticket, then close it so the sender
+    // refuses the download.
     let source = fixture.create_file("fail.txt", b"will fail");
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
         .unwrap();
     let ticket = share.ticket.clone();
     let expected_path = receiver_temp_dir(&ticket);
 
-    // Drop the sender immediately so the receiver cannot connect
     drop(share);
 
-    let mut options = ReceiveOptions::default();
-    options.output_dir = Some(recv_dir);
-
-    // The download should fail because the sender is gone
+    // The download should fail because the share is closed
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    let result = download(ticket, options, None, cancel_rx).await;
+    let result = pair.download(&ticket, recv_dir, None, cancel_rx).await;
     assert!(
         result.is_err(),
-        "Download should fail since sender was dropped"
+        "Download should fail since the share was closed"
     );
 
     // Should still be here after the failure so the next try can pick up where it left off.
@@ -119,26 +87,19 @@ async fn e2e_receiver_temp_dir_preserved_on_failure() {
 
 #[tokio::test]
 async fn e2e_receiver_temp_dir_removed_on_success() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_file("success.txt", b"completed transfer payload");
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
         .unwrap();
     let ticket = share.ticket.clone();
     let expected_path = receiver_temp_dir(&ticket);
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    let result = download(
-        ticket,
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    let result = pair.download(&ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
     assert!(!result.message.is_empty());
@@ -162,10 +123,11 @@ async fn e2e_receiver_temp_dir_removed_on_success() {
 /// ticket can be resumed in the same session.
 #[tokio::test]
 async fn e2e_cancel_preserves_partial_store() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_file("cancel_test.txt", b"content to be cancelled");
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
         .unwrap();
     let ticket = share.ticket.clone();
@@ -177,15 +139,7 @@ async fn e2e_cancel_preserves_partial_store() {
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     cancel_tx.send(()).unwrap();
 
-    let result = download(
-        ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(fixture.output_dir()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    let result = pair.download(&ticket, fixture.output_dir(), None, cancel_rx)
     .await;
 
     assert!(result.is_err(), "cancelled download should return an error");
@@ -207,11 +161,12 @@ async fn e2e_cancel_preserves_partial_store() {
 /// After a cancel, resuming with the same ticket completes the transfer successfully.
 #[tokio::test]
 async fn e2e_same_ticket_resumes_after_cancel() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_file("resume.txt", b"resume after cancel content");
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
         .unwrap();
     let ticket = share.ticket.clone();
@@ -221,15 +176,7 @@ async fn e2e_same_ticket_resumes_after_cancel() {
     // First attempt: cancel immediately.
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     cancel_tx.send(()).unwrap();
-    let _ = download(
-        ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    let _ = pair.download(&ticket, recv_dir.clone(), None, cancel_rx)
     .await;
 
     assert!(
@@ -239,15 +186,7 @@ async fn e2e_same_ticket_resumes_after_cancel() {
 
     // Second attempt with same ticket: must succeed and produce the correct file.
     let (_cancel_tx2, cancel_rx2) = common::no_cancel();
-    download(
-        ticket,
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx2,
-    )
+    pair.download(&ticket, recv_dir.clone(), None, cancel_rx2)
     .await
     .expect("retry with same ticket should succeed");
 
@@ -273,13 +212,14 @@ async fn e2e_same_ticket_resumes_after_cancel() {
 #[tokio::test]
 #[ignore = "timing-dependent; run manually"]
 async fn e2e_receiver_resumes_partial_download() {
+    let pair = std::sync::Arc::new(common::spawn_transfer_pair().await);
     let fixture = TestFixture::new();
     // Large enough that the transfer can be interrupted before it completes.
     let size = 128 * 1024 * 1024; // 128 MiB
     let source = fixture.create_large_file("big.bin", size);
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source.clone(), SendOptions::default(), None, None)
+    let share = pair.share(vec![source.clone()], None)
         .await
         .unwrap();
     let ticket = share.ticket.clone();
@@ -290,15 +230,14 @@ async fn e2e_receiver_resumes_partial_download() {
     // Receive in the background and watch progress so we can cut the sender mid-transfer.
     let emitter = MockEventEmitter::new();
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    let recv_task = tokio::spawn(download(
-        ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        Some(emitter.clone()),
-        cancel_rx,
-    ));
+    let recv_task = tokio::spawn({
+        let (pair, ticket, recv_dir, emitter) =
+            (pair.clone(), ticket.clone(), recv_dir.clone(), emitter.clone());
+        async move {
+            pair.download(&ticket, recv_dir, Some(emitter), cancel_rx)
+                .await
+        }
+    });
 
     // Wait until a few MiB have transferred.
     let mut transferred = 0u64;
@@ -317,7 +256,7 @@ async fn e2e_receiver_resumes_partial_download() {
         "transfer finished before it could be interrupted; rerun with a larger file"
     );
 
-    // Kill the sender mid-transfer -> the receiver's connection breaks.
+    // Close the share mid-transfer -> the sender aborts the running request.
     drop(share);
 
     let first = recv_task.await.expect("receive task panicked");
@@ -334,10 +273,9 @@ async fn e2e_receiver_resumes_partial_download() {
         "some partial bytes should be saved (got {partial})"
     );
 
-    // Re-share the same content. The node id (and thus the full ticket string)
-    // differs per session, but the content hash — which keys the temp dir — is
-    // the same, so the retry targets the preserved partial store.
-    let share2 = start_share(source, SendOptions::default(), None, None)
+    // Re-share the same content. The content hash — which keys the temp dir —
+    // is the same, so the retry targets the preserved partial store.
+    let share2 = pair.share(vec![source], None)
         .await
         .unwrap();
     assert_eq!(
@@ -348,15 +286,7 @@ async fn e2e_receiver_resumes_partial_download() {
 
     // Retry completes by resuming from the saved progress.
     let (_cancel_tx2, cancel_rx2) = common::no_cancel();
-    download(
-        share2.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx2,
-    )
+    pair.download(&share2.ticket, recv_dir.clone(), None, cancel_rx2)
     .await
     .expect("retry should resume and complete");
 

@@ -1,30 +1,22 @@
 mod common;
 
 use common::{MockEventEmitter, TestFixture};
-use engine::{download, start_share, ReceiveOptions, SendOptions};
 
 #[tokio::test]
 async fn e2e_receiver_event_sequence() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_large_file("sequence.bin", 2_000_000);
     let recv_dir = fixture.output_dir();
 
     let receiver_emitter = MockEventEmitter::new();
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -64,31 +56,19 @@ async fn e2e_receiver_event_sequence() {
 
 #[tokio::test]
 async fn e2e_sender_events_on_transfer() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_large_file("sender_events.bin", 2_000_000);
     let recv_dir = fixture.output_dir();
 
     let sender_emitter = MockEventEmitter::new();
 
-    let share = start_share(
-        source,
-        SendOptions::default(),
-        Some(sender_emitter.clone()),
-        None,
-    )
+    let share = pair.share(vec![source], Some(sender_emitter.clone()))
     .await
-    .expect("start_share should succeed");
+    .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir, None, cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -108,14 +88,12 @@ async fn e2e_sender_events_on_transfer() {
 
 #[tokio::test]
 async fn e2e_invalid_ticket_errors() {
+    let pair = common::spawn_transfer_pair().await;
+    let fixture = TestFixture::new();
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    let result = download(
-        "not-a-valid-ticket-string".to_string(),
-        ReceiveOptions::default(),
-        None,
-        cancel_rx,
-    )
-    .await;
+    let result = pair
+        .download("not-a-valid-ticket-string", fixture.output_dir(), None, cancel_rx)
+        .await;
 
     assert!(
         result.is_err(),

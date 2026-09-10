@@ -1,10 +1,10 @@
 mod common;
 
 use common::{MockEventEmitter, TestFixture};
-use engine::{download, start_share, ReceiveOptions, SendOptions};
 
 #[tokio::test]
 async fn e2e_filename_conflict_resolved() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_file("report.txt", b"new version of report");
     let recv_dir = fixture.output_dir();
@@ -14,20 +14,12 @@ async fn e2e_filename_conflict_resolved() {
 
     let receiver_emitter = MockEventEmitter::new();
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed even with conflict");
 
@@ -52,6 +44,7 @@ async fn e2e_filename_conflict_resolved() {
 
 #[tokio::test]
 async fn e2e_original_file_preserved() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_file("keep_me.txt", b"incoming data");
     let recv_dir = fixture.output_dir();
@@ -59,20 +52,12 @@ async fn e2e_original_file_preserved() {
     std::fs::write(recv_dir.join("keep_me.txt"), b"original data, do not touch")
         .expect("should create original file");
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 

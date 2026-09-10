@@ -29,7 +29,7 @@ pub use nearby::{
     should_run_background_presence, unpaired_message_allowed, Discoverability,
 };
 pub use progress::duration_ms;
-pub use receive::{download_to_store, fetch_metadata, DownloadToStoreResult};
+pub use receive::{download_to_store, DownloadToStoreResult};
 pub use relay::{
     build_relay_mode, get_relay_status, relay_fallback_policy, resolve_relay_mode_with_fallback,
     verify_relays, RelayConfigArg, RelayFallbackPolicy, RelayStatusResponse, VerifyRelaysResponse,
@@ -42,7 +42,7 @@ pub use discovery::{
 pub use discovery::verify_discovery;
 pub use tls_config::{uses_custom_infra, with_system_ca_if_custom};
 pub use control::{read_message, write_message};
-pub use send::{run_share_on_endpoint, run_share_session, MetadataProtocol, ShareSessionOutcome, METADATA_ALPN};
+pub use send::{spawn_share_progress, ShareEvent};
 pub use types::*;
 
 #[cfg(target_arch = "wasm32")]
