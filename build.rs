@@ -21,8 +21,13 @@ fn main() {
 fn build_java_helpers() {
     use android_build::{Dexer, JavaBuild};
 
-    let src = "src/android/java/dev/tunnelmanager/slint/FilePicker.java";
-    println!("cargo:rerun-if-changed={src}");
+    let sources = [
+        "src/android/java/dev/tunnelmanager/slint/FilePicker.java",
+        "src/android/java/dev/tunnelmanager/slint/BluetoothLink.java",
+    ];
+    for src in sources {
+        println!("cargo:rerun-if-changed={src}");
+    }
     let release = std::env::var("PROFILE").as_deref() == Ok("release");
     let out_dir: PathBuf = std::env::var_os("OUT_DIR").unwrap().into();
     let classes = out_dir.join("java");
@@ -31,7 +36,7 @@ fn build_java_helpers() {
     let android_jar = android_build::android_jar(None).expect("no Android platform found");
 
     let javac = JavaBuild::new()
-        .file(src)
+        .files(sources)
         .class_path(&android_jar)
         .classes_out_dir(&classes)
         .java_source_version(8)

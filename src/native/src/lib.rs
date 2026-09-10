@@ -1,3 +1,4 @@
+pub mod bluetooth;
 pub mod device_identity;
 pub mod export;
 pub mod history;
@@ -29,6 +30,7 @@ pub use history::{
     is_reclaimable_partial, partial_store_hash, reclaim_partial, TransferDirection,
     TransferHistoryStore, TransferPathType, TransferPeer, TransferRecord, TransferStatus,
 };
+pub use bluetooth::{BluetoothHub, BluetoothLink, PeerTag};
 pub use nearby::{NearbyDevice, NearbyRegistry, ObserveOutcome};
 pub use node::NodeService;
 pub use shares::NodeShare;

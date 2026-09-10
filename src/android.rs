@@ -19,10 +19,10 @@
 mod imp {
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
     use std::time::Duration;
 
-    use jni::objects::{GlobalRef, JClass, JObject, JObjectArray, JString, JValue};
+    use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JObjectArray, JString, JValue};
     use jni::{JNIEnv, JavaVM, NativeMethod};
 
     use slint::android::android_activity::{AndroidApp, MainEvent, PollEvent};
@@ -630,12 +630,12 @@ mod imp {
     /// `android/java`, compiled by build.rs.
     const JAVA_HELPERS_DEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
-    /// `dev.tunnelmanager.slint.FilePicker`, loaded once from the embedded dex.
-    static FILE_PICKER: OnceLock<GlobalRef> = OnceLock::new();
+    /// Class loader over the embedded dex, created once.
+    static HELPERS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 
-    fn file_picker_class(env: &mut JNIEnv) -> Result<&'static GlobalRef, String> {
-        if let Some(class) = FILE_PICKER.get() {
-            return Ok(class);
+    fn helpers_loader(env: &mut JNIEnv) -> Result<&'static GlobalRef, String> {
+        if let Some(loader) = HELPERS_LOADER.get() {
+            return Ok(loader);
         }
         // SAFETY: the buffer is 'static and only ever read by the loader.
         let dex = unsafe {
@@ -659,12 +659,27 @@ mod imp {
                 &[JValue::Object(&dex), JValue::Object(&parent)],
             )
             .map_err(|e| e.to_string())?;
-        let name = env
-            .new_string("dev.tunnelmanager.slint.FilePicker")
-            .map_err(|e| e.to_string())?;
+        let loader = env.new_global_ref(loader).map_err(|e| e.to_string())?;
+        Ok(HELPERS_LOADER.get_or_init(|| loader))
+    }
+
+    /// Loads helper class `name` from the embedded dex into `cell`, binding
+    /// its native methods (a class from a runtime loader can't find JNI
+    /// symbols by name).
+    fn helper_class(
+        env: &mut JNIEnv,
+        cell: &'static OnceLock<GlobalRef>,
+        name: &str,
+        natives: &[NativeMethod],
+    ) -> Result<&'static GlobalRef, String> {
+        if let Some(class) = cell.get() {
+            return Ok(class);
+        }
+        let loader = helpers_loader(env)?;
+        let name = env.new_string(name).map_err(|e| e.to_string())?;
         let class: JClass = env
             .call_method(
-                &loader,
+                loader,
                 "loadClass",
                 "(Ljava/lang/String;)Ljava/lang/Class;",
                 &[JValue::Object(&name)],
@@ -673,18 +688,26 @@ mod imp {
             .l()
             .map_err(|e| e.to_string())?
             .into();
-        // A class from a runtime loader can't find JNI symbols by name.
-        env.register_native_methods(
-            &class,
+        env.register_native_methods(&class, natives)
+            .map_err(|e| e.to_string())?;
+        let class = env.new_global_ref(class).map_err(|e| e.to_string())?;
+        Ok(cell.get_or_init(|| class))
+    }
+
+    /// `dev.tunnelmanager.slint.FilePicker`, loaded once from the embedded dex.
+    static FILE_PICKER: OnceLock<GlobalRef> = OnceLock::new();
+
+    fn file_picker_class(env: &mut JNIEnv) -> Result<&'static GlobalRef, String> {
+        helper_class(
+            env,
+            &FILE_PICKER,
+            "dev.tunnelmanager.slint.FilePicker",
             &[NativeMethod {
                 name: "onPicked".into(),
                 sig: "([Ljava/lang/String;)V".into(),
                 fn_ptr: on_picked as *mut std::ffi::c_void,
             }],
         )
-        .map_err(|e| e.to_string())?;
-        let class = env.new_global_ref(class).map_err(|e| e.to_string())?;
-        Ok(FILE_PICKER.get_or_init(|| class))
     }
 
     /// Open the system file picker; picked files are staged into the outbox
@@ -758,6 +781,199 @@ mod imp {
             }
             deliver_outbox(Origin::Picker);
         });
+    }
+
+    // ----------------------------------------------------------- bluetooth
+
+    /// `dev.tunnelmanager.slint.BluetoothLink`, loaded once from the embedded dex.
+    static BLUETOOTH_LINK: OnceLock<GlobalRef> = OnceLock::new();
+
+    fn bluetooth_link_class(env: &mut JNIEnv) -> Result<&'static GlobalRef, String> {
+        helper_class(
+            env,
+            &BLUETOOTH_LINK,
+            "dev.tunnelmanager.slint.BluetoothLink",
+            &[
+                NativeMethod {
+                    name: "onPacket".into(),
+                    sig: "([B[B)V".into(),
+                    fn_ptr: bt_on_packet as *mut std::ffi::c_void,
+                },
+                NativeMethod {
+                    name: "onPeerSeen".into(),
+                    sig: "([B)V".into(),
+                    fn_ptr: bt_on_peer_seen as *mut std::ffi::c_void,
+                },
+                NativeMethod {
+                    name: "onAvailable".into(),
+                    sig: "(Z)V".into(),
+                    fn_ptr: bt_on_available as *mut std::ffi::c_void,
+                },
+            ],
+        )
+    }
+
+    /// The process's Bluetooth transport, or `None` when this device can't
+    /// carry it (before Android 10, or no Bluetooth LE). One per process:
+    /// the link behind it starts once.
+    pub fn bluetooth_hub() -> Option<engine::BluetoothHub> {
+        static HUB: OnceLock<Option<engine::BluetoothHub>> = OnceLock::new();
+        HUB.get_or_init(|| {
+            let supported = with_env(|env| {
+                let class = bluetooth_link_class(env)?;
+                env.call_static_method(
+                    class,
+                    "supported",
+                    "(Landroid/app/Activity;)Z",
+                    &[JValue::Object(&activity()?)],
+                )
+                .and_then(|v| v.z())
+                .map_err(|e| e.to_string())
+            });
+            match supported {
+                Ok(true) => Some(engine::BluetoothHub::new(Arc::new(AndroidBluetooth::new()))),
+                Ok(false) => {
+                    tracing::info!("no Bluetooth LE L2CAP on this device; transport off");
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Bluetooth check failed; transport off: {e}");
+                    None
+                }
+            }
+        })
+        .clone()
+    }
+
+    /// Where `BluetoothLink`'s callbacks deliver; set when the link starts.
+    static BT_HUB: OnceLock<engine::BluetoothHub> = OnceLock::new();
+
+    /// Packets waiting for the `bt-send` thread. Bounded: a full queue drops,
+    /// as a busy UDP socket would.
+    const BT_SEND_QUEUE: usize = 256;
+
+    /// [`engine::BluetoothLink`] over `BluetoothLink.java`. Sends go through
+    /// one thread permanently attached to the JVM, keeping JNI off iroh's
+    /// send path.
+    #[derive(Debug)]
+    struct AndroidBluetooth {
+        outgoing: std::sync::mpsc::SyncSender<(engine::PeerTag, Vec<u8>)>,
+    }
+
+    impl AndroidBluetooth {
+        fn new() -> Self {
+            let (outgoing, packets) = std::sync::mpsc::sync_channel(BT_SEND_QUEUE);
+            std::thread::Builder::new()
+                .name("bt-send".into())
+                .spawn(move || bt_send_loop(packets))
+                .expect("spawn bt-send");
+            Self { outgoing }
+        }
+    }
+
+    impl engine::BluetoothLink for AndroidBluetooth {
+        fn start(&self, local: engine::PeerTag, hub: engine::BluetoothHub) {
+            let _ = BT_HUB.set(hub);
+            app().run_on_java_main_thread(Box::new(move || {
+                let started = with_env(|env| {
+                    let class = bluetooth_link_class(env)?;
+                    let tag = env.byte_array_from_slice(&local).map_err(|e| e.to_string())?;
+                    env.call_static_method(
+                        class,
+                        "start",
+                        "(Landroid/app/Activity;[B)V",
+                        &[JValue::Object(&activity()?), JValue::Object(&tag)],
+                    )
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+                });
+                if let Err(e) = started {
+                    tracing::warn!("Bluetooth link failed to start: {e}");
+                }
+            }));
+        }
+
+        fn send(&self, peer: engine::PeerTag, packet: &[u8]) {
+            let _ = self.outgoing.try_send((peer, packet.to_vec()));
+        }
+    }
+
+    fn bt_send_loop(packets: std::sync::mpsc::Receiver<(engine::PeerTag, Vec<u8>)>) {
+        // SAFETY: as in `with_env`.
+        let vm = match unsafe { JavaVM::from_raw(app().vm_as_ptr().cast()) } {
+            Ok(vm) => vm,
+            Err(e) => return tracing::warn!("bt-send: no JavaVM: {e}"),
+        };
+        let mut env = match vm.attach_current_thread_permanently() {
+            Ok(env) => env,
+            Err(e) => return tracing::warn!("bt-send: cannot attach: {e}"),
+        };
+        let class = match bluetooth_link_class(&mut env) {
+            Ok(class) => class,
+            Err(e) => return tracing::warn!("bt-send: no BluetoothLink: {e}"),
+        };
+        for (tag, packet) in packets {
+            // A local frame per packet: this thread never returns to Java,
+            // so local references would otherwise pile up.
+            let sent = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
+                let tag = env.byte_array_from_slice(&tag)?;
+                let packet = env.byte_array_from_slice(&packet)?;
+                env.call_static_method(
+                    class,
+                    "send",
+                    "([B[B)V",
+                    &[JValue::Object(&tag), JValue::Object(&packet)],
+                )?;
+                Ok(())
+            });
+            if sent.is_err() && env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+            }
+        }
+    }
+
+    fn peer_tag_from(env: &mut JNIEnv, array: &JByteArray) -> Option<engine::PeerTag> {
+        env.convert_byte_array(array).ok()?.try_into().ok()
+    }
+
+    /// `BluetoothLink.onPacket`, on a link's reader thread.
+    extern "system" fn bt_on_packet<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        from: JByteArray<'local>,
+        packet: JByteArray<'local>,
+    ) {
+        let (Some(hub), Some(from)) = (BT_HUB.get(), peer_tag_from(&mut env, &from)) else {
+            return;
+        };
+        if let Ok(packet) = env.convert_byte_array(&packet) {
+            hub.deliver(from, packet);
+        }
+    }
+
+    /// `BluetoothLink.onPeerSeen`, on the scan callback thread.
+    extern "system" fn bt_on_peer_seen<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        tag: JByteArray<'local>,
+    ) {
+        if let (Some(hub), Some(tag)) = (BT_HUB.get(), peer_tag_from(&mut env, &tag)) {
+            hub.peer_seen(tag);
+        }
+    }
+
+    /// `BluetoothLink.onAvailable`, whenever the link comes up or goes down.
+    extern "system" fn bt_on_available<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        available: jni::sys::jboolean,
+    ) {
+        let available = available != 0;
+        tracing::info!(available, "Bluetooth transport");
+        if let Some(hub) = BT_HUB.get() {
+            hub.set_available(available);
+        }
     }
 
     fn collect_shared_files_with_env(
@@ -1127,6 +1343,11 @@ mod imp {
 
     /// Unused on desktop (Back is an Android key).
     pub fn move_to_background() {}
+
+    /// No Bluetooth transport on desktop yet.
+    pub fn bluetooth_hub() -> Option<engine::BluetoothHub> {
+        None
+    }
 }
 #[cfg(not(target_os = "android"))]
 pub use imp::*;
