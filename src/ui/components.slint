@@ -1,4 +1,11 @@
 import { State } from "globals.slint";
+import { ScrollView as StdScrollView } from "std-widgets.slint";
+
+// The fluent style's ScrollView only scrolls by wheel (drag-pan is off, as
+// on desktop), so a finger drag would never move it. Pages use this one.
+export component ScrollView inherits StdScrollView {
+    mouse-drag-pan-enabled: State.touch;
+}
 
 // App-wide palette and metrics. Centralized so everything stays consistent.
 export global Theme {
