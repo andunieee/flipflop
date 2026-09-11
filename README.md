@@ -1,7 +1,8 @@
 # TunnelManager — Slint GUI
 
 Native Rust GUI built with [Slint](https://slint.dev), replacing the Tauri + React
-frontend. It drives the same P2P engine crate (`src/engine`) directly — no Tauri,
+frontend. It drives the same P2P engine module (`src/engine.rs`, re-exporting
+`src/native` + `src/protocol`) directly — no Tauri,
 no webview, no JavaScript.
 
 ## Scope

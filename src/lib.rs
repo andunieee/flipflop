@@ -7,7 +7,10 @@
 pub mod android;
 pub mod app;
 pub mod emitter;
+pub mod engine;
 pub mod format;
+pub mod native;
+pub mod protocol;
 pub mod platform;
 pub mod recorder;
 pub mod settings;

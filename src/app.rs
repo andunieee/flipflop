@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use engine::{
+use crate::engine::{
     get_relay_status, is_reclaimable_partial, reclaim_partial, resolve_relay_mode_with_fallback,
     verify_discovery, verify_relays, AppHandle, NodeService, PairedDeviceInfo, TransferDirection,
     TransferHistoryStore, TransferRecord, TransferStatus,
@@ -152,7 +152,7 @@ fn request_row(id: &str, name: &str) -> PeerRow {
     }
 }
 
-fn nearby_row(n: &engine::NearbyDevice) -> PeerRow {
+fn nearby_row(n: &crate::engine::NearbyDevice) -> PeerRow {
     let id = n.endpoint_id.to_lowercase();
     let name = match &n.display_name {
         Some(name) if !name.trim().is_empty() => name.clone(),
@@ -939,7 +939,7 @@ fn register_history(ctx: &AppCtx) {
                 }
                 match ctx_bg.history.delete(id.as_ref()) {
                     Ok(Some(record)) => {
-                        let temp_dir = engine::storage::temp_dir();
+                        let temp_dir = crate::engine::storage::temp_dir();
                         let partial = record.resumable_store_path.as_deref().map(PathBuf::from);
                         if partial.is_some_and(|p| is_reclaimable_partial(&p, &temp_dir)) {
                             reclaim_partial(&record, &temp_dir);

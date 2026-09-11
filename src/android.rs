@@ -87,7 +87,7 @@ mod imp {
             tracing::warn!(dir = %dir.display(), "cannot create blob store root: {e}");
         }
         tracing::info!(dir = %dir.display(), "blob stores live here");
-        let _ = engine::storage::TEMP_DIR.set(dir);
+        let _ = crate::engine::storage::TEMP_DIR.set(dir);
     }
 
     /// Send the app to the background, as Back does at an app's top level.
@@ -816,8 +816,8 @@ mod imp {
     /// The process's Bluetooth transport, or `None` when this device can't
     /// carry it (before Android 10, or no Bluetooth LE). One per process:
     /// the link behind it starts once.
-    pub fn bluetooth_hub() -> Option<engine::BluetoothHub> {
-        static HUB: OnceLock<Option<engine::BluetoothHub>> = OnceLock::new();
+    pub fn bluetooth_hub() -> Option<crate::engine::BluetoothHub> {
+        static HUB: OnceLock<Option<crate::engine::BluetoothHub>> = OnceLock::new();
         HUB.get_or_init(|| {
             let supported = with_env(|env| {
                 let class = bluetooth_link_class(env)?;
@@ -831,7 +831,7 @@ mod imp {
                 .map_err(|e| e.to_string())
             });
             match supported {
-                Ok(true) => Some(engine::BluetoothHub::new(Arc::new(AndroidBluetooth::new()))),
+                Ok(true) => Some(crate::engine::BluetoothHub::new(Arc::new(AndroidBluetooth::new()))),
                 Ok(false) => {
                     tracing::info!("no Bluetooth LE L2CAP on this device; transport off");
                     None
@@ -846,18 +846,18 @@ mod imp {
     }
 
     /// Where `BluetoothLink`'s callbacks deliver; set when the link starts.
-    static BT_HUB: OnceLock<engine::BluetoothHub> = OnceLock::new();
+    static BT_HUB: OnceLock<crate::engine::BluetoothHub> = OnceLock::new();
 
     /// Packets waiting for the `bt-send` thread. Bounded: a full queue drops,
     /// as a busy UDP socket would.
     const BT_SEND_QUEUE: usize = 256;
 
-    /// [`engine::BluetoothLink`] over `BluetoothLink.java`. Sends go through
+    /// [`crate::engine::BluetoothLink`] over `BluetoothLink.java`. Sends go through
     /// one thread permanently attached to the JVM, keeping JNI off iroh's
     /// send path.
     #[derive(Debug)]
     struct AndroidBluetooth {
-        outgoing: std::sync::mpsc::SyncSender<(engine::PeerTag, Vec<u8>)>,
+        outgoing: std::sync::mpsc::SyncSender<(crate::engine::PeerTag, Vec<u8>)>,
     }
 
     impl AndroidBluetooth {
@@ -871,8 +871,8 @@ mod imp {
         }
     }
 
-    impl engine::BluetoothLink for AndroidBluetooth {
-        fn start(&self, local: engine::PeerTag, hub: engine::BluetoothHub) {
+    impl crate::engine::BluetoothLink for AndroidBluetooth {
+        fn start(&self, local: crate::engine::PeerTag, hub: crate::engine::BluetoothHub) {
             let _ = BT_HUB.set(hub);
             app().run_on_java_main_thread(Box::new(move || {
                 let started = with_env(|env| {
@@ -893,12 +893,12 @@ mod imp {
             }));
         }
 
-        fn send(&self, peer: engine::PeerTag, packet: &[u8]) {
+        fn send(&self, peer: crate::engine::PeerTag, packet: &[u8]) {
             let _ = self.outgoing.try_send((peer, packet.to_vec()));
         }
     }
 
-    fn bt_send_loop(packets: std::sync::mpsc::Receiver<(engine::PeerTag, Vec<u8>)>) {
+    fn bt_send_loop(packets: std::sync::mpsc::Receiver<(crate::engine::PeerTag, Vec<u8>)>) {
         // SAFETY: as in `with_env`.
         let vm = match unsafe { JavaVM::from_raw(app().vm_as_ptr().cast()) } {
             Ok(vm) => vm,
@@ -933,7 +933,7 @@ mod imp {
         }
     }
 
-    fn peer_tag_from(env: &mut JNIEnv, array: &JByteArray) -> Option<engine::PeerTag> {
+    fn peer_tag_from(env: &mut JNIEnv, array: &JByteArray) -> Option<crate::engine::PeerTag> {
         env.convert_byte_array(array).ok()?.try_into().ok()
     }
 
@@ -1345,7 +1345,7 @@ mod imp {
     pub fn move_to_background() {}
 
     /// No Bluetooth transport on desktop yet.
-    pub fn bluetooth_hub() -> Option<engine::BluetoothHub> {
+    pub fn bluetooth_hub() -> Option<crate::engine::BluetoothHub> {
         None
     }
 }

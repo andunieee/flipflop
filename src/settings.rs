@@ -53,11 +53,11 @@ impl Settings {
         std::fs::write(path, json)
     }
 
-    pub fn relay_mode(&self) -> engine::RelayModeOption {
+    pub fn relay_mode(&self) -> crate::engine::RelayModeOption {
         use std::str::FromStr;
         match self.relay_mode.as_str() {
-            "disabled" => engine::RelayModeOption::Disabled,
-            "custom" => engine::RelayModeOption::Custom {
+            "disabled" => crate::engine::RelayModeOption::Disabled,
+            "custom" => crate::engine::RelayModeOption::Custom {
                 urls: self
                     .relay_urls
                     .iter()
@@ -68,13 +68,13 @@ impl Settings {
                     .collect(),
                 auth_token: self.relay_token.clone().filter(|t| !t.is_empty()),
             },
-            _ => engine::RelayModeOption::Default,
+            _ => crate::engine::RelayModeOption::Default,
         }
     }
 
     /// Relay config in the engine's IPC shape, for verify/status/fallback calls.
-    pub fn relay_config_arg(&self) -> engine::RelayConfigArg {
-        engine::RelayConfigArg {
+    pub fn relay_config_arg(&self) -> crate::engine::RelayConfigArg {
+        crate::engine::RelayConfigArg {
             mode: self.relay_mode.clone(),
             urls: self.relay_urls.clone(),
             auth_token: self.relay_token.clone().filter(|t| !t.trim().is_empty()),
@@ -82,16 +82,16 @@ impl Settings {
         }
     }
 
-    pub fn relay_fallback(&self) -> engine::RelayFallbackPolicy {
+    pub fn relay_fallback(&self) -> crate::engine::RelayFallbackPolicy {
         match self.relay_fallback.as_str() {
-            "public" => engine::RelayFallbackPolicy::Public,
-            _ => engine::RelayFallbackPolicy::Strict,
+            "public" => crate::engine::RelayFallbackPolicy::Public,
+            _ => crate::engine::RelayFallbackPolicy::Strict,
         }
     }
 
     /// Discovery config in the engine's IPC shape, for verify/status calls.
-    pub fn discovery_config_arg(&self) -> engine::DiscoveryConfigArg {
-        engine::DiscoveryConfigArg {
+    pub fn discovery_config_arg(&self) -> crate::engine::DiscoveryConfigArg {
+        crate::engine::DiscoveryConfigArg {
             mode: self.discovery_mode.clone(),
             pkarr_relay_url: self
                 .discovery_pkarr_relay_url
@@ -105,16 +105,16 @@ impl Settings {
     }
 
     /// Resolved discovery mode; invalid persisted config falls back to default.
-    pub fn discovery_mode(&self) -> engine::DiscoveryModeOption {
-        engine::build_discovery_mode(Some(self.discovery_config_arg()))
-            .unwrap_or(engine::DiscoveryModeOption::Default)
+    pub fn discovery_mode(&self) -> crate::engine::DiscoveryModeOption {
+        crate::engine::build_discovery_mode(Some(self.discovery_config_arg()))
+            .unwrap_or(crate::engine::DiscoveryModeOption::Default)
     }
 
-    pub fn discoverability(&self) -> engine::Discoverability {
+    pub fn discoverability(&self) -> crate::engine::Discoverability {
         match self.discoverability.as_str() {
-            "paired-only" => engine::Discoverability::PairedOnly,
-            "off" => engine::Discoverability::Off,
-            _ => engine::Discoverability::Everyone,
+            "paired-only" => crate::engine::Discoverability::PairedOnly,
+            "off" => crate::engine::Discoverability::Off,
+            _ => crate::engine::Discoverability::Everyone,
         }
     }
 
@@ -186,7 +186,7 @@ mod tests {
         assert!(!loaded.history_enabled);
         assert!(matches!(
             loaded.discoverability(),
-            engine::Discoverability::Off
+            crate::engine::Discoverability::Off
         ));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn partial_files_fill_in_defaults() {
         let s: Settings = serde_json::from_str(r#"{"relay_mode":"disabled"}"#).unwrap();
-        assert!(matches!(s.relay_mode(), engine::RelayModeOption::Disabled));
+        assert!(matches!(s.relay_mode(), crate::engine::RelayModeOption::Disabled));
         assert_eq!(s.relay_fallback, "strict");
         assert!(s.history_enabled);
     }
@@ -212,7 +212,7 @@ mod tests {
             ..Settings::default()
         };
         match s.relay_mode() {
-            engine::RelayModeOption::Custom { urls, auth_token } => {
+            crate::engine::RelayModeOption::Custom { urls, auth_token } => {
                 assert_eq!(urls.len(), 1);
                 assert!(auth_token.is_none());
             }
