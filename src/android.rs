@@ -976,6 +976,53 @@ mod imp {
         }
     }
 
+    // ------------------------------------------------------------- network
+
+    /// `dev.tunnelmanager.slint.NetworkWatch`, loaded once from the embedded dex.
+    static NETWORK_WATCH: OnceLock<GlobalRef> = OnceLock::new();
+
+    /// Where `NetworkWatch.onNetworkChanged` delivers; set by `watch_network`.
+    static ON_NETWORK_CHANGED: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+    /// Calls `on_change` (on a binder thread) whenever a network comes, goes
+    /// or changes address, in bursts. iroh can't see these on Android, so
+    /// the node must be told. Once per process; later calls are ignored.
+    pub fn watch_network(on_change: impl Fn() + Send + Sync + 'static) {
+        if ON_NETWORK_CHANGED.set(Box::new(on_change)).is_err() {
+            return;
+        }
+        let started = with_env(|env| {
+            let class = helper_class(
+                env,
+                &NETWORK_WATCH,
+                "dev.tunnelmanager.slint.NetworkWatch",
+                &[NativeMethod {
+                    name: "onNetworkChanged".into(),
+                    sig: "()V".into(),
+                    fn_ptr: net_on_changed as *mut std::ffi::c_void,
+                }],
+            )?;
+            env.call_static_method(
+                class,
+                "start",
+                "(Landroid/content/Context;)V",
+                &[JValue::Object(&activity()?)],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        });
+        if let Err(e) = started {
+            tracing::warn!("cannot watch the network; changes go unnoticed: {e}");
+        }
+    }
+
+    /// `NetworkWatch.onNetworkChanged`, on a ConnectivityManager binder thread.
+    extern "system" fn net_on_changed<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
+        if let Some(on_change) = ON_NETWORK_CHANGED.get() {
+            on_change();
+        }
+    }
+
     fn collect_shared_files_with_env(
         env: &mut jni::JNIEnv,
         activity: &JObject,
@@ -1348,6 +1395,9 @@ mod imp {
     pub fn bluetooth_hub() -> Option<crate::engine::BluetoothHub> {
         None
     }
+
+    /// Unused on desktop: iroh watches the network itself there.
+    pub fn watch_network(_on_change: impl Fn() + Send + Sync + 'static) {}
 }
 #[cfg(not(target_os = "android"))]
 pub use imp::*;

@@ -826,6 +826,8 @@ pub struct NodeService {
     shares: Arc<ShareRegistry>,
     /// Bluetooth transport, when the device has one. Outlives rebuilds too.
     bluetooth: Option<BluetoothHub>,
+    /// Redials paired peers as they come into Bluetooth range.
+    bluetooth_arrivals: Mutex<Option<JoinHandle<()>>>,
     /// Serializes `reconfigure_network`, `set_discoverability` and `shutdown`.
     /// Held across each one's whole decide-rebuild-settle sequence so the
     /// decision can't go stale before its consequence runs.
@@ -944,6 +946,9 @@ impl NodeService {
         let runtime = Arc::new(Mutex::new(runtime));
         paired_connections.attach_runtime(runtime.clone());
         let connections_supervisor = paired_connections.start();
+        let bluetooth_arrivals = bluetooth.as_ref().map(|hub| {
+            spawn_bluetooth_arrivals(hub, paired_store.clone(), paired_connections.clone())
+        });
 
         let lan_discovery = if should_publish_mdns(access.read().await.discoverability) {
             let endpoint = {
@@ -988,7 +993,18 @@ impl NodeService {
             pending_nearby_invites,
             shares,
             bluetooth,
+            bluetooth_arrivals: Mutex::new(bluetooth_arrivals),
         })
+    }
+
+    /// Tells the endpoint the device's network changed (an interface came
+    /// or went), and redials paired peers that are offline. Android can't
+    /// see these changes from native code, so its shell calls this; without
+    /// it, a peer stays offline long after Wi-Fi or mobile data return.
+    pub async fn network_changed(&self) {
+        let endpoint = self.runtime.lock().await.endpoint.clone();
+        endpoint.network_change().await;
+        self.paired_connections.nudge_all().await;
     }
 
     pub async fn shutdown(&self) -> anyhow::Result<()> {
@@ -1001,6 +1017,9 @@ impl NodeService {
         if let Some(handle) = self.connections_supervisor.lock().await.take() {
             handle.abort();
 
+        }
+        if let Some(handle) = self.bluetooth_arrivals.lock().await.take() {
+            handle.abort();
         }
         self.paired_connections.shutdown().await;
         let runtime = self.runtime.lock().await;
@@ -2112,6 +2131,34 @@ fn spawn_lan_event_loop(
 /// Runs `probe_identity_via` in the background and feeds a successful reply
 /// back into the registry. Old build peers or a declined probe leave the
 /// device listed but unidentified, so the user can still send to it.
+/// Redials a paired device as soon as it comes into Bluetooth range, rather
+/// than when its backoff (up to a minute) runs out. Bluetooth names peers
+/// by a prefix of their id, so the dial itself still authenticates the
+/// whole id.
+fn spawn_bluetooth_arrivals(
+    hub: &BluetoothHub,
+    paired_store: Arc<PairedDeviceStore>,
+    paired_connections: Arc<PairedConnectionManager>,
+) -> JoinHandle<()> {
+    let mut arrivals = hub.arrivals();
+    tokio::spawn(async move {
+        while let Some(tags) = arrivals.next().await {
+            let Ok(devices) = paired_store.list() else {
+                continue;
+            };
+            for device in devices {
+                let Ok(id) = EndpointId::from_str(&device.endpoint_id) else {
+                    continue;
+                };
+                if tags.contains(&crate::native::bluetooth::peer_tag(&id)) {
+                    // No-op if a live session already exists.
+                    paired_connections.nudge_reconnect(&device.endpoint_id).await;
+                }
+            }
+        }
+    })
+}
+
 fn spawn_identity_probe(
     endpoint_id: String,
     runtime: Arc<Mutex<NodeRuntime>>,

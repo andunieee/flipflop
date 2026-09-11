@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -98,6 +99,8 @@ struct Inner {
     packets_tx: mpsc::Sender<(PeerTag, Vec<u8>)>,
     packets_rx: Mutex<mpsc::Receiver<(PeerTag, Vec<u8>)>>,
     seen: watch::Sender<HashMap<PeerTag, Instant>>,
+    /// Times the adapter went down, which forgets every sighting.
+    downs: AtomicU64,
 }
 
 impl fmt::Debug for BluetoothHub {
@@ -120,6 +123,7 @@ impl BluetoothHub {
                 packets_tx,
                 packets_rx: Mutex::new(packets_rx),
                 seen: watch::Sender::new(HashMap::new()),
+                downs: AtomicU64::new(0),
             }),
         }
     }
@@ -132,6 +136,7 @@ impl BluetoothHub {
         *self.inner.available.lock().expect("available") = available;
         self.publish_local_addr();
         if !available {
+            self.inner.downs.fetch_add(1, Ordering::SeqCst);
             self.inner.seen.send_modify(HashMap::clear);
         }
     }
@@ -166,6 +171,19 @@ impl BluetoothHub {
 
     pub(crate) fn address_lookup(&self) -> BluetoothLookup {
         BluetoothLookup { hub: self.clone() }
+    }
+
+    /// Peers coming into range, for waking dials that are sleeping out a
+    /// backoff: the address lookup only helps a dial that is in flight.
+    pub(crate) fn arrivals(&self) -> Arrivals {
+        let mut seen = self.inner.seen.subscribe();
+        let last = seen.borrow_and_update().clone();
+        Arrivals {
+            hub: self.clone(),
+            seen,
+            last,
+            downs: self.inner.downs.load(Ordering::SeqCst),
+        }
     }
 
     fn publish_local_addr(&self) {
@@ -316,6 +334,47 @@ impl AddressLookup for BluetoothLookup {
         Some(Box::pin(
             n0_future::stream::once_future(sighting).filter_map(|item| item),
         ))
+    }
+}
+
+/// See [`BluetoothHub::arrivals`].
+pub(crate) struct Arrivals {
+    hub: BluetoothHub,
+    seen: watch::Receiver<HashMap<PeerTag, Instant>>,
+    /// Each peer's sighting as of the last [`Arrivals::next`].
+    last: HashMap<PeerTag, Instant>,
+    /// The hub's adapter-down count as of `last`. Checked apart from the
+    /// sightings, since a watch can coalesce the clear with what follows.
+    downs: u64,
+}
+
+impl Arrivals {
+    /// Waits for peers that were out of range (never seen, or not for
+    /// [`SEEN_FOR`], or since the adapter went down) and now are seen.
+    /// `None` once the hub is gone.
+    pub(crate) async fn next(&mut self) -> Option<Vec<PeerTag>> {
+        loop {
+            self.seen.changed().await.ok()?;
+            let seen = self.seen.borrow_and_update().clone();
+            let downs = self.hub.inner.downs.load(Ordering::SeqCst);
+            if downs != self.downs {
+                self.downs = downs;
+                self.last.clear();
+            }
+            let arrived: Vec<PeerTag> = seen
+                .iter()
+                .filter(|(tag, at)| {
+                    self.last
+                        .get(*tag)
+                        .is_none_or(|prev| at.saturating_duration_since(*prev) >= SEEN_FOR)
+                })
+                .map(|(tag, _)| *tag)
+                .collect();
+            self.last = seen;
+            if !arrived.is_empty() {
+                return Some(arrived);
+            }
+        }
     }
 }
 
@@ -593,6 +652,34 @@ mod tests {
         assert!(local().is_empty());
         hub.set_available(true);
         assert_eq!(local(), vec![custom_addr(&peer_tag(&id))]);
+    }
+
+    #[tokio::test]
+    async fn arrivals_report_peers_coming_into_range_once() {
+        let air = Arc::new(FakeAir::default());
+        let hub = BluetoothHub::new(FakeLink::new(&air, false));
+        let mut arrivals = hub.arrivals();
+        // `next` is cancel-safe, so a timeout just means "nothing arrived".
+        async fn next(arrivals: &mut Arrivals) -> Option<Vec<PeerTag>> {
+            tokio::time::timeout(Duration::from_millis(200), arrivals.next())
+                .await
+                .ok()
+                .flatten()
+        }
+        let peer = [1; PEER_TAG_LEN];
+
+        hub.peer_seen(peer);
+        assert_eq!(next(&mut arrivals).await, Some(vec![peer]));
+
+        // Seen again while still in range: not an arrival.
+        hub.peer_seen(peer);
+        assert_eq!(next(&mut arrivals).await, None);
+
+        // The adapter went down and back up: everyone arrives anew.
+        hub.set_available(false);
+        hub.set_available(true);
+        hub.peer_seen(peer);
+        assert_eq!(next(&mut arrivals).await, Some(vec![peer]));
     }
 
     #[test]

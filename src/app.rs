@@ -548,7 +548,9 @@ fn start_node(ctx: &AppCtx) {
         .await
         {
             Ok(node) => {
-                *ctx_bg.node.lock().unwrap() = Some(Arc::new(node));
+                let node = Arc::new(node);
+                watch_network(&ctx_bg, &node);
+                *ctx_bg.node.lock().unwrap() = Some(node);
                 refresh_peers(&ctx_bg);
                 refresh_suggestions(&ctx_bg);
                 let weak = ctx_bg.weak.clone();
@@ -570,6 +572,30 @@ fn start_node(ctx: &AppCtx) {
             }
         }
     });
+}
+
+/// Passes the platform's network changes to `node` (only Android reports
+/// any: iroh can't see them there). They come in bursts, one per network
+/// and property, so a burst settles into one `network_changed`.
+fn watch_network(ctx: &AppCtx, node: &Arc<NodeService>) {
+    const SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+    let changed = Arc::new(tokio::sync::Notify::new());
+    let node = Arc::downgrade(node);
+    let waiter = changed.clone();
+    ctx.rt.spawn(async move {
+        loop {
+            waiter.notified().await;
+            tokio::time::sleep(SETTLE).await;
+            let Some(node) = node.upgrade() else {
+                return;
+            };
+            tracing::info!("network changed");
+            node.network_changed().await;
+        }
+    });
+    // `notify_one` keeps a permit while the loop is busy, so a change during
+    // a `network_changed` still gets its own pass.
+    crate::android::watch_network(move || changed.notify_one());
 }
 
 // -------------------------------------------------------- register_* fns

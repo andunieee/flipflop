@@ -24,6 +24,7 @@ fn build_java_helpers() {
     let sources = [
         "src/android/java/dev/tunnelmanager/slint/FilePicker.java",
         "src/android/java/dev/tunnelmanager/slint/BluetoothLink.java",
+        "src/android/java/dev/tunnelmanager/slint/NetworkWatch.java",
     ];
     for src in sources {
         println!("cargo:rerun-if-changed={src}");
