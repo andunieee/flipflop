@@ -2,5 +2,5 @@
 //! (lib.rs → android.rs) shares it.
 
 fn main() {
-    tunnelmanager_slint::app::run();
+    flipflop::app::run();
 }

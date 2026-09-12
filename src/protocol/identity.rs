@@ -115,6 +115,9 @@ pub fn detect_os() -> String {
 pub fn is_placeholder_display_name(name: &str) -> bool {
     let trimmed = name.trim();
     trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("flipflop")
+        || trimmed.eq_ignore_ascii_case("flipflop device")
+        // fallbacks from before the rename
         || trimmed.eq_ignore_ascii_case("tunnelmanager")
         || trimmed.eq_ignore_ascii_case("tunnelmanager device")
         || trimmed.eq_ignore_ascii_case("android phone")
@@ -134,7 +137,7 @@ pub fn default_display_name() -> String {
             if cfg!(target_os = "android") {
                 "Android Phone".to_string()
             } else {
-                "TunnelManager Device".to_string()
+                "flipflop Device".to_string()
             }
         });
     let trimmed = raw.trim_end_matches(".local").trim();
@@ -142,7 +145,7 @@ pub fn default_display_name() -> String {
         if cfg!(target_os = "android") {
             "Android Phone".to_string()
         } else {
-            "TunnelManager Device".to_string()
+            "flipflop Device".to_string()
         }
     } else {
         trimmed.to_string()
@@ -392,8 +395,9 @@ mod tests {
     fn placeholder_display_names() {
         assert!(is_placeholder_display_name(""));
         assert!(is_placeholder_display_name("  "));
+        assert!(is_placeholder_display_name("flipflop"));
         assert!(is_placeholder_display_name("tunnelmanager"));
-        assert!(is_placeholder_display_name("TunnelManager Device"));
+        assert!(is_placeholder_display_name("flipflop Device"));
         assert!(is_placeholder_display_name("Android Phone"));
         assert!(is_placeholder_display_name("Android Tablet"));
         assert!(!is_placeholder_display_name("Pixel 8"));

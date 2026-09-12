@@ -172,9 +172,17 @@ pub fn default_data_dir() -> PathBuf {
 
 #[cfg(not(target_os = "android"))]
 pub fn default_data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("tunnelmanager-slint")
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("flipflop");
+    // The app used to be called TunnelManager: carry its identity, pairings
+    // and history over on first launch.
+    let old = base.join("tunnelmanager-slint");
+    if !dir.exists() && old.is_dir() {
+        if let Err(e) = std::fs::rename(&old, &dir) {
+            tracing::warn!("failed to move {old:?} to {dir:?}: {e}");
+        }
+    }
+    dir
 }
 
 /// Log destination: logcat on Android (stdout goes nowhere there), stderr

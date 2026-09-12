@@ -1326,7 +1326,7 @@ pub fn run() {
         .build()
         .expect("tokio runtime");
 
-    let data_dir = std::env::var("TUNNELMANAGER_SLINT_DATA_DIR")
+    let data_dir = std::env::var("FLIPFLOP_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| platform::default_data_dir());
     let _ = std::fs::create_dir_all(&data_dir);
@@ -1361,7 +1361,7 @@ pub fn run() {
     };
 
     // Android "intent listener": content shared into the app ("Send to
-    // TunnelManager") is queued, and the peer list opens so the user can pick
+    // flipflop") is queued, and the peer list opens so the user can pick
     // who gets it. This fires for the launch intent and for every later
     // share, including ones made while the app is running.
     #[cfg(target_os = "android")]

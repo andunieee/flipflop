@@ -9,44 +9,44 @@ export component ScrollView inherits StdScrollView {
 
 // App-wide palette and metrics. Centralized so everything stays consistent.
 export global Theme {
-    // surfaces: dark blue-grey ramp
-    out property <color> window-bg: #111318;
-    out property <color> sidebar-bg: #15171e;
-    out property <color> card-bg: #1b1e27;
-    out property <color> card-bg-hover: #212532;
-    out property <color> inset-bg: #13151b;
-    out property <color> border: #262a36;
-    out property <color> border-strong: #343949;
+    // surfaces: white cards on a pale sky ramp
+    out property <color> window-bg: #f4faff;
+    out property <color> sidebar-bg: #e6f3fd;
+    out property <color> card-bg: #ffffff;
+    out property <color> card-bg-hover: #f0f7ff;
+    out property <color> inset-bg: #f2f8fd;
+    out property <color> border: #d6e7f5;
+    out property <color> border-strong: #b8d4ec;
 
-    // text
-    out property <color> text-strong: #f2f3f7;
-    out property <color> text: #c7cad5;
-    out property <color> text-muted: #8a8fa0;
-    out property <color> text-faint: #5e6374;
+    // text: deep navy, softening to sky-grey
+    out property <color> text-strong: #10304a;
+    out property <color> text: #2c4a63;
+    out property <color> text-muted: #66819a;
+    out property <color> text-faint: #95acc0;
 
-    // accents
-    out property <color> accent: #6d7cff;
-    out property <color> accent-hover: #808dff;
-    out property <color> accent-press: #5866e0;
-    out property <color> accent-soft: #252a48;
-    out property <color> accent-text: #aeb6ff;
+    // accents: sunny sky blue
+    out property <color> accent: #1e8cf0;
+    out property <color> accent-hover: #3a9ff5;
+    out property <color> accent-press: #1774cc;
+    out property <color> accent-soft: #dbeeff;
+    out property <color> accent-text: #1366b8;
 
-    // status
-    out property <color> online: #4ade80;
-    out property <color> offline: #3d4150;
-    out property <color> warn: #f0b429;
-    out property <color> warn-soft: #362d14;
-    out property <color> info: #38bdf8;
-    out property <color> info-soft: #142e42;
-    out property <color> error: #f87171;
-    out property <color> error-soft: #3a1c21;
-    out property <color> success: #4ade80;
-    out property <color> success-soft: #15342a;
+    // status (dark enough to read as text on white)
+    out property <color> online: #22b55a;
+    out property <color> offline: #c2d2df;
+    out property <color> warn: #e08a00;
+    out property <color> warn-soft: #fff1d6;
+    out property <color> info: #0b8fd6;
+    out property <color> info-soft: #dcf2fd;
+    out property <color> error: #e5484d;
+    out property <color> error-soft: #ffe5e5;
+    out property <color> success: #179c4a;
+    out property <color> success-soft: #dcf6e5;
 
     // interactive neutrals
-    out property <color> chip-bg: #232734;
-    out property <color> chip-bg-hover: #2b3040;
-    out property <color> chip-bg-press: #333849;
+    out property <color> chip-bg: #e8f2fb;
+    out property <color> chip-bg-hover: #d9e9f7;
+    out property <color> chip-bg-press: #c9dff2;
 
     // radii
     out property <length> radius-sm: 6px;
@@ -112,19 +112,14 @@ export component Icon inherits Image {
     image-fit: contain;
 }
 
-// App mark: the logo on the brand gradient.
-export component LogoMark inherits Rectangle {
+// App mark: a white flip-flop with a red strap on a sky-blue tile. Full
+// colour, so it is an image rather than a tinted `Icon`.
+export component LogoMark inherits Image {
     in property <length> size: 32px;
     width: root.size;
     height: root.size;
-    border-radius: root.size * 0.28;
-    background: @linear-gradient(135deg, #8b7cff 0%, #3f7fff 100%);
-
-    Icon {
-        source: Icons.logo;
-        size: root.size * 0.62;
-        tint: white;
-    }
+    source: Icons.logo;
+    image-fit: contain;
 }
 
 export component PageTitle inherits VerticalLayout {
@@ -427,9 +422,9 @@ export component GhostButton inherits ButtonBase {
 // Destructive action (Forget, delete rows).
 export component DangerButton inherits ButtonBase {
     in property <bool> solid: false;
-    fill: root.solid ? #c2414f : transparent;
-    fill-hover: root.solid ? #d24b5a : Theme.error-soft;
-    fill-press: root.solid ? #a93744 : #4a2229;
+    fill: root.solid ? #e5484d : transparent;
+    fill-hover: root.solid ? #ef5b60 : Theme.error-soft;
+    fill-press: root.solid ? #c93b40 : #ffd0d1;
     ink: root.solid ? white : Theme.error;
 }
 
@@ -445,7 +440,7 @@ export component IconButton inherits Rectangle {
     height: Theme.control-height;
     border-radius: self.height / 2;
     background: !root.enabled ? transparent
-        : touch.pressed ? (root.danger ? #4a2229 : Theme.chip-bg-hover)
+        : touch.pressed ? (root.danger ? #ffd0d1 : Theme.chip-bg-hover)
         : touch.has-hover ? (root.danger ? Theme.error-soft : Theme.chip-bg)
         : transparent;
     opacity: root.enabled ? 1.0 : 0.45;

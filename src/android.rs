@@ -224,7 +224,7 @@ mod imp {
             return Err("WifiManager unavailable".to_string());
         }
         let tag = env
-            .new_string("tunnelmanager-mdns")
+            .new_string("flipflop-mdns")
             .map_err(|e| e.to_string())?;
         let lock = env
             .call_method(
@@ -411,7 +411,7 @@ mod imp {
         let clip_class = env
             .find_class("android/content/ClipData")
             .map_err(|e| e.to_string())?;
-        let label = env.new_string("TunnelManager").map_err(|e| e.to_string())?;
+        let label = env.new_string("flipflop").map_err(|e| e.to_string())?;
         let jtext = env.new_string(text).map_err(|e| e.to_string())?;
         // ClipData.newPlainText(label, text)
         let clip = env
@@ -519,7 +519,7 @@ mod imp {
     /// outbox, then hands every staged file to the [`on_shared`] handler.
     ///
     /// A lazy SAF picker needs activity-result plumbing that android-activity
-    /// does not forward, so "Send to TunnelManager" from the system share
+    /// does not forward, so "Send to flipflop" from the system share
     /// sheet is the supported flow on Android. Files are copied into the
     /// outbox and the share uses those ordinary paths.
     ///
@@ -694,14 +694,14 @@ mod imp {
         Ok(cell.get_or_init(|| class))
     }
 
-    /// `dev.tunnelmanager.slint.FilePicker`, loaded once from the embedded dex.
+    /// `com.flipflop.app.FilePicker`, loaded once from the embedded dex.
     static FILE_PICKER: OnceLock<GlobalRef> = OnceLock::new();
 
     fn file_picker_class(env: &mut JNIEnv) -> Result<&'static GlobalRef, String> {
         helper_class(
             env,
             &FILE_PICKER,
-            "dev.tunnelmanager.slint.FilePicker",
+            "com.flipflop.app.FilePicker",
             &[NativeMethod {
                 name: "onPicked".into(),
                 sig: "([Ljava/lang/String;)V".into(),
@@ -785,14 +785,14 @@ mod imp {
 
     // ----------------------------------------------------------- bluetooth
 
-    /// `dev.tunnelmanager.slint.BluetoothLink`, loaded once from the embedded dex.
+    /// `com.flipflop.app.BluetoothLink`, loaded once from the embedded dex.
     static BLUETOOTH_LINK: OnceLock<GlobalRef> = OnceLock::new();
 
     fn bluetooth_link_class(env: &mut JNIEnv) -> Result<&'static GlobalRef, String> {
         helper_class(
             env,
             &BLUETOOTH_LINK,
-            "dev.tunnelmanager.slint.BluetoothLink",
+            "com.flipflop.app.BluetoothLink",
             &[
                 NativeMethod {
                     name: "onPacket".into(),
@@ -978,7 +978,7 @@ mod imp {
 
     // ------------------------------------------------------------- network
 
-    /// `dev.tunnelmanager.slint.NetworkWatch`, loaded once from the embedded dex.
+    /// `com.flipflop.app.NetworkWatch`, loaded once from the embedded dex.
     static NETWORK_WATCH: OnceLock<GlobalRef> = OnceLock::new();
 
     /// Where `NetworkWatch.onNetworkChanged` delivers; set by `watch_network`.
@@ -995,7 +995,7 @@ mod imp {
             let class = helper_class(
                 env,
                 &NETWORK_WATCH,
-                "dev.tunnelmanager.slint.NetworkWatch",
+                "com.flipflop.app.NetworkWatch",
                 &[NativeMethod {
                     name: "onNetworkChanged".into(),
                     sig: "()V".into(),
@@ -1405,7 +1405,7 @@ pub use imp::*;
 // ---------------------------------------------------------------- logcat
 
 /// `tracing` writer that sends each formatted event to logcat (tag
-/// `tunnelmanager`) with the event's level as the log priority.
+/// `flipflop`) with the event's level as the log priority.
 #[cfg(target_os = "android")]
 pub struct Logcat;
 
@@ -1451,7 +1451,7 @@ impl Drop for LogcatLine {
         };
         // SAFETY: both pointers are valid NUL-terminated strings for the call.
         unsafe {
-            __android_log_write(self.priority, c"tunnelmanager".as_ptr(), text.as_ptr());
+            __android_log_write(self.priority, c"flipflop".as_ptr(), text.as_ptr());
         }
     }
 }

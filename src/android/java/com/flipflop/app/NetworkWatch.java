@@ -1,4 +1,4 @@
-package dev.tunnelmanager.slint;
+package com.flipflop.app;
 
 import android.content.Context;
 import android.net.ConnectivityManager;
@@ -18,7 +18,7 @@ import android.util.Log;
  * class is loaded from the embedded dex, see src/android.rs).
  */
 public final class NetworkWatch {
-    private static final String TAG = "tunnelmanager-net";
+    private static final String TAG = "flipflop-net";
 
     static native void onNetworkChanged();
 

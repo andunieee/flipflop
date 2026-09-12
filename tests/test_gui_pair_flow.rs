@@ -6,8 +6,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::{wait_until, MockEventEmitter, TestFixture};
-use tunnelmanager_slint::engine::identity_store::identity_key_path;
-use tunnelmanager_slint::engine::{Discoverability, DiscoveryModeOption, NodeService, PairingStatus};
+use flipflop::engine::identity_store::identity_key_path;
+use flipflop::engine::{Discoverability, DiscoveryModeOption, NodeService, PairingStatus};
 use iroh::endpoint::RelayMode;
 use iroh::SecretKey;
 
@@ -93,7 +93,7 @@ async fn e2e_paired_transfer_flow() {
         .share_with_peer(
             &joiner_id,
             vec![source],
-            Some(sender_emitter.clone() as std::sync::Arc<dyn tunnelmanager_slint::engine::EventEmitter>),
+            Some(sender_emitter.clone() as std::sync::Arc<dyn flipflop::engine::EventEmitter>),
         )
         .await
         .expect("share_with_peer");

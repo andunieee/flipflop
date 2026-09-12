@@ -1980,6 +1980,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "flipflop"
+version = "0.0.2"
+dependencies = [
+ "android-build",
+ "anyhow",
+ "arboard",
+ "bytes",
+ "chrono",
+ "data-encoding",
+ "derive_more",
+ "dirs",
+ "duct",
+ "getrandom 0.3.4",
+ "iroh",
+ "iroh-base",
+ "iroh-blobs",
+ "iroh-mdns-address-lookup",
+ "irpc",
+ "jni 0.21.1",
+ "keyring",
+ "n0-future",
+ "n0-watcher",
+ "nix 0.29.0",
+ "noq-udp",
+ "num_cpus",
+ "open",
+ "rand 0.10.2",
+ "rfd",
+ "rustls",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "walkdir",
+ "web-time",
+]
+
+[[package]]
 name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7773,50 +7817,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
-]
-
-[[package]]
-name = "tunnelmanager-slint"
-version = "0.0.2"
-dependencies = [
- "android-build",
- "anyhow",
- "arboard",
- "bytes",
- "chrono",
- "data-encoding",
- "derive_more",
- "dirs",
- "duct",
- "getrandom 0.3.4",
- "iroh",
- "iroh-base",
- "iroh-blobs",
- "iroh-mdns-address-lookup",
- "irpc",
- "jni 0.21.1",
- "keyring",
- "n0-future",
- "n0-watcher",
- "nix 0.29.0",
- "noq-udp",
- "num_cpus",
- "open",
- "rand 0.10.2",
- "rfd",
- "rustls",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "walkdir",
- "web-time",
 ]
 
 [[package]]

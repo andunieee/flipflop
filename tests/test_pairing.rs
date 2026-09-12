@@ -1,9 +1,9 @@
-use tunnelmanager_slint::engine::{
+use flipflop::engine::{
     sign_challenge, verify_challenge, ControlMessage, PairedDevice, PairingStatus, PairingTicket,
 };
 use iroh::SecretKey;
-use tunnelmanager_slint::protocol::identity::{normalize_display_name, DeviceMetaFile};
-use tunnelmanager_slint::protocol::{read_message, write_message};
+use flipflop::protocol::identity::{normalize_display_name, DeviceMetaFile};
+use flipflop::protocol::{read_message, write_message};
 
 fn generated_endpoint_id() -> String {
     data_encoding::HEXLOWER.encode(SecretKey::generate().public().as_bytes())
@@ -341,14 +341,14 @@ fn device_meta_file_migrate_fills_missing_fields() {
 
 #[test]
 fn pairing_host_is_persistent_when_ttl_is_none() {
-    use tunnelmanager_slint::engine::pairing_host_is_persistent;
+    use flipflop::engine::pairing_host_is_persistent;
     assert!(pairing_host_is_persistent(None));
     assert!(!pairing_host_is_persistent(Some(120)));
 }
 
 #[test]
 fn relay_and_addresses_preserves_relay_and_ip_addrs() {
-    use tunnelmanager_slint::engine::{apply_options, AddrInfoOptions};
+    use flipflop::engine::{apply_options, AddrInfoOptions};
     use iroh::{EndpointAddr, EndpointId, RelayUrl, TransportAddr};
     use std::str::FromStr;
 

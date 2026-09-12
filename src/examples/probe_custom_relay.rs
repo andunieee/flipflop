@@ -12,14 +12,14 @@ async fn main() {
 
     println!("probing custom relay: {url}");
 
-    let arg = tunnelmanager_slint::protocol::RelayConfigArg {
+    let arg = flipflop::protocol::RelayConfigArg {
         mode: "custom".to_string(),
         urls: vec![url],
         auth_token: None,
         fallback: Some("strict".to_string()),
     };
 
-    match tunnelmanager_slint::protocol::verify_relays(arg).await {
+    match flipflop::protocol::verify_relays(arg).await {
         Ok(res) => {
             println!(
                 "OK connected via {:?} latency_ms={}",

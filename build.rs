@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 fn main() {
-    // The app is dark-only: pin the std-widgets to the dark Fluent variant so
-    // LineEdit/ComboBox/CheckBox don't follow a light system theme.
-    let config = slint_build::CompilerConfiguration::new().with_style("fluent-dark".into());
+    // The app is light-only: pin the std-widgets to the light Fluent variant so
+    // LineEdit/ComboBox/CheckBox don't follow a dark system theme.
+    let config = slint_build::CompilerConfiguration::new().with_style("fluent-light".into());
     slint_build::compile_with_config("src/ui/app-window.slint", config)
         .expect("failed to compile Slint UI");
 
@@ -22,9 +22,9 @@ fn build_java_helpers() {
     use android_build::{Dexer, JavaBuild};
 
     let sources = [
-        "src/android/java/dev/tunnelmanager/slint/FilePicker.java",
-        "src/android/java/dev/tunnelmanager/slint/BluetoothLink.java",
-        "src/android/java/dev/tunnelmanager/slint/NetworkWatch.java",
+        "src/android/java/com/flipflop/app/FilePicker.java",
+        "src/android/java/com/flipflop/app/BluetoothLink.java",
+        "src/android/java/com/flipflop/app/NetworkWatch.java",
     ];
     for src in sources {
         println!("cargo:rerun-if-changed={src}");

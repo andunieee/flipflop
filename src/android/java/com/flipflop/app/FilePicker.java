@@ -1,4 +1,4 @@
-package dev.tunnelmanager.slint;
+package com.flipflop.app;
 
 import android.app.Activity;
 import android.app.Fragment;
@@ -16,7 +16,7 @@ import android.content.Intent;
  * APK's own code.
  */
 public class FilePicker extends Fragment {
-    private static final String TAG = "tunnelmanager-file-picker";
+    private static final String TAG = "flipflop-file-picker";
     private static final int REQUEST = 0x7a11;
 
     static native void onPicked(String[] uris);
