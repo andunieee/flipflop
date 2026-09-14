@@ -1,0 +1,74 @@
+import { Button, LineEdit, ComboBox, CheckBox } from "std-widgets.slint";
+import { State, Logic } from "globals.slint";
+import { PageTitle, HintText, StatusText, FieldLabel } from "components.slint";
+
+export component SettingsPage inherits Rectangle {
+    background: transparent;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 14px;
+        alignment: start;
+
+        PageTitle { label: "Settings"; }
+
+        // Downloads
+        FieldLabel { label: "Downloads folder"; }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            Button { text: "Browse…"; clicked => { Logic.pick-downloads-dir(); } }
+            Text {
+                text: State.downloads-dir;
+                color: #9a9aac;
+                font-size: 11px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+        }
+
+        // Relay
+        FieldLabel { label: "Relay"; }
+        ComboBox {
+            min-width: 220px;
+            model: ["Default (n0)", "Disabled (direct only)", "Custom"];
+            current-index <=> State.relay-mode;
+        }
+        if State.relay-mode == 2: VerticalLayout {
+            spacing: 6px;
+            FieldLabel { label: "Relay URLs (one per line):"; }
+            LineEdit {
+                text <=> State.relay-urls;
+                placeholder-text: "https://relay1.example.com";
+            }
+            FieldLabel { label: "Relay auth token (optional):"; }
+            LineEdit {
+                text <=> State.relay-token;
+                placeholder-text: "token";
+            }
+        }
+
+        // History
+        CheckBox {
+            text: "Record transfer history";
+            checked <=> State.history-enabled;
+            toggled => { }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            Button { text: "Save settings"; primary: true; clicked => { Logic.save-settings(); } }
+        }
+
+        if State.settings-status != "": StatusText {
+            text: State.settings-status;
+            error: false;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HintText { label: "Relay changes apply to the next share or download. Pairing and Nearby discovery are not part of this alternative GUI yet."; }
+    }
+}

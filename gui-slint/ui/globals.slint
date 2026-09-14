@@ -1,0 +1,99 @@
+// Shared state + logic hooks between the Rust backend and every page.
+
+export struct SendItem {
+    name: string,
+    size: string,
+    is-dir: bool,
+}
+
+export struct HistoryRow {
+    id: string,
+    title: string,
+    direction: string,
+    status: string,
+    detail: string,
+    date: string,
+    size: string,
+    speed: string,
+    can-open: bool,
+    failed: bool,
+}
+
+export global State {
+    // navigation
+    in-out property <string> page: "send";
+
+    // send page
+    in-out property <[SendItem]> send-items;
+    in-out property <bool> share-starting: false;
+    in-out property <bool> share-active: false;
+    in-out property <string> ticket: "";
+    in-out property <int> send-peers: 0;
+    in-out property <float> send-progress: 0.0; // 0..1
+    in-out property <string> send-progress-label: "";
+    in-out property <string> send-status: "";
+    in-out property <string> send-error: "";
+
+    // receive page
+    in-out property <string> ticket-input: "";
+    in-out property <bool> fetching-info: false;
+    in-out property <bool> info-loaded: false;
+    in-out property <string> receive-name: "";
+    in-out property <string> receive-size: "";
+    in-out property <int> receive-count: 0;
+    in-out property <string> save-dir: "";
+    in-out property <bool> receive-active: false;
+    in-out property <float> receive-progress: 0.0; // 0..1
+    in-out property <string> receive-progress-label: "";
+    in-out property <string> receive-speed: "";
+    in-out property <string> receive-status: "";
+    in-out property <bool> receive-done: false;
+    in-out property <string> received-dir: "";
+    in-out property <string> receive-error: "";
+
+    // history page
+    in-out property <[HistoryRow]> history;
+    in-out property <bool> history-loading: false;
+
+    // settings page
+    in-out property <string> downloads-dir: "";
+    in-out property <int> relay-mode: 0; // 0 default, 1 disabled, 2 custom
+    in-out property <string> relay-urls: "";
+    in-out property <string> relay-token: "";
+    in-out property <bool> history-enabled: true;
+    in-out property <string> settings-status: "";
+
+    // bottom status line
+    in-out property <string> toast: "";
+    in-out property <bool> toast-error: false;
+}
+
+export global Logic {
+    // send
+    callback pick-files();
+    callback pick-folder();
+    callback remove-item(int);
+    callback start-share();
+    callback stop-share();
+    callback copy-ticket();
+
+    // receive
+    callback fetch-info();
+    callback pick-save-dir();
+    callback start-download();
+    callback cancel-download();
+    callback open-received();
+
+    // history
+    callback refresh-history();
+    callback delete-row(string);
+    callback open-row(string);
+    callback clear-history();
+
+    // settings
+    callback pick-downloads-dir();
+    callback save-settings();
+
+    // navigation
+    callback page-changed(string);
+}

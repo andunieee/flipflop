@@ -1,0 +1,60 @@
+import { Button, ScrollView } from "std-widgets.slint";
+import { State, Logic, SendItem, HistoryRow } from "globals.slint";
+
+export component PageTitle inherits Text {
+    in property <string> label;
+    font-size: 22px;
+    font-weight: 700;
+    color: white;
+    text: root.label;
+}
+
+export component ProgressBar inherits Rectangle {
+    in property <float> value; // 0..1
+    in property <string> label;
+
+    border-radius: 4px;
+    background: #2a2a35;
+    min-height: 16px;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        height: parent.height;
+        width: parent.width * clamp(root.value, 0.0, 1.0);
+        border-radius: 4px;
+        background: #4a5fd0;
+    }
+
+    if root.label != "": Text {
+        text: root.label;
+        color: white;
+        font-size: 10px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+export component HintText inherits Text {
+    in property <string> label;
+    color: #9a9aac;
+    font-size: 12px;
+    text: root.label;
+    wrap: word-wrap;
+}
+
+export component StatusText inherits Text {
+    in property <string> label;
+    in property <bool> error;
+    color: root.error ? #ff8a98 : #8fd08f;
+    font-size: 12px;
+    text: root.label;
+    wrap: word-wrap;
+}
+
+export component FieldLabel inherits Text {
+    in property <string> label;
+    color: #c8c8d8;
+    font-size: 12px;
+    text: root.label;
+}
