@@ -12,6 +12,22 @@ export component SettingsPage inherits Rectangle {
 
         PageTitle { label: "Settings"; }
 
+        // Our device name
+        FieldLabel { label: "This device's name:"; }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            LineEdit {
+                text <=> State.my-name;
+                min-width: 260px;
+            }
+            Button {
+                text: "Set name";
+                clicked => { Logic.rename-self-name(); }
+            }
+        }
+        HintText { label: "Peers will see this name when they discover or pair with you."; }
+
         // Downloads
         FieldLabel { label: "Downloads folder"; }
         HorizontalLayout {
@@ -49,6 +65,14 @@ export component SettingsPage inherits Rectangle {
             }
         }
 
+        // Discoverability
+        FieldLabel { label: "Local discovery"; }
+        ComboBox {
+            min-width: 220px;
+            model: ["Discoverable by everyone", "Paired devices only", "Off"];
+            current-index <=> State.discoverability;
+        }
+
         // History
         CheckBox {
             text: "Record transfer history";
@@ -68,7 +92,5 @@ export component SettingsPage inherits Rectangle {
         }
 
         Rectangle { vertical-stretch: 1; }
-
-        HintText { label: "Relay changes apply to the next share or download. Pairing and Nearby discovery are not part of this alternative GUI yet."; }
     }
 }

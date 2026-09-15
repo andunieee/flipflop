@@ -2,8 +2,8 @@
 //! A slim re-implementation of the Tauri shell's `HistoryRecordingEmitter`.
 
 use engine::{
-    unix_now_ms, TransferDirection, TransferHistoryStore, TransferPathType, TransferRecord,
-    TransferStatus,
+    unix_now_ms, TransferDirection, TransferHistoryStore, TransferPathType, TransferPeer,
+    TransferRecord, TransferStatus,
 };
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +14,7 @@ pub struct Ctx {
     pub item_count: u32,
     pub path_type: Option<TransferPathType>,
     pub save_path: Option<String>,
+    pub peer: Option<TransferPeer>,
 }
 
 #[derive(Default)]
@@ -155,6 +156,7 @@ impl Recorder {
         record.item_count = ctx.item_count;
         record.path_type = ctx.path_type;
         record.save_path = ctx.save_path.clone();
+        record.peer = ctx.peer.clone();
 
         match self.store.open(record) {
             Ok(id) => row.id = Some(id),

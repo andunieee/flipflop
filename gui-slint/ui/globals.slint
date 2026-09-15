@@ -6,6 +6,18 @@ export struct SendItem {
     is-dir: bool,
 }
 
+export struct PeerRow {
+    endpoint-id: string,
+    name: string,
+    detail: string,
+    online: bool,
+    // true: the peer asked to pair with us (Accept/Decline buttons)
+    is-request: bool,
+    // true: discovered nearby, can be invited to pair ("Pair" button)
+    is-suggestion: bool,
+    trusted: bool,
+}
+
 export struct HistoryRow {
     id: string,
     title: string,
@@ -20,46 +32,56 @@ export struct HistoryRow {
 }
 
 export global State {
-    // navigation
-    in-out property <string> page: "send";
+    // navigation: "peer" | "add-peer" | "settings"
+    in-out property <string> page: "peer";
 
-    // send page
-    in-out property <[SendItem]> send-items;
+    // sidebar
+    in-out property <string> my-name: "";
+    in-out property <bool> node-ready: false;
+    in-out property <[PeerRow]> peers;
+    in-out property <string> presence-label: "";
+
+    // add-peer page
+    in-out property <[PeerRow]> suggestions;
+    in-out property <string> nearby-note: "";
+    in-out property <string> add-ticket-input: "";
+    in-out property <bool> pairing-busy: false;
+    in-out property <string> pairing-status: "";
+    in-out property <bool> pairing-error: false;
+    in-out property <string> my-ticket: "";
+
+    // peer page
+    in-out property <string> selected-id: "";
+    in-out property <string> selected-name: "";
+    in-out property <string> selected-detail: "";
+    in-out property <bool> selected-online: false;
+    in-out property <bool> rename-mode: false;
+    in-out property <string> rename-input: "";
+    in-out property <[HistoryRow]> history;
+
+    // active send (for the selected peer)
+    in-out property <string> send-active-id: "";
     in-out property <bool> share-starting: false;
-    in-out property <bool> share-active: false;
-    in-out property <string> ticket: "";
     in-out property <int> send-peers: 0;
-    in-out property <float> send-progress: 0.0; // 0..1
-    in-out property <string> send-progress-label: "";
     in-out property <string> send-status: "";
     in-out property <string> send-error: "";
+    in-out property <float> send-progress: 0.0;
+    in-out property <string> send-progress-label: "";
 
-    // receive page
-    in-out property <string> ticket-input: "";
-    in-out property <bool> fetching-info: false;
-    in-out property <bool> info-loaded: false;
-    in-out property <string> receive-name: "";
-    in-out property <string> receive-size: "";
-    in-out property <int> receive-count: 0;
-    in-out property <string> save-dir: "";
-    in-out property <bool> receive-active: false;
-    in-out property <float> receive-progress: 0.0; // 0..1
+    // active receives (any peer); panels show only the selected match
+    in-out property <string> receive-active-id: "";
+    in-out property <float> receive-progress: 0.0;
     in-out property <string> receive-progress-label: "";
     in-out property <string> receive-speed: "";
     in-out property <string> receive-status: "";
-    in-out property <bool> receive-done: false;
-    in-out property <string> received-dir: "";
     in-out property <string> receive-error: "";
-
-    // history page
-    in-out property <[HistoryRow]> history;
-    in-out property <bool> history-loading: false;
 
     // settings page
     in-out property <string> downloads-dir: "";
     in-out property <int> relay-mode: 0; // 0 default, 1 disabled, 2 custom
     in-out property <string> relay-urls: "";
     in-out property <string> relay-token: "";
+    in-out property <int> discoverability: 0; // 0 everyone, 1 paired-only, 2 off
     in-out property <bool> history-enabled: true;
     in-out property <string> settings-status: "";
 
@@ -69,31 +91,33 @@ export global State {
 }
 
 export global Logic {
-    // send
-    callback pick-files();
-    callback pick-folder();
-    callback remove-item(int);
-    callback start-share();
+    // navigation
+    callback page-changed(string);
+
+    // peers
+    callback refresh-peers();
+    callback select-peer(string);
+    callback rename-peer();
+    callback rename-peer-confirm();
+    callback rename-peer-cancel();
+    callback remove-peer();
+    callback send-to-peer();
     callback stop-share();
-    callback copy-ticket();
+    callback cancel-receive();
 
-    // receive
-    callback fetch-info();
-    callback pick-save-dir();
-    callback start-download();
-    callback cancel-download();
-    callback open-received();
-
-    // history
+    // per-peer history
     callback refresh-history();
     callback delete-row(string);
     callback open-row(string);
-    callback clear-history();
+
+    // add peer
+    callback pair-with-pasted();
+    callback accept-suggestion(string);
+    callback decline-suggestion(string);
+    callback copy-my-ticket();
 
     // settings
     callback pick-downloads-dir();
     callback save-settings();
-
-    // navigation
-    callback page-changed(string);
+    callback rename-self-name();
 }

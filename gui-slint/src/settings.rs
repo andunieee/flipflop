@@ -10,6 +10,8 @@ pub struct Settings {
     pub relay_urls: Vec<String>,
     pub relay_token: Option<String>,
     pub history_enabled: bool,
+    /// "everyone" | "paired-only" | "off"
+    pub discoverability: String,
 }
 
 impl Default for Settings {
@@ -20,6 +22,7 @@ impl Default for Settings {
             relay_urls: Vec::new(),
             relay_token: None,
             history_enabled: true,
+            discoverability: "everyone".to_string(),
         }
     }
 }
@@ -56,6 +59,14 @@ impl Settings {
                 auth_token: self.relay_token.clone().filter(|t| !t.is_empty()),
             },
             _ => engine::RelayModeOption::Default,
+        }
+    }
+
+    pub fn discoverability(&self) -> engine::Discoverability {
+        match self.discoverability.as_str() {
+            "paired-only" => engine::Discoverability::PairedOnly,
+            "off" => engine::Discoverability::Off,
+            _ => engine::Discoverability::Everyone,
         }
     }
 
