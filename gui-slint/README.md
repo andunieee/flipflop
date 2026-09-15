@@ -1,4 +1,4 @@
-# DashBeam — Slint GUI (alternative)
+# TunnelManager — Slint GUI
 
 Native Rust GUI built with [Slint](https://slint.dev), replacing the Tauri + React
 frontend. It drives the same P2P engine crate (`engine/`) directly — no Tauri,
@@ -8,20 +8,25 @@ no webview, no JavaScript.
 
 Implemented:
 
-- **Send** — pick files/folders, create a share ticket, copy it, live progress
-  per peer, stop sharing.
-- **Receive** — paste a ticket, fetch sender metadata (name/size/item count),
-  pick save folder, download with progress + speed, cancel (partial store kept
-  for resume), open destination.
-- **History** — same `transfer-history.json` as the Tauri app: list, open,
-  delete, clear; rows are recorded from the engine events (send and receive).
-- **Settings** — downloads folder, relay mode (default / disabled / custom URLs
-  + auth token), history toggle; persisted to `settings.json`.
+- **Peers** — sidebar lists known peers from the paired-device store with
+  presence dots; rename/forget a peer; rename your own device in Settings
+  (set via `set_device_display_name`); per-peer pages show history and a
+  "Send files…" button.
+- **Add peer** — paste the peer's iroh address/ticket (`join_pairing`), or add
+  one of the suggested peers: LAN mDNS neighbours and inbound pair requests
+  (`request_nearby_pair` / `accept_nearby_invite`, decline supported).
+- **Send** — pick files/folders, share them, deliver directly to the peer with
+  `invite_paired_device`; live progress, stop sharing.
+- **Receive** — automatic: paired peers' file invites are accepted and
+  downloaded into `downloads/<peer-name>` without prompts; progress + cancel;
+  conflict renaming recorded.
+- **Settings** — downloads folder, own device name, relay mode (default /
+  disabled / custom URLs + auth token), local discovery (everyone / paired
+  only / off), history toggle; persisted to `settings.json`.
 
-Not implemented (v1): device pairing, Nearby discovery, tray, autostart,
-updater. Engine-level transfer behavior (iroh, BLAKE3 verification, resume,
-conflict renaming, relay fallback of history partial stores) is identical to
-the Tauri app because it is the same code path.
+Not implemented (v1): tray, autostart, updater. Engine-level transfer behavior
+(iroh, BLAKE3 verification, resume, relay fallback, history partial stores) is
+identical to the Tauri app because it is the same code path.
 
 ## Build & run
 
@@ -30,10 +35,10 @@ cd gui-slint
 cargo run --release
 ```
 
-Data dir: `$XDG_DATA_HOME/dashbeam-slint` (override with
-`DASHBEAM_SLINT_DATA_DIR`). `transfer-history.json` is shared with the Tauri
-app only if you point both at the same directory; by default this GUI keeps
-its own.
+Data dir: `$XDG_DATA_HOME/tunnelmanager-slint` (override with
+`TUNNELMANAGER_SLINT_DATA_DIR`). Own per-peer history entries (rows carrying
+peer info) are not shared with the Tauri app's ticket-era history file; by
+default this GUI keeps its own history.
 
 ## Toolchain note
 
