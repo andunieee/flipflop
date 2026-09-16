@@ -1,7 +1,7 @@
 import { Palette } from "std-widgets.slint";
 import { State, Logic, PeerRow } from "globals.slint";
 import { Theme, Dot, Avatar, Overline, Icon, Icons, LogoMark, ScrollView } from "components.slint";
-import { PeerPage } from "peer-page.slint";
+import { PeerPage, AppPickerSheet } from "peer-page.slint";
 import { PeersListPage } from "peers-list-page.slint";
 import { AddPeerPage } from "add-peer-page.slint";
 import { SettingsPage } from "settings-page.slint";
@@ -241,7 +241,9 @@ export component AppWindow inherits Window {
             if event.text != Key.Back {
                 return reject;
             }
-            if State.rename-mode {
+            if State.app-picker-open {
+                State.app-picker-open = false;
+            } else if State.rename-mode {
                 Logic.rename-peer-cancel();
             } else if root.compact && State.page == "peer" && root.peer-screen {
                 State.peer-open = false;
@@ -424,6 +426,14 @@ export component AppWindow inherits Window {
                 TabButton { label: "Settings"; key: "settings"; icon: Icons.settings; }
             }
         }
+    }
+
+    // Inside the Back handler, so Back closes it even from the search field.
+    if State.app-picker-open: AppPickerSheet {
+        width: 100%;
+        height: 100%;
+        inset-top: root.inset-top;
+        inset-bottom: root.inset-bottom;
     }
     }
 

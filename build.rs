@@ -43,6 +43,7 @@ fn build_java_helpers() {
         "src/android/java/com/flipflop/app/NetworkWatch.java",
         "src/android/java/com/flipflop/app/Storage.java",
         "src/android/java/com/flipflop/app/QrCamera.java",
+        "src/android/java/com/flipflop/app/AppList.java",
     ];
     for src in sources {
         println!("cargo:rerun-if-changed={src}");

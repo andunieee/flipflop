@@ -4,9 +4,11 @@ import android.app.Activity;
 import android.app.Fragment;
 import android.content.ClipData;
 import android.content.Intent;
+import android.os.Build;
+import android.provider.MediaStore;
 
 /**
- * Runs the system file picker for the native app.
+ * Runs the system file picker (or the photo picker) for the native app.
  *
  * NativeActivity drops onActivityResult, so the picker is started from this
  * headless fragment instead, which gets the result and hands the picked
@@ -18,21 +20,46 @@ import android.content.Intent;
 public class FilePicker extends Fragment {
     private static final String TAG = "flipflop-file-picker";
     private static final int REQUEST = 0x7a11;
+    private static final int MAX_IMAGES = 100;
 
     static native void onPicked(String[] uris);
 
-    /** Must be called on the UI thread. */
+    /** Any documents. Must be called on the UI thread. */
     public static void pick(Activity activity) {
-        FilePicker picker = new FilePicker();
-        activity.getFragmentManager().beginTransaction().add(picker, TAG).commitNow();
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        start(activity, intent);
+    }
+
+    /**
+     * Pictures from the gallery: the system photo picker on Android 13+,
+     * otherwise whatever gallery app handles image content. Must be called
+     * on the UI thread.
+     */
+    public static void pickImages(Activity activity) {
+        Intent intent;
+        if (Build.VERSION.SDK_INT >= 33) {
+            intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            intent.setType("image/*");
+            intent.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MAX_IMAGES);
+        } else {
+            intent = new Intent(Intent.ACTION_GET_CONTENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("image/*");
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        start(activity, intent);
+    }
+
+    private static void start(Activity activity, Intent intent) {
+        FilePicker picker = new FilePicker();
+        activity.getFragmentManager().beginTransaction().add(picker, TAG).commitNow();
         try {
             picker.startActivityForResult(intent, REQUEST);
         } catch (RuntimeException e) {
-            // No document picker on this device.
+            // No picker for this intent on this device.
             picker.done(new String[0]);
         }
     }

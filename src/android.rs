@@ -925,15 +925,25 @@ mod imp {
     /// Open the system file picker; picked files are staged into the outbox
     /// and reported to the [`on_shared`] handler (as [`Origin::Picker`]).
     pub fn pick_files() {
+        open_picker("pick");
+    }
+
+    /// Like [`pick_files`], for pictures from the gallery (photo picker).
+    pub fn pick_images() {
+        open_picker("pickImages");
+    }
+
+    /// Calls `FilePicker.<method>(activity)` on the Java main thread.
+    fn open_picker(method: &'static str) {
         let Some(app) = ANDROID_APP.get() else {
             return;
         };
-        app.run_on_java_main_thread(Box::new(|| {
+        app.run_on_java_main_thread(Box::new(move || {
             let opened = with_env(|env| {
                 let class = file_picker_class(env)?;
                 env.call_static_method(
                     class,
-                    "pick",
+                    method,
                     "(Landroid/app/Activity;)V",
                     &[JValue::Object(&activity()?)],
                 )
@@ -993,6 +1003,146 @@ mod imp {
             }
             deliver_outbox(Origin::Picker);
         });
+    }
+
+    // ------------------------------------------------------ installed apps
+
+    /// An installed app whose APK can be sent (see `AppList.java`).
+    #[derive(Clone)]
+    pub struct InstalledApp {
+        pub label: String,
+        pub package: String,
+        pub apk: PathBuf,
+        pub version: String,
+        /// Also has split APKs, which the base APK does not include.
+        pub split: bool,
+        /// Square RGBA icon, [`APP_ICON_SIZE`] pixels wide.
+        pub icon: Option<Vec<u8>>,
+    }
+
+    /// Edge length of [`InstalledApp::icon`] in pixels.
+    pub const APP_ICON_SIZE: u32 = 96;
+
+    static APP_LIST: OnceLock<GlobalRef> = OnceLock::new();
+
+    /// Launchable, user-installed apps, sorted by label. Blocks (icons are
+    /// rendered here), so call it off the UI thread.
+    pub fn installed_apps() -> Result<Vec<InstalledApp>, String> {
+        with_env(|env| {
+            let class = helper_class(env, &APP_LIST, "com.flipflop.app.AppList", &[])?;
+            let rows = env
+                .call_static_method(
+                    class,
+                    "list",
+                    "(Landroid/content/Context;)[Ljava/lang/String;",
+                    &[JValue::Object(&activity()?)],
+                )
+                .map_err(|e| e.to_string())?
+                .l()
+                .map_err(|e| e.to_string())?;
+            let rows = JObjectArray::from(rows);
+            let len = env.get_array_length(&rows).map_err(|e| e.to_string())?;
+            let mut fields = Vec::with_capacity(len as usize);
+            for i in 0..len {
+                let item = env
+                    .get_object_array_element(&rows, i)
+                    .map_err(|e| e.to_string())?;
+                let text: String = env
+                    .get_string(&JString::from(item))
+                    .map_err(|e| e.to_string())?
+                    .into();
+                fields.push(text);
+            }
+            let mut apps = Vec::new();
+            for row in fields.chunks_exact(5) {
+                let icon = app_icon(env, class, &row[1]).unwrap_or_else(|e| {
+                    tracing::debug!(package = %row[1], "no app icon: {e}");
+                    None
+                });
+                apps.push(InstalledApp {
+                    label: row[0].clone(),
+                    package: row[1].clone(),
+                    apk: PathBuf::from(&row[2]),
+                    version: row[3].clone(),
+                    split: row[4] == "1",
+                    icon,
+                });
+            }
+            apps.sort_by_key(|a| a.label.to_lowercase());
+            Ok(apps)
+        })
+    }
+
+    /// `AppList.icon` as RGBA bytes (Java hands out ARGB ints).
+    fn app_icon(
+        env: &mut JNIEnv,
+        class: &GlobalRef,
+        package: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        // Local refs pile up across a long app list otherwise.
+        let framed = env.with_local_frame(8, |env| -> jni::errors::Result<_> {
+            Ok(app_icon_in_frame(env, class, package))
+        });
+        framed.map_err(|e| e.to_string())?
+    }
+
+    fn app_icon_in_frame(
+        env: &mut JNIEnv,
+        class: &GlobalRef,
+        package: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let package = env.new_string(package).map_err(|e| e.to_string())?;
+        let pixels = env
+            .call_static_method(
+                class,
+                "icon",
+                "(Landroid/content/Context;Ljava/lang/String;I)[I",
+                &[
+                    JValue::Object(&activity()?),
+                    JValue::Object(&package),
+                    JValue::Int(APP_ICON_SIZE as i32),
+                ],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if pixels.is_null() {
+            return Ok(None);
+        }
+        let pixels = jni::objects::JIntArray::from(pixels);
+        let mut argb = vec![0i32; (APP_ICON_SIZE * APP_ICON_SIZE) as usize];
+        env.get_int_array_region(&pixels, 0, &mut argb)
+            .map_err(|e| e.to_string())?;
+        let rgba = argb
+            .iter()
+            .flat_map(|&p| {
+                let [a, r, g, b] = (p as u32).to_be_bytes();
+                [r, g, b, a]
+            })
+            .collect();
+        Ok(Some(rgba))
+    }
+
+    /// Copy `app`'s APK into the outbox as `<label>_<version>.apk` and report
+    /// it like picked files. Blocks on the copy; call it off the UI thread.
+    pub fn stage_app(app: &InstalledApp) {
+        let name = if app.version.is_empty() {
+            format!("{}.apk", app.label)
+        } else {
+            format!("{} {}.apk", app.label, app.version)
+        };
+        let dest = unique_outbox_path(&name);
+        let copied = dest
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::copy(&app.apk, &dest));
+        if let Err(e) = copied {
+            tracing::warn!(package = %app.package, "copying the APK failed: {e}");
+            let _ = std::fs::remove_file(&dest);
+            show_toast(&format!("Could not read {}'s APK", app.label), true);
+            return;
+        }
+        deliver_outbox(Origin::Picker);
     }
 
     // ----------------------------------------------------------- bluetooth

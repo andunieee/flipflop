@@ -16,8 +16,10 @@ Implemented:
 - **Add peer**, paste the peer's iroh address/ticket (`join_pairing`), or add
   one of the suggested peers: LAN mDNS neighbours and inbound pair requests
   (`request_nearby_pair` / `accept_nearby_invite`, decline supported).
-- **Send**, pick files/folders, share them, deliver directly to the peer with
-  `invite_paired_device`; live progress and speed, stop sharing. The share
+- **Send**, one card per peer: type or paste text, attach pictures, an
+  installed app (Android) or files/folders, then Send; shared and delivered
+  directly to the peer with `invite_paired_device`; live progress and speed,
+  stop sharing. Desktop has only text, Paste and Files (sent right away). The share
   closes by itself once the peer has everything.
 - **Receive**, automatic: paired peers' file invites are accepted and
   downloaded into `<downloads folder>/flipflop/<peer-name>` without
@@ -61,12 +63,14 @@ Platform integration (see `src/android.rs`):
 
 - **Clipboard / toasts** go through JNI (`ClipboardManager`, `Toast`) on the
   Java main thread.
-- **Sending**: pick files through the system share sheet, "Share →
-  flipflop" from any app stages the content (files, or shared text/links
-  as a `.txt`) into an app-private outbox; the app opens the peer picker, a
-  toast shows the count, and "Send" on a peer sends the staged content. A
-  native SAF picker is not possible because `android-activity` does not
-  forward `onActivityResult`.
+- **Sending**: the peer's send card stages attachments into an
+  app-private outbox and lists them above the text box; "Send" sends the
+  text and the staged files. Files come from the SAF picker, pictures from
+  the photo picker (`FilePicker.java`, a headless fragment, since
+  `NativeActivity` drops `onActivityResult`), and "App" copies an installed
+  app's base APK (`AppList.java`; split APKs are not bundled). "Share →
+  flipflop" from any app stages its content (files, or shared text/links as
+  a `.txt`) the same way and opens the peer picker.
 - **Shares while running**: the share sheet starts a second activity instance
   in the sharing app's task, and android-activity runs `android_main` again
   for it in the same process. That instance does not start Slint; it stages

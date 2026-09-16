@@ -55,6 +55,15 @@ export struct HistoryRow {
     preview: string,
 }
 
+// An installed app offered by "Send app" (Android).
+export struct AppRow {
+    package: string,
+    name: string,
+    // version, and a split-APK warning
+    detail: string,
+    icon: image,
+}
+
 // A file shared into the app (Android share sheet), queued until sent.
 export struct OutboxRow {
     path: string,
@@ -118,8 +127,13 @@ export global State {
     in-out property <[TransferRow]> transfers;
     // the selected peer's subset of `transfers` (kept in sync by Rust)
     in-out property <[TransferRow]> visible-transfers;
-    // "Send text" box on the peer page
+    // Text box of the peer page's send card
     in-out property <string> paste-input: "";
+    // "Send app" chooser (Android): open, still loading, filtered rows
+    in-out property <bool> app-picker-open: false;
+    in-out property <bool> apps-loading: false;
+    in-out property <string> app-filter: "";
+    in-out property <[AppRow]> apps;
 
     // settings page
     // device-name editor (kept apart from my-name so refreshes don't clobber typing)
@@ -157,13 +171,15 @@ export global Logic {
     callback rename-peer-confirm();
     callback rename-peer-cancel();
     callback remove-peer();
+    // Desktop: pick files (or a folder) and send them to the selected peer.
     callback send-to-peer();
     callback stop-share(string);
     callback cancel-receive(string);
     callback dismiss-transfer(string);
 
+    // send card: the typed text and the queued files (Android)
+    callback send-composed();
     // pasted text
-    callback send-text();
     callback paste-clipboard();
     callback copy-text(string);
     callback open-link(string);
@@ -171,8 +187,14 @@ export global Logic {
     // share-sheet queue (Android)
     callback outbox-remove(string);
     callback outbox-clear();
-    // Android: add files to the queue with the system file picker.
+    // Android: add files / gallery pictures to the queue with the system
+    // pickers.
     callback pick-files();
+    callback pick-images();
+    // Android "Send app": open the chooser, filter it, queue the chosen APK.
+    callback pick-app();
+    callback app-filter-changed(string);
+    callback app-chosen(string);
 
     // per-peer history
     callback refresh-history();

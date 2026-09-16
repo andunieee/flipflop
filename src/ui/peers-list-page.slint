@@ -84,7 +84,7 @@ export component PeersListPage inherits Rectangle {
                 subtitle: State.peers.length == 0 ? "" : State.presence-label;
             }
 
-            if State.outbox-count > 0: OutboxCard { can-send: false; }
+            if State.outbox-count > 0: OutboxCard { }
 
             if State.peers.length == 0: EmptyPeersCard { }
             for peer in State.peers: PeerListItem { peer: peer; }
