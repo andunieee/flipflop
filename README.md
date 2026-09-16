@@ -18,6 +18,10 @@ apart.
 Get the latest Linux, macOS and Windows builds and the Android APK from the
 [releases page](https://github.com/andunieee/flipflop/releases/latest).
 
+On Windows, use the `-setup.exe` installer. The builds aren't code-signed
+yet, so Windows may show a "Windows protected your PC" warning: click
+**More info → Run anyway**.
+
 ## Build
 
 ```sh
