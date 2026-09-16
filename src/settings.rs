@@ -18,6 +18,8 @@ pub struct Settings {
     pub history_enabled: bool,
     /// "everyone" | "paired-only" | "off"
     pub discoverability: String,
+    /// "system" | "light" | "dark"
+    pub theme: String,
 }
 
 impl Default for Settings {
@@ -33,6 +35,7 @@ impl Default for Settings {
             discovery_dns_origin: None,
             history_enabled: true,
             discoverability: "everyone".to_string(),
+            theme: "system".to_string(),
         }
     }
 }

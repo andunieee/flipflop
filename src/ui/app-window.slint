@@ -1,3 +1,4 @@
+import { Palette } from "std-widgets.slint";
 import { State, Logic, PeerRow } from "globals.slint";
 import { Theme, Dot, Avatar, Overline, Icon, Icons, LogoMark, ScrollView } from "components.slint";
 import { PeerPage } from "peer-page.slint";
@@ -220,6 +221,16 @@ export component AppWindow inherits Window {
     // Compact: a peer's own screen is showing (it still exists).
     property <bool> peer-screen: State.peer-open && State.selected-name != "";
 
+    // Appearance setting -> std-widgets palette, which `Theme` follows.
+    property <int> theme: State.theme;
+    function apply-theme() {
+        Palette.color-scheme = root.theme == 1 ? ColorScheme.light
+            : root.theme == 2 ? ColorScheme.dark
+            : ColorScheme.unknown;
+    }
+    init => { root.apply-theme(); }
+    changed theme => { root.apply-theme(); }
+
     // Android Back: peer screen → peer list → Peers tab → background.
     // Unhandled, Android would finish the activity (and the process).
     back-handler := FocusScope {
@@ -426,8 +437,8 @@ export component AppWindow inherits Window {
         border-radius: Theme.radius;
         background: Theme.card-bg;
         border-width: 1px;
-        border-color: State.toast-error ? #f7b8ba : Theme.border-strong;
-        drop-shadow-color: #1e5a8a40;
+        border-color: State.toast-error ? Theme.error-border : Theme.border-strong;
+        drop-shadow-color: Theme.shadow;
         drop-shadow-blur: 16px;
         drop-shadow-offset-y: 4px;
 

@@ -102,6 +102,17 @@ export component SettingsPage inherits Rectangle {
                 }
 
                 SettingsCard {
+                    title: "Appearance";
+                    icon: Icons.settings;
+
+                    ComboBox {
+                        model: ["System", "Light", "Dark"];
+                        current-index <=> State.theme;
+                        selected => { Logic.save-settings(); }
+                    }
+                }
+
+                SettingsCard {
                     title: "Received files";
                     icon: Icons.folder;
 
