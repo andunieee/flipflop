@@ -247,6 +247,28 @@ pub(crate) fn refresh_peers(ctx: &AppCtx) {
     });
 }
 
+/// Accept pairing joins while the Add peer page (and so our address/QR) is
+/// showing, and refuse them otherwise. A network rebuild closes the window,
+/// so this is re-run once the network is ready again.
+pub(crate) fn sync_pairing_window(ctx: &AppCtx) {
+    let Some(node) = ctx.node() else {
+        return;
+    };
+    let Some(ui) = ctx.weak.upgrade() else {
+        return;
+    };
+    let open = ui.global::<State>().get_page() == "add-peer";
+    ctx.rt.spawn(async move {
+        if open {
+            if let Err(e) = node.start_pairing_host(None).await {
+                tracing::debug!("open pairing window: {e:#}");
+            }
+        } else {
+            node.stop_pairing_host().await;
+        }
+    });
+}
+
 fn refresh_suggestions(ctx: &AppCtx) {
     let Some(node) = ctx.node() else {
         return;
@@ -421,6 +443,7 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
                 toast(&ui, "Network ready", false);
             }
             transfers::retry_waiting(ctx, None);
+            sync_pairing_window(ctx);
         }
         "device-node-network-warming" => {
             if let Some(ui) = ctx.weak.upgrade() {
@@ -461,6 +484,7 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
                     state.set_peer_open(true);
                 }
             }
+            sync_pairing_window(ctx);
             refresh_peers(ctx);
             refresh_suggestions(ctx);
             refresh_history(ctx);
@@ -1388,6 +1412,7 @@ fn register_settings(ctx: &AppCtx) {
                     crate::qr::stop_scan(&ui);
                 }
             }
+            sync_pairing_window(&ctx);
             if page == "peer" {
                 refresh_peers(&ctx);
                 refresh_suggestions(&ctx);
@@ -1482,6 +1507,7 @@ pub fn run() {
             let state = ui.global::<State>();
             state.set_page("peer".into());
             state.set_peer_open(false);
+            sync_pairing_window(&ctx_shared);
             toast(
                 &ui,
                 &format!("{what} ready. Pick a peer to send to"),
