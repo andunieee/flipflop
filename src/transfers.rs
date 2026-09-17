@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::engine::{
@@ -40,6 +40,41 @@ pub struct Transfers {
     /// Share-sheet files a send has taken from the queue; they leave the
     /// queue for good once that send completes, or return if it does not.
     claimed: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Sends not yet delivered to an unreachable peer, by row key; saved to
+    /// `queue_path` so they survive restarts.
+    queued: Arc<Mutex<HashMap<String, QueuedSend>>>,
+    /// Shared sends whose invite is waiting for the peer, by row key.
+    waiting: Arc<Mutex<HashMap<String, PendingInvite>>>,
+    /// Queued sends restored at startup whose share isn't set up yet.
+    restored: Arc<Mutex<HashSet<String>>>,
+    queue_path: Arc<OnceLock<PathBuf>>,
+}
+
+/// A send waiting for its peer, as saved to disk.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct QueuedSend {
+    peer_id: String,
+    peer_name: String,
+    /// What is shared; empty for a pasted text.
+    #[serde(default)]
+    paths: Vec<PathBuf>,
+    /// Share-sheet (outbox) files among `paths`.
+    #[serde(default)]
+    staged: Vec<PathBuf>,
+    /// A pasted text, written to a fresh paste file when the send restarts.
+    #[serde(default)]
+    text: Option<String>,
+}
+
+/// The invite of an open share that could not reach its peer yet.
+struct PendingInvite {
+    peer_id: String,
+    peer_name: String,
+    ticket: String,
+    item_count: u32,
+    byte_count: u64,
+    /// A delivery attempt is in flight.
+    attempting: bool,
 }
 
 #[derive(Default)]
@@ -150,7 +185,8 @@ pub(crate) fn sync_peer_activity(ui: &AppWindow) {
     let active: Vec<(SharedString, bool)> = state
         .get_transfers()
         .iter()
-        .filter(|t| t.active)
+        // Queued sends don't block new ones.
+        .filter(|t| t.active && !t.waiting)
         .map(|t| (t.peer_id, t.sending))
         .collect();
     let busy = |id: &SharedString, sending: bool| {
@@ -442,9 +478,6 @@ fn start_send(
     cleanup: Option<PathBuf>,
 ) {
     let key = ctx.transfers.new_key("send");
-    // Removed on any early return; the open share owns it after that.
-    let mut cleanup = RemoveDirOnDrop(cleanup);
-    tracing::info!(%peer_id, %key, paths = paths.len(), "send: starting flow");
     let first_name = paths.first().map(|p| path_name(p)).unwrap_or_default();
     insert_row(
         ui,
@@ -458,8 +491,26 @@ fn start_send(
             ..Default::default()
         },
     );
-
     claim(ctx, &staged);
+    spawn_send(ctx, node, key, peer_id, peer_name, paths, staged, cleanup);
+}
+
+/// The share-and-invite part of a send whose row exists and whose `staged`
+/// files are claimed. An unreachable peer leaves the send waiting (see
+/// [`retry_waiting`]).
+fn spawn_send(
+    ctx: &AppCtx,
+    node: Arc<NodeService>,
+    key: String,
+    peer_id: String,
+    peer_name: String,
+    paths: Vec<PathBuf>,
+    staged: Vec<PathBuf>,
+    cleanup: Option<PathBuf>,
+) {
+    // Removed on any early return; the open share owns it after that.
+    let mut cleanup = RemoveDirOnDrop(cleanup);
+    tracing::info!(%peer_id, %key, paths = paths.len(), "send: starting flow");
     let mut claim_guard = ClaimGuard {
         ctx: ctx.clone(),
         paths: staged.clone(),
@@ -476,7 +527,10 @@ fn start_send(
         .await
         {
                 Ok(v) => v,
-                Err(e) => return fail(&weak, &key, format!("Could not read the files: {e}")),
+                Err(e) => {
+                    unqueue(&ctx, &key);
+                    return fail(&weak, &key, format!("Could not read the files: {e}"));
+                }
             };
         let (byte_count, item_count) = (metadata.size, metadata.item_count);
         post_update(&weak, &key, move |row| {
@@ -497,7 +551,7 @@ fn start_send(
                     display_name: Some(peer_name.clone()),
                     device_type: None,
                 }),
-                text: pasted,
+                text: pasted.clone(),
                 ..Ctx::default()
             },
             history_enabled,
@@ -511,11 +565,24 @@ fn start_send(
         };
         let app_handle: AppHandle = Some(Arc::new(emitter));
 
+        // Kept for the saved queue in case the peer can't be reached.
+        let queued = QueuedSend {
+            peer_id: peer_id.clone(),
+            peer_name: peer_name.clone(),
+            paths: if pasted.is_some() {
+                Vec::new()
+            } else {
+                paths.clone()
+            },
+            staged: staged.clone(),
+            text: pasted,
+        };
         let share = match node.share_with_peer(&peer_id, paths, app_handle).await {
             Ok(share) => share,
             Err(e) => {
                 tracing::warn!(%peer_id, "send: share setup failed: {e:#}");
                 forget_stopped(&ctx, &key).await;
+                unqueue(&ctx, &key);
                 return fail(&weak, &key, format!("Could not start share: {e:#}"));
             }
         };
@@ -540,39 +607,254 @@ fn start_send(
             claim_guard.disarm();
         }
 
-        post_update(&weak, &key, |row| row.status = "Contacting peer…".into());
-        let delivered = match node
-            .invite_paired_device(&peer_id, &ticket, item_count, byte_count)
-            .await
-        {
-            Ok(delivered) => delivered,
-            Err(e) => {
-                tracing::warn!(%peer_id, "send: invite delivery failed: {e:#}");
-                false
+        // A peer known to be offline is not worth a connection timeout now;
+        // the send waits for it either way.
+        let online = node
+            .list_paired()
+            .ok()
+            .and_then(|devices| {
+                devices
+                    .into_iter()
+                    .find(|d| d.endpoint_id.eq_ignore_ascii_case(&peer_id))
+            })
+            .is_some_and(|d| d.online);
+        let delivered = if online {
+            post_update(&weak, &key, |row| row.status = "Contacting peer…".into());
+            match node
+                .invite_paired_device(&peer_id, &ticket, item_count, byte_count)
+                .await
+            {
+                Ok(delivered) => delivered,
+                Err(e) => {
+                    tracing::warn!(%peer_id, "send: invite delivery failed: {e:#}");
+                    false
+                }
             }
+        } else {
+            false
         };
         if delivered {
             tracing::info!(%peer_id, "send: invite delivered, waiting for peer to pull");
-            let status = format!("Delivered, waiting for {peer_name} to download…");
+            unqueue(&ctx, &key);
             post_update(&weak, &key, move |row| {
+                row.waiting = false;
                 // Progress events may already have moved the status on.
                 if row.status.as_str() == "Contacting peer…" {
-                    row.status = status.into();
+                    row.status = format!("Delivered, waiting for {peer_name} to download…").into();
                 }
             });
-        } else {
-            tracing::warn!(%peer_id, "send: invite not delivered (peer unreachable)");
-            // Nobody else knows the ticket: the share is useless.
-            if let Some(handle) = take_share(&ctx, &key).await {
-                shutdown_share(&ctx, handle, false).await;
-                fail(
-                    &weak,
-                    &key,
-                    format!("Could not reach {peer_name}. Are they online?"),
-                );
-            }
+            return;
         }
+        tracing::info!(%peer_id, "send: peer unreachable, waiting for it");
+        {
+            // Unless Stop came first: then the share is already gone.
+            let shares = ctx.transfers.shares.lock().await;
+            if !shares.open.contains_key(&key) {
+                return;
+            }
+            // Posted before a retry can see the entry, so a retry's
+            // "Delivered" update always lands after it.
+            let name = peer_name.clone();
+            post_update(&weak, &key, move |row| {
+                row.waiting = true;
+                row.status = format!("Waiting for {name} to come online").into();
+            });
+            ctx.transfers.waiting.lock().unwrap().insert(
+                key.clone(),
+                PendingInvite {
+                    peer_id,
+                    peer_name: peer_name.clone(),
+                    ticket,
+                    item_count,
+                    byte_count,
+                    attempting: false,
+                },
+            );
+            ctx.transfers
+                .queued
+                .lock()
+                .unwrap()
+                .insert(key.clone(), queued);
+        }
+        save_queue(&ctx);
     });
+}
+
+// ------------------------------------------------------------- send queue
+
+/// How often waiting sends retry regardless of presence events.
+const QUEUE_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Try again to deliver the invites of waiting sends: all of them, or only
+/// `peer`'s (it just came online). Callable from any thread.
+pub(crate) fn retry_waiting(ctx: &AppCtx, peer: Option<&str>) {
+    let Some(node) = ctx.node() else { return };
+    let due: Vec<(String, String, String, String, u32, u64)> = {
+        let mut waiting = ctx.transfers.waiting.lock().unwrap();
+        waiting
+            .iter_mut()
+            .filter(|(_, w)| {
+                !w.attempting && peer.is_none_or(|p| w.peer_id.eq_ignore_ascii_case(p))
+            })
+            .map(|(key, w)| {
+                w.attempting = true;
+                (
+                    key.clone(),
+                    w.peer_id.clone(),
+                    w.peer_name.clone(),
+                    w.ticket.clone(),
+                    w.item_count,
+                    w.byte_count,
+                )
+            })
+            .collect()
+    };
+    for (key, peer_id, peer_name, ticket, item_count, byte_count) in due {
+        let ctx = ctx.clone();
+        let node = node.clone();
+        ctx.rt.clone().spawn(async move {
+            let delivered = node
+                .invite_paired_device(&peer_id, &ticket, item_count, byte_count)
+                .await
+                .unwrap_or(false);
+            if !delivered {
+                if let Some(w) = ctx.transfers.waiting.lock().unwrap().get_mut(&key) {
+                    w.attempting = false;
+                }
+                return;
+            }
+            // Stopped meanwhile: nothing is waiting any more.
+            if ctx.transfers.waiting.lock().unwrap().remove(&key).is_none() {
+                return;
+            }
+            tracing::info!(%peer_id, %key, "send: queued invite delivered");
+            unqueue(&ctx, &key);
+            post_update(&ctx.weak, &key, move |row| {
+                row.waiting = false;
+                row.status = format!("Delivered, waiting for {peer_name} to download…").into();
+            });
+        });
+    }
+}
+
+/// Drop a send from the saved queue. Returns it if it was there.
+fn unqueue(ctx: &AppCtx, key: &str) -> Option<QueuedSend> {
+    let removed = ctx.transfers.queued.lock().unwrap().remove(key);
+    if removed.is_some() {
+        save_queue(ctx);
+    }
+    removed
+}
+
+fn save_queue(ctx: &AppCtx) {
+    let Some(path) = ctx.transfers.queue_path.get() else {
+        return;
+    };
+    let sends: Vec<QueuedSend> = ctx
+        .transfers
+        .queued
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect();
+    let result = if sends.is_empty() {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    } else {
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&sends).expect("queue serializes"),
+        )
+    };
+    if let Err(e) = result {
+        tracing::warn!("saving the send queue failed: {e}");
+    }
+}
+
+/// Bring back the sends that were waiting when the app last closed (saved
+/// at `path`): their rows show at once, and they restart once the node is
+/// up ([`start_restored`]). UI thread, before the share-sheet queue is shown.
+pub(crate) fn restore_queued(ctx: &AppCtx, ui: &AppWindow, path: PathBuf) {
+    let saved: Vec<QueuedSend> = std::fs::read(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_default();
+    let _ = ctx.transfers.queue_path.set(path);
+    let mut dropped = 0;
+    for send in saved {
+        let files_gone = send.paths.is_empty() || !send.paths.iter().all(|p| p.exists());
+        if send.text.is_none() && files_gone {
+            dropped += 1;
+            continue;
+        }
+        let key = ctx.transfers.new_key("send");
+        let title = match &send.text {
+            Some(_) => items_title(PASTE_FILE_NAME, 1),
+            None => items_title(&path_name(&send.paths[0]), send.paths.len()),
+        };
+        insert_row(
+            ui,
+            TransferRow {
+                key: key.clone().into(),
+                peer_id: send.peer_id.clone().into(),
+                sending: true,
+                active: true,
+                waiting: true,
+                title: title.into(),
+                status: format!("Waiting for {} to come online", send.peer_name).into(),
+                ..Default::default()
+            },
+        );
+        claim(ctx, &send.staged);
+        ctx.transfers.restored.lock().unwrap().insert(key.clone());
+        ctx.transfers.queued.lock().unwrap().insert(key, send);
+    }
+    if dropped > 0 {
+        save_queue(ctx);
+        let what = if dropped == 1 {
+            "A queued send was"
+        } else {
+            "Some queued sends were"
+        };
+        toast(ui, &format!("{what} dropped: its files are gone"), true);
+    }
+}
+
+/// Set up the shares of the sends [`restore_queued`] brought back. Call
+/// once the node is running; UI thread.
+pub(crate) fn start_restored(ctx: &AppCtx) {
+    let Some(node) = ctx.node() else { return };
+    let keys: Vec<String> = ctx.transfers.restored.lock().unwrap().drain().collect();
+    for key in keys {
+        let Some(send) = ctx.transfers.queued.lock().unwrap().get(&key).cloned() else {
+            continue;
+        };
+        let (paths, cleanup) = match &send.text {
+            Some(text) => match write_paste_file(text) {
+                Ok((dir, file)) => (vec![file], Some(dir)),
+                Err(e) => {
+                    release(ctx, &send.staged);
+                    unqueue(ctx, &key);
+                    fail(&ctx.weak, &key, format!("Could not prepare the text: {e}"));
+                    continue;
+                }
+            },
+            None => (send.paths.clone(), None),
+        };
+        spawn_send(
+            ctx,
+            node.clone(),
+            key,
+            send.peer_id,
+            send.peer_name,
+            paths,
+            send.staged,
+            cleanup,
+        );
+    }
 }
 
 async fn take_share(ctx: &AppCtx, key: &str) -> Option<ShareHandle> {
@@ -696,6 +978,17 @@ async fn finish_send(ctx: AppCtx, key: String) {
 
 /// User pressed Stop on a send.
 fn stop_send(ctx: &AppCtx, key: String) {
+    // Restored and not started yet: there is no share to stop.
+    if ctx.transfers.restored.lock().unwrap().remove(&key) {
+        if let Some(send) = unqueue(ctx, &key) {
+            release(ctx, &send.staged);
+        }
+        if let Some(ui) = ctx.weak.upgrade() {
+            remove_row(&ui, &key);
+            toast(&ui, "Send cancelled", false);
+        }
+        return;
+    }
     let ctx = ctx.clone();
     ctx.rt.clone().spawn(async move {
         let handle = {
@@ -707,6 +1000,9 @@ fn stop_send(ctx: &AppCtx, key: String) {
             }
             handle
         };
+        // After the share is gone, so a send can't start waiting again.
+        ctx.transfers.waiting.lock().unwrap().remove(&key);
+        unqueue(&ctx, &key);
         if let Some(handle) = handle {
             // Finalize first so the abort's own "transfer-failed" can't win.
             handle
@@ -998,6 +1294,20 @@ pub(crate) fn register(ctx: &AppCtx) {
         return;
     };
     let logic = ui.global::<Logic>();
+
+    {
+        // Presence can miss a peer coming back (or call it online while it
+        // still isn't reachable): keep knocking for waiting sends.
+        let ctx = ctx.clone();
+        ctx.rt.clone().spawn(async move {
+            let mut ticks = tokio::time::interval(QUEUE_RETRY_INTERVAL);
+            ticks.tick().await;
+            loop {
+                ticks.tick().await;
+                retry_waiting(&ctx, None);
+            }
+        });
+    }
 
     {
         // Send card: the typed/pasted text and any queued files, to the

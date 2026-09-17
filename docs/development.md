@@ -19,7 +19,12 @@ Implemented:
 - **Send**, one card per peer: type or paste text, attach pictures, an
   installed app (Android) or files/folders, then Send; shared and delivered
   directly to the peer with `invite_paired_device`; live progress and speed,
-  stop sharing. Desktop has only text, Paste and Files (sent right away). The share
+  stop sharing. Desktop has only text, Paste and Files (sent right away).
+  A peer that can't be reached keeps the send queued ("Waiting for … to come
+  online"): its share stays open and the invite is retried when the peer's
+  presence comes back, when the network is ready, and every 60 s. Queued
+  sends are saved to `queued-sends.json` in the data dir and restart with
+  the app. The share
   closes by itself once the peer has everything.
 - **Receive**, automatic: paired peers' file invites are accepted and
   downloaded into `<downloads folder>/flipflop/<peer-name>` without

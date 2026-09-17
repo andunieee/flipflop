@@ -420,6 +420,7 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
                 ui.global::<State>().set_node_ready(true);
                 toast(&ui, "Network ready", false);
             }
+            transfers::retry_waiting(ctx, None);
         }
         "device-node-network-warming" => {
             if let Some(ui) = ctx.weak.upgrade() {
@@ -468,7 +469,21 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
             refresh_peers(ctx);
             refresh_suggestions(ctx);
         }
-        "paired-device-presence" => refresh_peers(ctx),
+        "paired-device-presence" => {
+            refresh_peers(ctx);
+            let came_online = parsed
+                .as_ref()
+                .and_then(|v| v.get("online"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let peer = parsed
+                .as_ref()
+                .and_then(|v| v.get("endpoint_id"))
+                .and_then(|v| v.as_str());
+            if let (true, Some(peer)) = (came_online, peer) {
+                transfers::retry_waiting(ctx, Some(peer));
+            }
+        }
         "nearby-device-found" | "nearby-device-identified" | "nearby-device-lost" => {
             refresh_suggestions(ctx)
         }
@@ -585,6 +600,7 @@ fn start_node(ctx: &AppCtx) {
                 let node = Arc::new(node);
                 watch_network(&ctx_bg, &node);
                 *ctx_bg.node.lock().unwrap() = Some(node);
+                transfers::start_restored(&ctx_bg);
                 refresh_peers(&ctx_bg);
                 refresh_suggestions(&ctx_bg);
                 let weak = ctx_bg.weak.clone();
@@ -1435,6 +1451,8 @@ pub fn run() {
         queue: MainQueue::default(),
         transfers: Transfers::default(),
     };
+    // Sends that were waiting for their peer when the app last closed.
+    transfers::restore_queued(&ctx, &ui, data_dir.join("queued-sends.json"));
 
     // Android "intent listener": content shared into the app ("Send to
     // flipflop") is queued, and the peer list opens so the user can pick
