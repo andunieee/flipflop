@@ -1,6 +1,6 @@
 [package]
 name = "flipflop"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Send files and text straight to your own trusted devices, desktop and Android, over LAN, Bluetooth or the internet"
@@ -93,7 +93,9 @@ tempfile = "3.8.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = "0.15"
-arboard = "3"
+# wayland-data-control: native Wayland clipboard (falls back to X11). Without
+# it, copies land on XWayland and never reach Wayland apps.
+arboard = { version = "3", features = ["wayland-data-control"] }
 open = "5"
 
 [target.'cfg(target_os = "android")'.dependencies]
