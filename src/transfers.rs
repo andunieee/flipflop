@@ -358,7 +358,7 @@ fn items_title(first_name: &str, count: usize) -> String {
 /// clients just get an ordinary text file.
 pub(crate) const PASTE_FILE_NAME: &str = "flipflop-paste.txt";
 /// Bigger "pastes" stay plain files.
-const PASTE_MAX_BYTES: u64 = 256 * 1024;
+pub(crate) const PASTE_MAX_BYTES: u64 = 256 * 1024;
 
 /// What a receive saved, from its engine events.
 #[derive(Default)]
