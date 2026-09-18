@@ -59,11 +59,33 @@ impl ShareHandle {
     }
 }
 
-fn toast(ui: &AppWindow, msg: &str, error: bool) {
-    let state = ui.global::<State>();
-    state.set_toast(msg.into());
-    state.set_toast_error(error);
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    use std::cell::RefCell;
+
+    thread_local! {
+        // One clipboard per UI thread, kept alive for the whole run so X11
+        // clipboard managers always see the contents (arboard warns when the
+        // Clipboard is dropped immediately after writing).
+        static CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
+    }
+
+    CLIPBOARD.with_borrow_mut(|slot: &mut Option<arboard::Clipboard>| {
+        if slot
+            .as_mut()
+            .map(|cb| cb.set_text(text).is_ok())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        // (Re)create the clipboard and write again.
+        let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        let result = cb.set_text(text.to_string());
+        *slot = Some(cb);
+        result.map_err(|e| e.to_string())
+    })
 }
+
+fn toast(_ui: &AppWindow, _msg: &str, _error: bool) {}
 
 fn path_name(path: &std::path::Path) -> String {
     path.file_name()
@@ -1269,7 +1291,7 @@ fn register_add_peer(sync: &Sync) {
             if ticket.is_empty() {
                 return;
             }
-            match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(&ticket)) {
+            match copy_to_clipboard(&ticket) {
                 Ok(()) => toast(&ui, "Invite copied — share it with your peer", false),
                 Err(e) => toast(&ui, &format!("Copy failed: {e}"), true),
             }

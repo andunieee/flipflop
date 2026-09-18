@@ -133,8 +133,8 @@ pub fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
                 .and_then(|v| v.as_array().map(|a| a.len()))
                 .unwrap_or(0);
             if count > 0 {
-                state.set_toast(format!("{count} file(s) renamed to avoid overwriting").into());
-                state.set_toast_error(false);
+                let status = format!("{count} file(s) renamed to avoid overwriting");
+                state.set_receive_status(status.into());
             }
         }
         _ => {}

@@ -197,22 +197,5 @@ export component AppWindow inherits Window {
                 }
             }
         }
-
-        // Toast / status bar
-        Rectangle {
-            min-height: 26px;
-            max-height: 26px;
-            background: State.toast-error ? #5a2030 : #232330;
-            HorizontalLayout {
-                padding-left: 12px;
-                Text {
-                    text: State.toast;
-                    color: State.toast-error ? #ff9aa8 : #b8b8c8;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-            }
-        }
     }
 }
