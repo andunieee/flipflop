@@ -175,6 +175,27 @@ export component AddPeerPage inherits Rectangle {
                 }
             }
 
+            // Someone without flipflop: a temporary page they open in a browser.
+            Card {
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    spacing: Theme.space-3;
+
+                    SectionHeader { label: "No flipflop on their device?"; icon: Icons.globe; }
+                    HintText {
+                        label: "Open a temporary browser link: they send and receive files from any browser on the same Wi-Fi, no app needed.";
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        SecondaryButton {
+                            label: State.guest-active ? "Show browser link" : "Open browser link";
+                            icon: Icons.globe;
+                            clicked => { Logic.guest-start(); }
+                        }
+                    }
+                }
+            }
+
             // Our own address
             Card {
                 VerticalLayout {

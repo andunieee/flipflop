@@ -68,7 +68,8 @@ pub async fn export_to_directory(
     Ok(conflicts)
 }
 
-fn resolve_conflict_path(path: &Path) -> anyhow::Result<PathBuf> {
+/// The first free "name (n).ext" next to `path`.
+pub fn resolve_conflict_path(path: &Path) -> anyhow::Result<PathBuf> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("path has no parent: {}", path.display()))?;

@@ -84,6 +84,7 @@ component PeerButton inherits Rectangle {
             alignment: center;
             Avatar {
                 initials: root.peer.initials;
+                icon: root.peer.guest ? Icons.globe : @image-url("");
                 size: 28px;
                 show-presence: true;
                 online: root.peer.online;

@@ -12,6 +12,8 @@ export struct PeerRow {
     // true: discovered nearby, can be invited to pair ("Pair" button)
     is-suggestion: bool,
     trusted: bool,
+    // the browser link's guest (temporary, not paired)
+    guest: bool,
     // a send to / receive from this peer is in flight
     sending: bool,
     receiving: bool,
@@ -115,6 +117,8 @@ export global State {
     in-out property <string> selected-initials: "";
     in-out property <string> selected-detail: "";
     in-out property <bool> selected-online: false;
+    // the selected peer is the browser link's guest
+    in-out property <bool> selected-guest: false;
     in-out property <bool> rename-mode: false;
     in-out property <string> rename-input: "";
     in-out property <[HistoryRow]> history;
@@ -132,6 +136,14 @@ export global State {
     in-out property <bool> apps-loading: false;
     in-out property <string> app-filter: "";
     in-out property <[AppRow]> apps;
+
+    // browser link: a temporary page for someone without flipflop; the
+    // URL shown (one of our addresses) and its QR code
+    in-out property <bool> guest-active: false;
+    in-out property <string> guest-url: "";
+    in-out property <image> guest-qr;
+    // more than one address to offer ("Try another address")
+    in-out property <bool> guest-more-addresses: false;
 
     // settings page
     // device-name editor (kept apart from my-name so refreshes don't clobber typing)
@@ -206,6 +218,12 @@ export global Logic {
     callback toggle-my-qr();
     callback scan-qr();
     callback scan-cancel();
+
+    // browser link
+    callback guest-start();
+    callback guest-stop();
+    callback guest-copy-url();
+    callback guest-next-address();
 
     // settings
     callback pick-downloads-dir();

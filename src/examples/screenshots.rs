@@ -13,7 +13,7 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
 };
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, ModelRc, PhysicalSize, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, VecModel};
 use flipflop::{AppRow, AppWindow, HistoryRow, OutboxRow, PeerRow, State, TransferRow};
 
 struct Headless(Rc<MinimalSoftwareWindow>);
@@ -142,6 +142,47 @@ fn populate(state: &State<'_>) {
     state.set_relay_test_failed(true);
 }
 
+/// An open browser link with a browser connected, selected.
+fn show_guest(state: &State<'_>) {
+    let url = "http://192.168.1.5:53530/n3rp36io3ncgwvbr7wzq";
+    let qr = flipflop::qr::render(url).expect("qr");
+    state.set_guest_active(true);
+    state.set_guest_url(url.into());
+    state.set_guest_qr(slint::Image::from_rgb8(qr));
+    state.set_guest_more_addresses(true);
+    let mut peers: Vec<PeerRow> = state.get_peers().iter().collect();
+    peers.insert(
+        0,
+        PeerRow {
+            endpoint_id: "browser".into(),
+            name: "Browser".into(),
+            detail: "Safari on iPhone".into(),
+            online: true,
+            guest: true,
+            ..Default::default()
+        },
+    );
+    state.set_peers(model(peers));
+    state.set_selected_id("browser".into());
+    state.set_selected_name("Browser".into());
+    state.set_selected_initials("".into());
+    state.set_selected_detail("Safari on iPhone".into());
+    state.set_selected_guest(true);
+    state.set_visible_transfers(model(vec![TransferRow {
+        key: "send-1".into(),
+        peer_id: "browser".into(),
+        sending: true,
+        active: true,
+        title: "holiday.mp4".into(),
+        progress: 0.4,
+        progress_label: "40% · 120 MB of 300 MB".into(),
+        speed: "11.2 MB/s".into(),
+        status: "Downloading in the browser…".into(),
+        ..Default::default()
+    }]));
+    state.set_history(model(Vec::new()));
+}
+
 fn render(window: &MinimalSoftwareWindow, size: (u32, u32), path: &Path) {
     window.set_size(PhysicalSize::new(size.0, size.1));
     slint::platform::update_timers_and_animations();
@@ -184,6 +225,14 @@ fn main() {
     state.set_toast_text("Files from my-phone saved".into());
     render(&window, desktop, &out.join("toast.ppm"));
     state.set_toast_text("".into());
+
+    show_guest(&state);
+    render(&window, desktop, &out.join("guest.ppm"));
+    state.set_guest_url("".into());
+    state.set_guest_more_addresses(false);
+    render(&window, desktop, &out.join("guest-no-network.ppm"));
+    state.set_selected_guest(false);
+    populate(&state);
 
     // No peers yet.
     state.set_peers(model(Vec::new()));
@@ -249,6 +298,15 @@ fn main() {
     state.set_outbox_count(0);
     state.set_outbox(model(Vec::new()));
     state.set_peer_open(false);
+
+    // Phone: the browser link, in the list and on its own screen.
+    show_guest(&state);
+    render(&window, phone, &out.join("phone-guest-list.ppm"));
+    state.set_peer_open(true);
+    render(&window, phone, &out.join("phone-guest.ppm"));
+    state.set_peer_open(false);
+    state.set_selected_guest(false);
+    populate(&state);
 
     // No peers yet.
     state.set_peers(model(Vec::new()));

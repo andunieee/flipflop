@@ -11,6 +11,9 @@ No cloud, no accounts, and no internet required: peers find each other over
 the local network or Bluetooth, and connect across the internet when they are
 apart.
 
+Someone without flipflop? Open a browser link: they swap files and text with
+you from any browser on the same Wi-Fi, for as long as you keep it open.
+
 ![flipflop on the desktop](docs/screenshot.png)
 
 ## Download

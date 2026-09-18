@@ -24,7 +24,7 @@ use crate::emitter::apply_transfer_event;
 use crate::format::fmt_bytes;
 use crate::platform::{self, toast, toast_later};
 use crate::recorder::{Ctx, Recorder};
-use crate::{android, AppWindow, Logic, OutboxRow, State, TransferRow};
+use crate::{android, guest, AppWindow, Logic, OutboxRow, State, TransferRow};
 
 /// Cross-thread transfer bookkeeping, shared through `AppCtx`.
 #[derive(Clone, Default)]
@@ -32,7 +32,7 @@ pub struct Transfers {
     shares: Arc<tokio::sync::Mutex<Shares>>,
     /// Cancel senders of running receives, by key. A receive whose sender is
     /// gone when it ends was cancelled by the user.
-    recv_cancels: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    pub(crate) recv_cancels: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     next_key: Arc<AtomicU64>,
     /// A file picker is open (ignore further "Files" clicks).
     #[cfg_attr(target_os = "android", allow(dead_code))]
@@ -86,7 +86,7 @@ struct Shares {
 }
 
 impl Transfers {
-    fn new_key(&self, prefix: &str) -> String {
+    pub(crate) fn new_key(&self, prefix: &str) -> String {
         format!("{prefix}-{}", self.next_key.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -121,7 +121,7 @@ fn position(rows: &VecModel<TransferRow>, key: &str) -> Option<usize> {
     (0..rows.row_count()).find(|&i| rows.row_data(i).is_some_and(|r| r.key == key))
 }
 
-fn insert_row(ui: &AppWindow, row: TransferRow) {
+pub(crate) fn insert_row(ui: &AppWindow, row: TransferRow) {
     with_rows(ui, |rows| {
         // A new transfer replaces finished ones of the same kind for that peer.
         let mut i = 0;
@@ -138,7 +138,7 @@ fn insert_row(ui: &AppWindow, row: TransferRow) {
     sync_peer_activity(ui);
 }
 
-fn update_row(ui: &AppWindow, key: &str, f: impl FnOnce(&mut TransferRow)) {
+pub(crate) fn update_row(ui: &AppWindow, key: &str, f: impl FnOnce(&mut TransferRow)) {
     with_rows(ui, |rows| {
         if let Some(i) = position(rows, key) {
             let mut row = rows.row_data(i).expect("index in range");
@@ -149,7 +149,7 @@ fn update_row(ui: &AppWindow, key: &str, f: impl FnOnce(&mut TransferRow)) {
     sync_peer_activity(ui);
 }
 
-fn remove_row(ui: &AppWindow, key: &str) {
+pub(crate) fn remove_row(ui: &AppWindow, key: &str) {
     with_rows(ui, |rows| {
         if let Some(i) = position(rows, key) {
             rows.remove(i);
@@ -158,8 +158,15 @@ fn remove_row(ui: &AppWindow, key: &str) {
     sync_peer_activity(ui);
 }
 
+/// The peer of a transfer row.
+fn row_peer(ui: &AppWindow, key: &str) -> Option<SharedString> {
+    with_rows(ui, |rows| position(rows, key).and_then(|i| rows.row_data(i)))
+        .flatten()
+        .map(|row| row.peer_id)
+}
+
 /// `update_row` from any thread.
-fn post_update(
+pub(crate) fn post_update(
     weak: &Weak<AppWindow>,
     key: &str,
     f: impl FnOnce(&mut TransferRow) + Send + 'static,
@@ -169,7 +176,7 @@ fn post_update(
 }
 
 /// Mark a row as finished with an error.
-fn fail(weak: &Weak<AppWindow>, key: &str, msg: String) {
+pub(crate) fn fail(weak: &Weak<AppWindow>, key: &str, msg: String) {
     post_update(weak, key, move |row| {
         row.active = false;
         row.status = "Failed".into();
@@ -208,7 +215,8 @@ pub(crate) fn sync_peer_activity(ui: &AppWindow) {
         }
     }
     let selected = state.get_selected_id();
-    state.set_selected_sending(busy(&selected, true));
+    // Sends to a browser wait on its page; more can join them meanwhile.
+    state.set_selected_sending(busy(&selected, true) && !guest::is_guest(&selected));
 
     // The selected peer's rows. Update in place when the same transfers are
     // shown so cards (and their progress animation) aren't rebuilt.
@@ -281,7 +289,7 @@ impl EventEmitter for TransferEmitter {
 
 // --------------------------------------------------------------------- send
 
-fn path_name(path: &Path) -> String {
+pub(crate) fn path_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
@@ -341,7 +349,7 @@ fn metadata_for(paths: &[PathBuf]) -> crate::engine::FileMetadata {
 }
 
 /// "report.pdf" for one item, "3 items" for several.
-fn items_title(first_name: &str, count: usize) -> String {
+pub(crate) fn items_title(first_name: &str, count: usize) -> String {
     if first_name == PASTE_FILE_NAME && count == 1 {
         "text".to_string()
     } else if count == 1 {
@@ -432,7 +440,7 @@ pub(crate) fn text_preview(text: &str) -> String {
 }
 
 /// The text of a paste being sent, if `paths` is one.
-fn sent_paste_text(paths: &[PathBuf]) -> Option<String> {
+pub(crate) fn sent_paste_text(paths: &[PathBuf]) -> Option<String> {
     let [path] = paths else { return None };
     if path_name(path) != PASTE_FILE_NAME
         || std::fs::metadata(path).ok()?.len() > PASTE_MAX_BYTES
@@ -477,6 +485,9 @@ fn start_send(
     staged: Vec<PathBuf>,
     cleanup: Option<PathBuf>,
 ) {
+    if guest::is_guest(&peer_id) {
+        return guest::offer(ctx, ui, paths, staged, cleanup);
+    }
     let key = ctx.transfers.new_key("send");
     let first_name = paths.first().map(|p| path_name(p)).unwrap_or_default();
     insert_row(
@@ -890,7 +901,7 @@ fn queued_files(ctx: &AppCtx) -> Vec<PathBuf> {
         .collect()
 }
 
-fn claim(ctx: &AppCtx, paths: &[PathBuf]) {
+pub(crate) fn claim(ctx: &AppCtx, paths: &[PathBuf]) {
     ctx.transfers
         .claimed
         .lock()
@@ -899,7 +910,7 @@ fn claim(ctx: &AppCtx, paths: &[PathBuf]) {
     refresh_outbox(ctx);
 }
 
-fn release(ctx: &AppCtx, paths: &[PathBuf]) {
+pub(crate) fn release(ctx: &AppCtx, paths: &[PathBuf]) {
     {
         let mut claimed = ctx.transfers.claimed.lock().unwrap();
         for path in paths {
@@ -978,6 +989,14 @@ async fn finish_send(ctx: AppCtx, key: String) {
 
 /// User pressed Stop on a send.
 fn stop_send(ctx: &AppCtx, key: String) {
+    let to_guest = ctx
+        .weak
+        .upgrade()
+        .and_then(|ui| row_peer(&ui, &key))
+        .is_some_and(|peer| guest::is_guest(&peer));
+    if to_guest {
+        return guest::withdraw(ctx, &key);
+    }
     // Restored and not started yet: there is no share to stop.
     if ctx.transfers.restored.lock().unwrap().remove(&key) {
         if let Some(send) = unqueue(ctx, &key) {
@@ -1071,6 +1090,21 @@ fn partial_store_path(ticket: &str) -> Option<String> {
     )
 }
 
+/// Where files from `peer_name` are saved: a folder named after it in the
+/// downloads folder.
+pub(crate) fn save_dir(ctx: &AppCtx, peer_name: &str, peer_id: &str) -> PathBuf {
+    let save_dir = ctx
+        .settings
+        .lock()
+        .unwrap()
+        .downloads_path()
+        .unwrap_or_else(|| platform::default_data_dir().join("downloads"))
+        .join(sanitize_folder_name(peer_name, &short_id(peer_id)));
+    // The blob store only exports to absolute paths (a relative one fails as
+    // a bare "Error::Io"), and a folder typed into Settings may be relative.
+    std::path::absolute(&save_dir).unwrap_or(save_dir)
+}
+
 /// A paired peer sent us files: accept and download them, no prompt.
 /// UI thread (called from node event routing).
 pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
@@ -1125,18 +1159,8 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
                     .map(|d| d.display_name)
             });
         let peer_name = invite_peer_name(stored_name, &invite.sender_name, &id);
-        let (save_dir, history_enabled) = {
-            let settings = ctx.settings.lock().unwrap();
-            let save_dir = settings
-                .downloads_path()
-                .unwrap_or_else(|| platform::default_data_dir().join("downloads"))
-                .join(sanitize_folder_name(&peer_name, &short_id(&id)));
-            // The blob store only exports to absolute paths (a relative one
-            // fails as a bare "Error::Io"), and a folder typed into Settings
-            // may be relative.
-            let save_dir = std::path::absolute(&save_dir).unwrap_or(save_dir);
-            (save_dir, settings.history_enabled)
-        };
+        let save_dir = save_dir(&ctx, &peer_name, &id);
+        let history_enabled = ctx.settings.lock().unwrap().history_enabled;
         if let Err(e) = std::fs::create_dir_all(&save_dir) {
             tracing::warn!(save = %save_dir.display(), "receive: cannot create save dir: {e}");
         }

@@ -71,6 +71,14 @@ slint = { version = "=1.18.1", features = ["backend-android-activity-06"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 qrcode = { version = "0.14.1", default-features = false }
+# Browser link (src/guest): a small HTTP/1.1 server, versions iroh already
+# pulls in. netwatch lists our LAN addresses (iroh's own, works on Android).
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+netwatch = "0.19"
+crc32fast = "1"
+getrandom = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Pin to the same rustls iroh resolves so dyn ServerCertVerifier types unify.

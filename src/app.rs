@@ -1,5 +1,6 @@
 use crate::emitter::{MainEmitter, MainQueue};
 use crate::format;
+use crate::guest::{self, Guest};
 use crate::platform::{self, copy_to_clipboard, open_path, pick_downloads_folder, toast};
 use crate::settings::Settings;
 use crate::transfers::{self, Transfers};
@@ -28,6 +29,7 @@ pub(crate) struct AppCtx {
     pair_requests: Arc<Mutex<Vec<(String, String)>>>,
     queue: MainQueue,
     pub transfers: Transfers,
+    pub guest: Guest,
 }
 
 impl AppCtx {
@@ -178,7 +180,7 @@ fn nearby_row(n: &crate::engine::NearbyDevice) -> PeerRow {
 // -------------------------------------------------------- ui refreshers
 
 /// Mirror a peer row into the selected-peer header fields (or clear them).
-fn show_selected(state: &State<'_>, row: Option<&PeerRow>) {
+pub(crate) fn show_selected(state: &State<'_>, row: Option<&PeerRow>) {
     match row {
         Some(row) => {
             state.set_selected_id(row.endpoint_id.clone());
@@ -186,6 +188,7 @@ fn show_selected(state: &State<'_>, row: Option<&PeerRow>) {
             state.set_selected_detail(row.detail.clone());
             state.set_selected_online(row.online);
             state.set_selected_initials(row.initials.clone());
+            state.set_selected_guest(row.guest);
         }
         None => {
             state.set_selected_id("".into());
@@ -193,12 +196,24 @@ fn show_selected(state: &State<'_>, row: Option<&PeerRow>) {
             state.set_selected_detail("".into());
             state.set_selected_online(false);
             state.set_selected_initials("".into());
+            state.set_selected_guest(false);
         }
     }
 }
 
 pub(crate) fn refresh_peers(ctx: &AppCtx) {
     let Some(node) = ctx.node() else {
+        // Only an open browser link to show.
+        let ctx_ui = ctx.clone();
+        let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
+            let state = ui.global::<State>();
+            let rows: Vec<PeerRow> = guest::peer_row(&ctx_ui).into_iter().collect();
+            let selected = state.get_selected_id();
+            let current = rows.iter().find(|r| r.endpoint_id == selected).or(rows.first());
+            show_selected(&state, current);
+            state.set_peers(ModelRc::from(Rc::new(VecModel::from(rows))));
+            transfers::sync_peer_activity(&ui);
+        });
         return;
     };
     // The paired-device store is read from disk: keep that off the UI thread.
@@ -211,7 +226,11 @@ pub(crate) fn refresh_peers(ctx: &AppCtx) {
         let ctx_ui = ctx.clone();
         let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
             let state = ui.global::<State>();
-            let rows: Vec<PeerRow> = devices.iter().map(paired_row).collect();
+            // An open browser link comes first: it's what's going on now.
+            let rows: Vec<PeerRow> = guest::peer_row(&ctx_ui)
+                .into_iter()
+                .chain(devices.iter().map(paired_row))
+                .collect();
             let online_count = devices.iter().filter(|d| d.online).count();
             // Keep the selection (re-reading its name/presence, which may
             // have changed); fall back to the first peer when nothing is
@@ -444,6 +463,7 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
             }
             transfers::retry_waiting(ctx, None);
             sync_pairing_window(ctx);
+            guest::refresh_addresses(ctx);
         }
         "device-node-network-warming" => {
             if let Some(ui) = ctx.weak.upgrade() {
@@ -695,6 +715,9 @@ fn register_node(ctx: &AppCtx) {
 fn begin_rename(ctx: &AppCtx) {
     if let Some(ui) = ctx.weak.upgrade() {
         let state = ui.global::<State>();
+        if state.get_selected_guest() {
+            return;
+        }
         state.set_rename_mode(true);
         state.set_rename_input(state.get_selected_name());
     }
@@ -803,7 +826,7 @@ fn register_peers(ctx: &AppCtx) {
                 drop(state);
                 (id, name)
             };
-            if id.is_empty() {
+            if id.is_empty() || guest::is_guest(&id) {
                 return;
             }
             let weak = ctx.weak.clone();
@@ -1475,6 +1498,7 @@ pub fn run() {
         pair_requests: Arc::new(Mutex::new(Vec::new())),
         queue: MainQueue::default(),
         transfers: Transfers::default(),
+        guest: Guest::default(),
     };
     // Sends that were waiting for their peer when the app last closed.
     transfers::restore_queued(&ctx, &ui, data_dir.join("queued-sends.json"));
@@ -1536,6 +1560,7 @@ pub fn run() {
     register_settings(&ctx);
     crate::qr::register(&ctx);
     transfers::register(&ctx);
+    guest::register(&ctx);
 
     ui.run().expect("UI error");
 }

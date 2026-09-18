@@ -1,8 +1,8 @@
 import { LineEdit, TextEdit } from "std-widgets.slint";
 import { State, Logic, HistoryRow, TransferRow, AppRow } from "globals.slint";
 import {
-    Theme, Dot, Card, ProgressBar, HintText, Avatar, Badge, DirectionIcon,
-    PrimaryButton, SecondaryButton, GhostButton, DangerButton, SectionTitle,
+    Theme, Dot, Card, ProgressBar, HintText, StatusText, Avatar, Badge, DirectionIcon,
+    PrimaryButton, SecondaryButton, GhostButton, DangerButton, SectionTitle, SectionHeader,
     Icon, Icons, IconButton, LogoMark, Divider, ScrollView,
 } from "components.slint";
 
@@ -515,7 +515,8 @@ component PresenceLine inherits HorizontalLayout {
         Dot { online: State.selected-online; size: 7px; }
     }
     Text {
-        text: State.selected-online ? "Online" : "Offline";
+        text: State.selected-guest ? (State.selected-online ? "Connected" : "Link open")
+            : State.selected-online ? "Online" : "Offline";
         color: State.selected-online ? Theme.online : Theme.text-muted;
         font-size: Theme.font-sm;
         font-weight: 600;
@@ -531,6 +532,100 @@ component PresenceLine inherits HorizontalLayout {
     }
 }
 
+// The browser link's QR code, on white so any camera reads it.
+component GuestQr inherits Rectangle {
+    in property <length> size: 168px;
+    width: root.size;
+    height: root.size;
+    border-radius: Theme.radius;
+    background: white;
+    border-width: 1px;
+    border-color: Theme.border;
+    Image {
+        width: root.size - 12px;
+        height: self.width;
+        source: State.guest-qr;
+        image-rendering: pixelated;
+    }
+}
+
+// The link itself: copy it, or switch to another of our addresses.
+component GuestLinkDetails inherits VerticalLayout {
+    spacing: Theme.space-3;
+
+    SectionHeader { label: "Browser link"; icon: Icons.globe; }
+    HintText {
+        label: "Open it in any browser on the same Wi-Fi (or your hotspot). Whoever has the link can send and receive here until you close it.";
+    }
+    if State.guest-url == "": StatusText {
+        label: "No local network found. Connect to Wi-Fi or turn on your hotspot.";
+        error: true;
+    }
+    if State.guest-url != "": HorizontalLayout {
+        spacing: Theme.space-2;
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: Theme.radius-sm + 2px;
+            background: Theme.inset-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            min-height: Theme.control-height;
+
+            HorizontalLayout {
+                padding-left: Theme.space-3;
+                padding-right: Theme.space-3;
+                Text {
+                    text: State.guest-url;
+                    color: Theme.text-strong;
+                    font-family: "monospace";
+                    font-size: Theme.font-sm;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+        SecondaryButton {
+            label: "Copy";
+            icon: Icons.copy;
+            clicked => { Logic.guest-copy-url(); }
+        }
+    }
+    if State.guest-more-addresses: HorizontalLayout {
+        alignment: start;
+        GhostButton {
+            label: "Not working? Try another address";
+            icon: Icons.refresh;
+            clicked => { Logic.guest-next-address(); }
+        }
+    }
+}
+
+// Shown on the guest's page: how to reach it.
+component GuestLinkCard inherits Card {
+    border-color: Theme.accent-border;
+
+    // A Rectangle takes its size from a layout child, not from `if`s.
+    VerticalLayout {
+        padding: Theme.card-padding;
+        if !State.compact: HorizontalLayout {
+            spacing: Theme.space-4;
+            if State.guest-url != "": VerticalLayout {
+                alignment: start;
+                GuestQr { }
+            }
+            GuestLinkDetails { horizontal-stretch: 1; }
+        }
+        if State.compact: VerticalLayout {
+            spacing: Theme.space-3;
+            GuestLinkDetails { }
+            if State.guest-url != "": HorizontalLayout {
+                alignment: center;
+                GuestQr { size: 200px; }
+            }
+        }
+    }
+}
+
 // Desktop / wide layout: the selected peer next to the sidebar.
 component WidePeerView inherits Rectangle {
     property <bool> has-peer: State.selected-name != "";
@@ -539,72 +634,78 @@ component WidePeerView inherits Rectangle {
     property <string> selected-id: State.selected-id;
     changed selected-id => { root.confirm-forget = false; }
 
-    VerticalLayout {
-        padding: Theme.page-padding;
-        spacing: Theme.space-4;
+    // Everything scrolls together: transfer cards and a browser link's card
+    // don't fit beside a fixed send card on a short window.
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-4;
+            alignment: start;
 
-        if root.has-peer: HorizontalLayout {
-            spacing: Theme.space-3 + 2px;
+            if root.has-peer: HorizontalLayout {
+                spacing: Theme.space-3 + 2px;
 
-            VerticalLayout {
-                alignment: center;
-                Avatar { initials: State.selected-initials; size: 52px; }
-            }
-            VerticalLayout {
-                alignment: center;
-                spacing: Theme.space-1;
-                horizontal-stretch: 1;
-                Text {
-                    text: State.selected-name;
-                    color: Theme.text-strong;
-                    font-size: Theme.font-xl;
-                    font-weight: 700;
-                    overflow: elide;
-                }
-                PresenceLine { show-detail: true; }
-            }
-            if !State.rename-mode && !root.confirm-forget: HorizontalLayout {
-                spacing: Theme.space-1;
-                alignment: end;
                 VerticalLayout {
                     alignment: center;
-                    GhostButton { label: "Rename"; icon: Icons.edit; clicked => { Logic.rename-peer(); } }
+                    Avatar {
+                        initials: State.selected-initials;
+                        icon: State.selected-guest ? Icons.globe : @image-url("");
+                        size: 52px;
+                    }
                 }
                 VerticalLayout {
                     alignment: center;
-                    DangerButton { label: "Forget"; icon: Icons.trash; clicked => { root.confirm-forget = true; } }
+                    spacing: Theme.space-1;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: State.selected-name;
+                        color: Theme.text-strong;
+                        font-size: Theme.font-xl;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                    PresenceLine { show-detail: true; }
+                }
+                if State.selected-guest: VerticalLayout {
+                    alignment: center;
+                    DangerButton { label: "Close link"; icon: Icons.close; clicked => { Logic.guest-stop(); } }
+                }
+                if !State.selected-guest && !State.rename-mode && !root.confirm-forget: HorizontalLayout {
+                    spacing: Theme.space-1;
+                    alignment: end;
+                    VerticalLayout {
+                        alignment: center;
+                        GhostButton { label: "Rename"; icon: Icons.edit; clicked => { Logic.rename-peer(); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        DangerButton { label: "Forget"; icon: Icons.trash; clicked => { root.confirm-forget = true; } }
+                    }
                 }
             }
-        }
 
-        if root.has-peer && root.confirm-forget: ForgetConfirm {
-            cancelled => { root.confirm-forget = false; }
-            confirmed => {
-                root.confirm-forget = false;
-                Logic.remove-peer();
+            if root.has-peer && root.confirm-forget: ForgetConfirm {
+                cancelled => { root.confirm-forget = false; }
+                confirmed => {
+                    root.confirm-forget = false;
+                    Logic.remove-peer();
+                }
             }
-        }
-        if State.rename-mode: RenameRow { }
-        if !root.has-peer: EmptyPeersCard { }
+            if State.rename-mode: RenameRow { }
+            if !root.has-peer: EmptyPeersCard { }
 
-        if root.has-peer: SendCard { }
+            if root.has-peer && State.selected-guest: GuestLinkCard { }
+            if root.has-peer: SendCard { }
 
-        for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
+            for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
 
-        if root.has-peer: HistoryHeader { }
-        if root.has-peer && State.history.length == 0: NoHistory { }
-        if root.has-peer && State.history.length > 0: ScrollView {
-            vertical-stretch: 1;
-            VerticalLayout {
+            if root.has-peer: HistoryHeader { }
+            if root.has-peer && State.history.length == 0: NoHistory { }
+            if root.has-peer && State.history.length > 0: VerticalLayout {
                 spacing: 6px;
-                alignment: start;
-                // Room for the scrollbar so it never covers row actions.
-                padding-right: Theme.space-3;
                 for entry in State.history: HistoryItem { entry: entry; }
             }
         }
-
-        if !root.has-peer || State.history.length == 0: Rectangle { vertical-stretch: 1; }
     }
 }
 
@@ -635,7 +736,11 @@ component PhonePeerView inherits Rectangle {
                 }
                 VerticalLayout {
                     alignment: center;
-                    Avatar { initials: State.selected-initials; size: 44px; }
+                    Avatar {
+                        initials: State.selected-initials;
+                        icon: State.selected-guest ? Icons.globe : @image-url("");
+                        size: 44px;
+                    }
                 }
                 VerticalLayout {
                     alignment: center;
@@ -651,7 +756,7 @@ component PhonePeerView inherits Rectangle {
                     }
                     PresenceLine { }
                 }
-                if !State.rename-mode: VerticalLayout {
+                if !State.rename-mode && !State.selected-guest: VerticalLayout {
                     alignment: center;
                     IconButton { icon: Icons.edit; clicked => { Logic.rename-peer(); } }
                 }
@@ -659,6 +764,7 @@ component PhonePeerView inherits Rectangle {
 
             if State.rename-mode: RenameRow { }
 
+            if State.selected-guest: GuestLinkCard { }
             SendCard { }
 
             for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
@@ -672,7 +778,36 @@ component PhonePeerView inherits Rectangle {
                 padding-top: Theme.space-4;
                 spacing: Theme.space-3;
                 Divider { }
-                if !root.confirm-forget: HorizontalLayout {
+                if State.selected-guest: HorizontalLayout {
+                    spacing: Theme.space-3;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: "Close the browser link";
+                            color: Theme.text-strong;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: "The page stops working; nothing is remembered.";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-sm;
+                            wrap: word-wrap;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        DangerButton {
+                            label: "Close";
+                            clicked => {
+                                State.peer-open = false;
+                                Logic.guest-stop();
+                            }
+                        }
+                    }
+                }
+                if !State.selected-guest && !root.confirm-forget: HorizontalLayout {
                     spacing: Theme.space-3;
                     VerticalLayout {
                         alignment: center;
@@ -689,7 +824,7 @@ component PhonePeerView inherits Rectangle {
                         DangerButton { label: "Forget"; clicked => { root.confirm-forget = true; } }
                     }
                 }
-                if root.confirm-forget: ForgetConfirm {
+                if !State.selected-guest && root.confirm-forget: ForgetConfirm {
                     cancelled => { root.confirm-forget = false; }
                     confirmed => {
                         root.confirm-forget = false;
