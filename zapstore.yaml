@@ -1,0 +1,9 @@
+repository: https://github.com/andunieee/flipflop
+pubkey: npub1ewsn5m4p2qfvpx2qjfvnghe5ca4phx6d3ccpqad9sr4ccg9utewsfmk8su
+license: AGPL-3.0-only
+tags:
+  - file-transfer
+  - sharing
+  - p2p
+  - lan
+  - bluetooth

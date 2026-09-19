@@ -252,9 +252,36 @@ jobs:
           pattern: "*"
           merge-multiple: true
           path: dist
+      # The body is the fastlane changelog, so Zapstore (which reads the
+      # GitHub release notes) shows the same text as F-Droid.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls dist
-          gh release create "$GITHUB_REF_NAME" dist/*
+          IFS=. read -r major minor patch <<< "${GITHUB_REF_NAME#v}"
+          code=$(( (1 << 24) | (major << 16) | (minor << 8) | patch ))
+          gh release create "$GITHUB_REF_NAME" \
+            --notes-file "fastlane/metadata/android/en-US/changelogs/$code.txt" dist/*
+
+  # Publishes the release's APK to Zapstore (see docs/releasing.md). Skipped
+  # until the ZAPSTORE_SIGN_WITH secret (a NIP-46 bunker URL) is set.
+  zapstore:
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Publish to Zapstore
+        env:
+          SIGN_WITH: ${{ secrets.ZAPSTORE_SIGN_WITH }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$SIGN_WITH" ]; then
+            echo "::notice::ZAPSTORE_SIGN_WITH is not set, skipping Zapstore"
+            exit 0
+          fi
+          go install github.com/zapstore/zsp@v0.4.4
+          "$(go env GOPATH)/bin/zsp" publish --quiet zapstore.yaml
