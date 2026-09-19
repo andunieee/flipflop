@@ -1,0 +1,5 @@
+* Browser link: swap files and text with someone who doesn't have flipflop, from any browser on the same Wi-Fi
+* Sends to offline peers are queued and go out when the peer comes back, even after a restart
+* One send card per peer for text, pictures, apps and files
+* Dark mode (Settings → Appearance)
+* Fixed text shared from other apps showing up as a file
