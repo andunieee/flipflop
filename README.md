@@ -1,29 +1,21 @@
 # flipflop
 
-Send files and text straight to your own devices.
+Establish a trusted tunnel between two or more devices: from that point on one can send files to the other anytime.
 
-Pair once with a trusted peer, a desktop or an Android phone, and flipflop
-keeps a private channel open between you, at home or anywhere else. Drop files
-or paste any text, and it lands directly on the other side. Each peer gets its
-own history of what went back and forth.
+It works through bluetooth, LAN or even through the wild internet. It uses [Iroh](https://iroh.computer).
 
-No cloud, no accounts, and no internet required: peers find each other over
-the local network or Bluetooth, and connect across the internet when they are
-apart.
-
-Someone without flipflop? Open a browser link: they swap files and text with
-you from any browser on the same Wi-Fi, for as long as you keep it open.
+Use it to share stuff between all your devices, and maybe devices of your family members, in the same household or afar, sharing links, plain text, anything.
 
 ![flipflop on the desktop](docs/screenshot.png)
 
 ## Download
 
-Get the latest Linux, macOS and Windows builds and the Android APK from the
-[releases page](https://github.com/andunieee/flipflop/releases/latest).
+Get the latest Linux, macOS and Windows builds and the Android APK from the [releases page](https://github.com/andunieee/flipflop/releases/latest).
 
-On Windows, use the `-setup.exe` installer. The builds aren't code-signed
-yet, so Windows may show a "Windows protected your PC" warning: click
-**More info → Run anyway**.
+On Windows, you can either run the executable direclty or use the `-setup.exe` installer.
+Because Microsoft hates the world, they will show a "Windows protected your PC" warning when you try.
+
+Because Apple hates the world even more, I can't publish it for iOS.
 
 ## Build
 
@@ -31,7 +23,3 @@ yet, so Windows may show a "Windows protected your PC" warning: click
 cargo run --release          # desktop
 just android-install         # Android (needs cargo-apk, Android SDK + NDK)
 ```
-
-Architecture, platform notes and the Android toolchain setup are in
-[docs/development.md](docs/development.md). Release steps and app store
-publishing are in [docs/releasing.md](docs/releasing.md).
