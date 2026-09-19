@@ -12,11 +12,11 @@ use iroh::endpoint::{
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::address_lookup::pkarr::{PkarrPublisher, PkarrResolver};
 use iroh::address_lookup::dns::DnsAddressLookup;
-use iroh::EndpointId;
+use iroh::{EndpointId, Watcher};
 use protocol::{
-    allows_unpaired_control, apply_options, export_connection_keying_material, read_message,
+    allows_unpaired_control, export_connection_keying_material, read_message,
     should_answer_identity, should_publish_mdns, sign_challenge, unpaired_message_allowed,
-    verify_challenge, write_message, AddrInfoOptions, AppHandle, ControlMessage, Discoverability,
+    verify_challenge, write_message, AppHandle, ControlMessage, Discoverability,
     DiscoveryModeOption, InviteResponse, PairedDevice, PairingStatus, RememberVote,
     CONTROL_ALPN, PRESENCE_CONNECT_TIMEOUT_SECS,
 };
@@ -571,13 +571,28 @@ impl ControlProtocol {
                 device_type,
                 os,
             } => {
-                crate::pairing_util::emit_nearby_pair_request(
-                    &self.ctx.app_handle,
-                    &remote.to_string(),
-                    &sender_name,
-                    &device_type,
-                    &os,
-                );
+                // A pair request from a peer we already asked is mutual
+                // acceptance — both sides "paired" each other, so commit this
+                // side too instead of prompting again. The other side mirrors
+                // this when it receives our request, so no `InviteResponse`
+                // round-trip is needed.
+                let pending = self
+                    .ctx
+                    .pending_nearby_invites
+                    .write()
+                    .await
+                    .remove(&remote.to_string());
+                if let Some(pending) = pending {
+                    self.commit_nearby_pairing(remote, pending).await;
+                } else {
+                    crate::pairing_util::emit_nearby_pair_request(
+                        &self.ctx.app_handle,
+                        &remote.to_string(),
+                        &sender_name,
+                        &device_type,
+                        &os,
+                    );
+                }
             }
             ControlMessage::InviteResponse { response, .. } => {
                 // An unpaired peer could claim to be answering an invite we
@@ -776,6 +791,10 @@ pub struct NodeService {
     pub(crate) pairing_host_persistent: Arc<AtomicBool>,
     /// True after the endpoint has reached its home relay (or relay is disabled).
     network_ready: Arc<AtomicBool>,
+    /// Our home relay URL, kept current by `build_runtime`'s online hook. Shared
+    /// with `ControlCtx` so pairing records it, and read by `pairing_ticket` so
+    /// the code we show others carries the relay address (not a flaky `try_lock`).
+    home_relay_url: Arc<std::sync::RwLock<Option<String>>>,
     pub(crate) pairing_expire_task: Mutex<Option<JoinHandle<()>>>,
     pub(crate) paired_connections: Arc<PairedConnectionManager>,
     connections_supervisor: Mutex<Option<JoinHandle<()>>>,
@@ -867,6 +886,7 @@ impl NodeService {
             app_handle.clone(),
         ));
 
+        let home_relay_url = Arc::new(std::sync::RwLock::new(None));
         let runtime = build_runtime(
             identity.clone(),
             paired_store.clone(),
@@ -882,6 +902,7 @@ impl NodeService {
             network_ready.clone(),
             relay_mode.clone(),
             discovery_mode.clone(),
+            home_relay_url.clone(),
         )
         .await?;
         let runtime = Arc::new(Mutex::new(runtime));
@@ -914,6 +935,7 @@ impl NodeService {
             pairing_host_open,
             pairing_host_persistent,
             network_ready,
+            home_relay_url,
             pairing_expire_task: Mutex::new(None),
             paired_connections,
             connections_supervisor: Mutex::new(Some(connections_supervisor)),
@@ -1012,6 +1034,7 @@ impl NodeService {
             self.network_ready.clone(),
             relay_mode.clone(),
             discovery_mode.clone(),
+            self.home_relay_url.clone(),
         )
         .await?;
 
@@ -1170,18 +1193,16 @@ impl NodeService {
         Ok(())
     }
 
-    /// Immediate pairing code from local identity. Never waits on presence or
-    /// relay probes — optional custom-relay hint is best-effort via try_lock.
+    /// Immediate pairing code from local identity, carrying our home relay URL
+    /// so a joiner that types the code can reach us over the same relay. The
+    /// relay hint is read from `home_relay_url`, which the online hook keeps
+    /// current without waiting on presence or blocking on the runtime lock.
     pub fn pairing_ticket(&self) -> anyhow::Result<String> {
-        let relay_url = match self.runtime.try_lock() {
-            Ok(runtime) => {
-                let mut addr = runtime.endpoint.addr();
-                apply_options(&mut addr, AddrInfoOptions::Relay);
-                let url = addr.relay_urls().next().map(|u| u.to_string());
-                url
-            }
-            Err(_) => None,
-        };
+        let relay_url = self
+            .home_relay_url
+            .read()
+            .expect("home_relay_url")
+            .clone();
         let ticket = protocol::PairingTicket {
             v: 1,
             kind: protocol::PairingTicket::KIND.to_string(),
@@ -2188,10 +2209,17 @@ async fn send_forget_on_connection(
 }
 
 fn endpoint_home_relay_url(endpoint: &Endpoint) -> Option<String> {
-    let mut local_addr = endpoint.addr();
-    apply_options(&mut local_addr, AddrInfoOptions::Relay);
-    let url = local_addr.relay_urls().next().map(|u| u.to_string());
-    url
+    // `home_relay_status` carries the configured home relay URL even before the
+    // endpoint connects to it, unlike `addr()`, whose relay entry only appears
+    // once the relay connection is up. The pairing code must carry the relay
+    // address immediately, or a joiner typing the code can't reach a custom-relay
+    // host that hasn't finished connecting yet.
+    endpoint
+        .home_relay_status()
+        .get()
+        .into_iter()
+        .next()
+        .map(|status| status.url().to_string())
 }
 
 async fn build_runtime(
@@ -2209,6 +2237,7 @@ async fn build_runtime(
     network_ready: Arc<AtomicBool>,
     relay_mode: RelayMode,
     discovery_mode: DiscoveryModeOption,
+    home_relay_url: Arc<std::sync::RwLock<Option<String>>>,
 ) -> anyhow::Result<NodeRuntime> {
 
     let hook = PairedOnlyHook {
@@ -2254,7 +2283,7 @@ async fn build_runtime(
 
     // Publish the node immediately after bind so pairing UI/API are available
     // without waiting on relay home connection (often several seconds on mobile).
-    let home_relay_url = Arc::new(std::sync::RwLock::new(endpoint_home_relay_url(&endpoint)));
+    *home_relay_url.write().expect("home_relay_url") = endpoint_home_relay_url(&endpoint);
 
     let control = ControlProtocol {
         ctx: ControlCtx {

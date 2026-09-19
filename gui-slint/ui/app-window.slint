@@ -6,10 +6,91 @@ import { SettingsPage } from "settings-page.slint";
 
 export { State, Logic }
 
+component NavButton inherits Rectangle {
+    in property <string> label;
+    in property <string> key;
+    in property <bool> active;
+    in property <bool> compact;
+
+    border-radius: root.compact ? 10px : 6px;
+    background: active ? #37374a : transparent;
+    min-height: root.compact ? 52px : 34px;
+
+    touch := TouchArea {
+        clicked => {
+            State.page = root.key;
+            Logic.page-changed(root.key);
+        }
+        mouse-cursor: pointer;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        padding-left: root.compact ? 0 : 12px;
+
+        if root.compact: Text {
+            text: root.label;
+            color: root.active ? white : #c8c8d0;
+            font-size: 20px;
+            horizontal-alignment: center;
+        }
+        if !root.compact: Text {
+            text: root.label;
+            color: root.active ? white : #c8c8d0;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component PeerButton inherits Rectangle {
+    in property <string> endpoint-id;
+    in property <string> label;
+    in property <bool> online;
+    in property <bool> compact;
+
+    border-radius: 6px;
+    background: State.page == "peer" && State.selected-id == self.endpoint-id
+        ? #4a5fd0
+        : transparent;
+    min-height: root.compact ? 48px : 34px;
+
+    touch := TouchArea {
+        clicked => {
+            Logic.select-peer(root.endpoint-id);
+            State.page = "peer";
+            Logic.page-changed("peer");
+        }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 6px;
+        alignment: start;
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.online ? #7bd88f : #4a4a58;
+        }
+        Text {
+            text: root.label;
+            color: State.selected-id == root.endpoint-id ? white : #c8c8d0;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
 component AddPeerButton inherits Rectangle {
+    in property <bool> compact;
+
     border-radius: 6px;
     background: #37374a;
-    min-height: 34px;
+    min-height: root.compact ? 48px : 34px;
 
     touch := TouchArea {
         clicked => {
@@ -31,92 +112,27 @@ component AddPeerButton inherits Rectangle {
     }
 }
 
-component PeerButton inherits Rectangle {
-    in property <string> endpoint-id;
-    in property <string> label;
-    in property <bool> online;
-
-    border-radius: 6px;
-    background: State.page == "peer" && State.selected-id == self.endpoint-id
-        ? #4a5fd0
-        : transparent;
-    min-height: 34px;
-
-    touch := TouchArea {
-        clicked => {
-            Logic.select-peer(root.endpoint-id);
-            State.page = "peer";
-            Logic.page-changed("peer");
-        }
-        mouse-cursor: pointer;
-    }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 6px;
-
-        HorizontalLayout {
-            padding-left: 12px;
-            padding-right: 12px;
-            spacing: 6px;
-            alignment: start;
-
-            Rectangle {
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: root.online ? #7bd88f : #4a4a58;
-            }
-            Text {
-                text: root.label;
-                color: State.selected-id == root.endpoint-id ? white : #c8c8d0;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-        }
-    }
-}
-
-component NavBottomButton inherits Rectangle {
-    in property <string> label;
-    in property <string> key;
-    in property <bool> active;
-
-    border-radius: 6px;
-    background: active ? #37374a : transparent;
-    min-height: 34px;
-
-    touch := TouchArea {
-        clicked => {
-            State.page = root.key;
-            Logic.page-changed(root.key);
-        }
-        mouse-cursor: pointer;
-    }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        Text {
-            text: root.label;
-            color: root.active ? white : #c8c8d0;
-            vertical-alignment: center;
-        }
-    }
-}
-
 export component AppWindow inherits Window {
     title: "TunnelManager";
     background: #1b1b23;
-    preferred-width: 920px;
-    preferred-height: 640px;
-    min-width: 720px;
-    min-height: 520px;
+    // Single-pane layout (no sidebar) with a bottom nav instead.
+    property <bool> compact;
+
+    // On phones the OS gives us a small window; don't force desktop sizes.
+    preferred-width: State.touch ? 360px : 920px;
+    preferred-height: State.touch ? 720px : 640px;
+    min-width: State.touch ? 0px : 720px;
+    min-height: State.touch ? 0px : 520px;
+
+    // Responsive mode: no room for the fixed 210px sidebar. Driven purely
+    // by State.touch (Rust): binding it to the window width creates a
+    // layout binding loop, and the desktop window enforces min-width 720px.
+    compact: State.touch;
 
     VerticalLayout {
         HorizontalLayout {
-            // Sidebar
-            Rectangle {
+            // Sidebar: desktop + wide tablets only.
+            if !root.compact: Rectangle {
                 min-width: 210px;
                 max-width: 210px;
                 background: #20202b;
@@ -153,7 +169,7 @@ export component AppWindow inherits Window {
 
                     Rectangle { min-height: 6px; }
 
-                    AddPeerButton { }
+                    AddPeerButton { compact: false; }
 
                     if State.peers.length > 0: Rectangle { min-height: 6px; }
 
@@ -165,13 +181,14 @@ export component AppWindow inherits Window {
                                 endpoint-id: peer.endpoint-id;
                                 label: peer.name;
                                 online: peer.online;
+                                compact: false;
                             }
                         }
                     }
 
                     Rectangle { vertical-stretch: 1; }
 
-                    NavBottomButton { label: "Settings"; key: "settings"; active: State.page == "settings"; }
+                    NavButton { label: "Settings"; key: "settings"; active: State.page == "settings"; compact: false; }
 
                     Text {
                         text: State.presence-label;
@@ -195,6 +212,24 @@ export component AppWindow inherits Window {
                     width: 100%;
                     height: 100%;
                 }
+            }
+        }
+
+        // Bottom nav on compact layouts (phones): thumb-reachable, larger
+        // hit targets than the desktop sidebar.
+        if root.compact: Rectangle {
+            min-height: 64px;
+            max-height: 64px;
+            background: #20202b;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+
+                NavButton { label: "Peers"; key: "peer"; active: State.page == "peer"; compact: true; }
+                NavButton { label: "Add"; key: "add-peer"; active: State.page == "add-peer"; compact: true; }
+                NavButton { label: "⚙"; key: "settings"; active: State.page == "settings"; compact: true; }
             }
         }
     }

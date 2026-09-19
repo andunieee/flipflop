@@ -6,8 +6,8 @@ export component SettingsPage inherits Rectangle {
     background: transparent;
 
     VerticalLayout {
-        padding: 16px;
-        spacing: 14px;
+        padding: State.touch ? 12px : 16px;
+        spacing: State.touch ? 10px : 14px;
         alignment: start;
 
         PageTitle { label: "Settings"; }
@@ -19,7 +19,8 @@ export component SettingsPage inherits Rectangle {
             alignment: start;
             LineEdit {
                 text <=> State.my-name;
-                min-width: 260px;
+                min-width: State.touch ? 140px : 260px;
+                horizontal-stretch: 1;
             }
             Button {
                 text: "Set name";
@@ -28,9 +29,10 @@ export component SettingsPage inherits Rectangle {
         }
         HintText { label: "Peers will see this name when they discover or pair with you."; }
 
-        // Downloads
-        FieldLabel { label: "Downloads folder"; }
-        HorizontalLayout {
+        // Downloads: the folder picker is desktop-only. On Android received
+        // files land in the app-private downloads folder.
+        if !State.touch: FieldLabel { label: "Downloads folder"; }
+        if !State.touch: HorizontalLayout {
             spacing: 10px;
             alignment: start;
             Button { text: "Browse…"; clicked => { Logic.pick-downloads-dir(); } }
@@ -42,6 +44,9 @@ export component SettingsPage inherits Rectangle {
                 overflow: elide;
                 horizontal-stretch: 1;
             }
+        }
+        if State.touch: HintText {
+            label: "Received files are saved to the app's private folder; open them from the history list in a file manager.";
         }
 
         // Relay
