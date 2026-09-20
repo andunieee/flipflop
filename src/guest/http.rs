@@ -1,4 +1,6 @@
-//! The browser link's HTTP server: plain HTTP/1.1 on the local network.
+//! The browser link's HTTP server: plain HTTP/1.1 on the local network,
+//! and the same over iroh for the page on the web (`web/`), which reaches us
+//! through the relay: there each bidirectional stream carries one exchange.
 //!
 //! Every path starts with the session's random token; anything else is a
 //! 404, so the server answers nobody who wasn't given the link.
@@ -24,6 +26,8 @@ use hyper::body::{Frame, Incoming, SizeHint};
 use hyper::header::{self, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use iroh::endpoint::Connection;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
@@ -51,20 +55,41 @@ pub(super) async fn serve(listener: TcpListener, shared: Arc<Shared>) {
                         continue;
                     }
                 };
-                let shared = shared.clone();
-                connections.spawn(async move {
-                    let service = hyper::service::service_fn(move |req| {
-                        let shared = shared.clone();
-                        async move { Ok::<_, Infallible>(route(&shared, req).await) }
-                    });
-                    let _ = hyper::server::conn::http1::Builder::new()
-                        .serve_connection(TokioIo::new(stream), service)
-                        .await;
-                });
+                connections.spawn(serve_io(stream, shared.clone()));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
     }
+}
+
+/// Serve the web page's connection until it closes or the task is dropped.
+pub(super) async fn serve_tunnel(conn: Connection, shared: Arc<Shared>) {
+    let mut streams = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            accepted = conn.accept_bi() => {
+                let Ok((send, recv)) = accepted else { break };
+                streams.spawn(serve_io(tokio::io::join(recv, send), shared.clone()));
+            }
+            Some(_) = streams.join_next(), if !streams.is_empty() => {}
+        }
+    }
+}
+
+async fn serve_io<T>(io: T, shared: Arc<Shared>)
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let service = hyper::service::service_fn(move |req| {
+        let shared = shared.clone();
+        async move { Ok::<_, Infallible>(route(&shared, req).await) }
+    });
+    // The web page finishes its side of a stream once the request is sent,
+    // which hyper would otherwise take for the connection closing.
+    let _ = hyper::server::conn::http1::Builder::new()
+        .half_close(true)
+        .serve_connection(TokioIo::new(io), service)
+        .await;
 }
 
 // --------------------------------------------------------------- bodies

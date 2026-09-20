@@ -549,16 +549,32 @@ component GuestQr inherits Rectangle {
     }
 }
 
+// Which link to show: one for this network, or one that works anywhere.
+component GuestLinkKind inherits HorizontalLayout {
+    spacing: Theme.space-1;
+    alignment: start;
+    // Declaration order is display order, whichever of a pair is shown.
+    if !State.guest-web: SecondaryButton { label: "Same Wi-Fi"; }
+    if State.guest-web: GhostButton { label: "Same Wi-Fi"; clicked => { Logic.guest-set-web(false); } }
+    if State.guest-web: SecondaryButton { label: "Anywhere"; }
+    if !State.guest-web: GhostButton { label: "Anywhere"; clicked => { Logic.guest-set-web(true); } }
+}
+
 // The link itself: copy it, or switch to another of our addresses.
 component GuestLinkDetails inherits VerticalLayout {
     spacing: Theme.space-3;
 
     SectionHeader { label: "Browser link"; icon: Icons.globe; }
+    GuestLinkKind { }
     HintText {
-        label: "Open it in any browser on the same Wi-Fi (or your hotspot). Whoever has the link can send and receive here until you close it.";
+        label: State.guest-web
+            ? "Open it in any browser, anywhere: it reaches this device over the internet, end-to-end encrypted. Whoever has the link can send and receive here until you close it."
+            : "Open it in any browser on the same Wi-Fi (or your hotspot). Whoever has the link can send and receive here until you close it.";
     }
     if State.guest-url == "": StatusText {
-        label: "No local network found. Connect to Wi-Fi or turn on your hotspot.";
+        label: State.guest-web
+            ? "Not connected to the internet yet. The relay must be on (Settings)."
+            : "No local network found. Connect to Wi-Fi or turn on your hotspot.";
         error: true;
     }
     if State.guest-url != "": HorizontalLayout {

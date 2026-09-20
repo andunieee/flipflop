@@ -228,6 +228,14 @@ fn main() {
 
     show_guest(&state);
     render(&window, desktop, &out.join("guest.ppm"));
+    let web_url = "https://andunieee.github.io/flipflop/#t=n3rp36io3ncgwvbr7wzq&e=ae9a9cc0cc827c4e764969d70f936f5ba53be4e2280aa2e31cb878c6fb92c947&r=https%3A%2F%2Fuse1-1.relay.n0.iroh.link.%2F";
+    state.set_guest_web(true);
+    state.set_guest_url(web_url.into());
+    state.set_guest_qr(slint::Image::from_rgb8(flipflop::qr::render(web_url).expect("qr")));
+    state.set_guest_more_addresses(false);
+    render(&window, desktop, &out.join("guest-web.ppm"));
+    state.set_guest_web(false);
+    show_guest(&state);
     state.set_guest_url("".into());
     state.set_guest_more_addresses(false);
     render(&window, desktop, &out.join("guest-no-network.ppm"));

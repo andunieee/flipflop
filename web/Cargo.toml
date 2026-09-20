@@ -1,0 +1,35 @@
+# The browser link's page on the web: iroh in wasm, carrying the page's
+# requests to the app through the relay. Built and published to GitHub
+# Pages by .github/workflows/pages.yml; see web/build.sh.
+[package]
+name = "flipflop-web"
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# Not part of the app's build.
+[workspace]
+
+[dependencies]
+iroh = { version = "1", default-features = false, features = ["tls-ring"] }
+# Exact: the wasm-bindgen CLI that generates the JS glue must match it.
+wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["AbortSignal", "Blob"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+httparse = "1"
+tracing-wasm = "0.2"
+tracing = "0.1"
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = false
+strip = true
