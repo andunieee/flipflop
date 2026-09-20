@@ -14,7 +14,7 @@ use slint::platform::software_renderer::{
 };
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, VecModel};
-use flipflop::{AppRow, AppWindow, HistoryRow, OutboxRow, PeerRow, State, TransferRow};
+use flipflop::{AppRow, AppWindow, HistoryRow, OutboxRow, PeerRow, QuickOffer, State, TransferRow};
 
 struct Headless(Rc<MinimalSoftwareWindow>);
 
@@ -131,6 +131,37 @@ fn populate(state: &State<'_>) {
             ..Default::default()
         },
     ]));
+    let device = |id: &str, name: &str, initials: &str| PeerRow {
+        endpoint_id: id.into(),
+        name: name.into(),
+        initials: initials.into(),
+        detail: "On your local network".into(),
+        is_suggestion: true,
+        online: true,
+        ..Default::default()
+    };
+    state.set_nearby_devices(model(vec![
+        device("n", "raspberrypi", "R"),
+        device("m", "Marta's laptop", "ML"),
+    ]));
+    state.set_quick_incoming(model(vec![QuickOffer {
+        key: "offer-1".into(),
+        sender: "Marta's laptop".into(),
+        initials: "ML".into(),
+        title: "boarding-pass.pdf".into(),
+        size: "412 KB".into(),
+    }]));
+    state.set_quick_transfers(model(vec![TransferRow {
+        key: "send-9".into(),
+        peer_id: "n".into(),
+        sending: true,
+        active: true,
+        quick: true,
+        title: "slides.pdf to raspberrypi".into(),
+        status: "Waiting for raspberrypi to accept…".into(),
+        progress_label: "2.4 MB".into(),
+        ..Default::default()
+    }]));
     state.set_my_ticket(
         "pairab3xkq7lmz2vcd9u4ohw6gtnr5yfej8si0pq1x3b7m2kz9u5c4wv8hd6tn0ry3jf7".into(),
     );
@@ -146,31 +177,30 @@ fn populate(state: &State<'_>) {
 fn show_guest(state: &State<'_>) {
     let url = "http://192.168.1.5:53530/n3rp36io3ncgwvbr7wzq";
     let qr = flipflop::qr::render(url).expect("qr");
-    state.set_guest_active(true);
     state.set_guest_url(url.into());
     state.set_guest_qr(slint::Image::from_rgb8(qr));
     state.set_guest_more_addresses(true);
+    state.set_guest_upload(false);
+    let link = PeerRow {
+        endpoint_id: "browser-n3rp36io".into(),
+        name: "Browser 1".into(),
+        detail: "Safari on iPhone · Same Wi-Fi · download only".into(),
+        online: true,
+        guest: true,
+        ..Default::default()
+    };
     let mut peers: Vec<PeerRow> = state.get_peers().iter().collect();
-    peers.insert(
-        0,
-        PeerRow {
-            endpoint_id: "browser".into(),
-            name: "Browser".into(),
-            detail: "Safari on iPhone".into(),
-            online: true,
-            guest: true,
-            ..Default::default()
-        },
-    );
+    peers.insert(0, link.clone());
     state.set_peers(model(peers));
-    state.set_selected_id("browser".into());
-    state.set_selected_name("Browser".into());
+    state.set_links(model(vec![link]));
+    state.set_selected_id("browser-n3rp36io".into());
+    state.set_selected_name("Browser 1".into());
     state.set_selected_initials("".into());
-    state.set_selected_detail("Safari on iPhone".into());
+    state.set_selected_detail("Safari on iPhone · Same Wi-Fi · download only".into());
     state.set_selected_guest(true);
     state.set_visible_transfers(model(vec![TransferRow {
         key: "send-1".into(),
-        peer_id: "browser".into(),
+        peer_id: "browser-n3rp36io".into(),
         sending: true,
         active: true,
         title: "holiday.mp4".into(),
@@ -216,10 +246,17 @@ fn main() {
     ui.show().unwrap();
 
     let desktop = (1040, 720);
-    for page in ["peer", "add-peer", "settings"] {
+    for page in ["peer", "add-peer", "settings", "quick-share", "share-link"] {
         state.set_page(page.into());
         render(&window, desktop, &out.join(format!("{page}.ppm")));
     }
+
+    state.set_page("share-link".into());
+    state.set_link_receive(true);
+    state.set_link_web(true);
+    render(&window, desktop, &out.join("share-link-receive.ppm"));
+    state.set_link_receive(false);
+    state.set_link_web(false);
 
     state.set_page("peer".into());
     state.set_toast_text("Files from my-phone saved".into());
@@ -230,6 +267,7 @@ fn main() {
     render(&window, desktop, &out.join("guest.ppm"));
     let web_url = "https://andunieee.github.io/flipflop/#t=n3rp36io3ncgwvbr7wzq&e=ae9a9cc0cc827c4e764969d70f936f5ba53be4e2280aa2e31cb878c6fb92c947&r=https%3A%2F%2Fuse1-1.relay.n0.iroh.link.%2F";
     state.set_guest_web(true);
+    state.set_guest_upload(true);
     state.set_guest_url(web_url.into());
     state.set_guest_qr(slint::Image::from_rgb8(flipflop::qr::render(web_url).expect("qr")));
     state.set_guest_more_addresses(false);
@@ -257,10 +295,12 @@ fn main() {
     ui.set_preview_inset_bottom(48.0);
     let phone = (412, 860);
     state.set_peer_open(true);
-    for page in ["peer", "add-peer", "settings"] {
+    for page in ["peer", "add-peer", "settings", "share"] {
         state.set_page(page.into());
         render(&window, phone, &out.join(format!("phone-{page}.ppm")));
     }
+    // The whole sharing page, unscrolled.
+    render(&window, (412, 2000), &out.join("phone-share-full.ppm"));
 
     // Phone: the peer list (Peers tab top level), then a peer's own screen,
     // both with files shared in from another app.

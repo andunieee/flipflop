@@ -1,5 +1,5 @@
 import { State, Logic, PeerRow } from "globals.slint";
-import { Theme, Avatar, Icon, Icons, PageTitle, ScrollView } from "components.slint";
+import { Theme, Avatar, Icon, Icons, PageTitle, SecondaryButton, ScrollView } from "components.slint";
 import { EmptyPeersCard, OutboxCard } from "peer-page.slint";
 
 // One peer; opens its page.
@@ -81,9 +81,24 @@ export component PeersListPage inherits Rectangle {
             spacing: Theme.space-3;
             alignment: start;
 
-            PageTitle {
-                title: "Peers";
-                subtitle: State.peers.length == 0 ? "" : State.presence-label;
+            HorizontalLayout {
+                spacing: Theme.space-3;
+                PageTitle {
+                    horizontal-stretch: 1;
+                    title: "Peers";
+                    subtitle: State.peers.length == 0 ? "" : State.presence-label;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    SecondaryButton {
+                        label: "Add peer";
+                        icon: Icons.add-peer;
+                        clicked => {
+                            State.page = "add-peer";
+                            Logic.page-changed("add-peer");
+                        }
+                    }
+                }
             }
 
             if State.outbox-count > 0: OutboxCard { }

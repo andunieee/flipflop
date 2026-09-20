@@ -2,8 +2,10 @@
 //! and the same over iroh for the page on the web (`web/`), which reaches us
 //! through the relay: there each bidirectional stream carries one exchange.
 //!
-//! Every path starts with the session's random token; anything else is a
-//! 404, so the server answers nobody who wasn't given the link.
+//! Every path starts with a link's random token; anything else is a 404, so
+//! the server answers nobody who wasn't given a link. A link only answers
+//! over the transport it was made for (LAN or web), and the upload routes
+//! only while it allows uploads (403 otherwise).
 //!
 //! - `GET  /<token>/`                   the page
 //! - `GET  /<token>/api/state?v=<n>`    what's offered, long-polled until it changes from `n`
@@ -31,7 +33,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-use super::Shared;
+use std::sync::Mutex;
+
+use super::Hub;
 
 /// How long a state request waits for something to change.
 const LONG_POLL: Duration = Duration::from_secs(25);
@@ -42,7 +46,7 @@ const PAGE: &str = include_str!("page.html");
 
 /// Accept connections until the task is dropped; dropping it also drops
 /// every connection.
-pub(super) async fn serve(listener: TcpListener, shared: Arc<Shared>) {
+pub(super) async fn serve(listener: TcpListener, hub: Arc<Mutex<Hub>>) {
     let mut connections = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
@@ -55,7 +59,7 @@ pub(super) async fn serve(listener: TcpListener, shared: Arc<Shared>) {
                         continue;
                     }
                 };
-                connections.spawn(serve_io(stream, shared.clone()));
+                connections.spawn(serve_io(stream, hub.clone(), false));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
@@ -63,26 +67,27 @@ pub(super) async fn serve(listener: TcpListener, shared: Arc<Shared>) {
 }
 
 /// Serve the web page's connection until it closes or the task is dropped.
-pub(super) async fn serve_tunnel(conn: Connection, shared: Arc<Shared>) {
+pub(super) async fn serve_tunnel(conn: Connection, hub: Arc<Mutex<Hub>>) {
     let mut streams = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
             accepted = conn.accept_bi() => {
                 let Ok((send, recv)) = accepted else { break };
-                streams.spawn(serve_io(tokio::io::join(recv, send), shared.clone()));
+                streams.spawn(serve_io(tokio::io::join(recv, send), hub.clone(), true));
             }
             Some(_) = streams.join_next(), if !streams.is_empty() => {}
         }
     }
 }
 
-async fn serve_io<T>(io: T, shared: Arc<Shared>)
+/// `web`: the connection came through the web page's tunnel.
+async fn serve_io<T>(io: T, hub: Arc<Mutex<Hub>>, web: bool)
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let service = hyper::service::service_fn(move |req| {
-        let shared = shared.clone();
-        async move { Ok::<_, Infallible>(route(&shared, req).await) }
+        let hub = hub.clone();
+        async move { Ok::<_, Infallible>(route(&hub, web, req).await) }
     });
     // The web page finishes its side of a stream once the request is sent,
     // which hyper would otherwise take for the connection closing.
@@ -213,12 +218,14 @@ fn query_param<'a>(req: &'a Request<Incoming>, key: &str) -> Option<&'a str> {
         .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
 }
 
-async fn route(shared: &Arc<Shared>, req: Request<Incoming>) -> Reply {
+async fn route(hub: &Mutex<Hub>, web: bool, req: Request<Incoming>) -> Reply {
     let path = req.uri().path().to_string();
     let mut parts = path.trim_start_matches('/').split('/');
-    if !shared.token_matches(parts.next().unwrap_or_default()) {
+    let token = parts.next().unwrap_or_default();
+    let Some(shared) = hub.lock().unwrap().by_token(token, web) else {
         return not_found();
-    }
+    };
+    let shared = &shared;
     let user_agent = req
         .headers()
         .get(header::USER_AGENT)
@@ -229,6 +236,13 @@ async fn route(shared: &Arc<Shared>, req: Request<Incoming>) -> Reply {
     let rest: Vec<&str> = parts.collect();
     let method = req.method().clone();
     let id = |i: usize| rest.get(i).and_then(|s| s.parse::<u64>().ok());
+    let uploading = matches!(
+        (&method, rest.first()),
+        (&Method::POST | &Method::PUT, Some(&"api")) if rest.get(1) != Some(&"cancel")
+    );
+    if uploading && !shared.can_upload() {
+        return error(StatusCode::FORBIDDEN, "Sending here is turned off");
+    }
 
     match (&method, rest.as_slice()) {
         (&Method::GET, [] | [""]) => {

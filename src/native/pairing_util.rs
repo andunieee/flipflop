@@ -50,6 +50,52 @@ pub fn emit_paired_invite_received(
     let _ = handle.emit_event_with_payload("paired-invite-received", &payload.to_string());
 }
 
+/// Emit `quick-share-received` (an incoming one-off share to accept) or
+/// `quick-share-declined` (the receiver turned ours down) for a
+/// `QuickShare` / `QuickShareDeclined` message from `remote_endpoint_id`.
+pub fn emit_quick_share_message(
+    app_handle: &AppHandle,
+    remote_endpoint_id: &str,
+    message: &crate::protocol::ControlMessage,
+) {
+    use crate::protocol::ControlMessage;
+    let Some(handle) = app_handle else {
+        return;
+    };
+    let (event, payload) = match message {
+        ControlMessage::QuickShare {
+            id,
+            blob_ticket,
+            file_count,
+            total_size,
+            title,
+            sender_name,
+            device_type,
+        } => (
+            "quick-share-received",
+            serde_json::json!({
+                "id": id,
+                "blob_ticket": blob_ticket,
+                "file_count": file_count,
+                "total_size": total_size,
+                "title": title,
+                "sender_name": sender_name,
+                "device_type": device_type,
+                "remote_endpoint_id": remote_endpoint_id,
+            }),
+        ),
+        ControlMessage::QuickShareDeclined { id } => (
+            "quick-share-declined",
+            serde_json::json!({
+                "id": id,
+                "remote_endpoint_id": remote_endpoint_id,
+            }),
+        ),
+        _ => return,
+    };
+    let _ = handle.emit_event_with_payload(event, &payload.to_string());
+}
+
 /// Emit `device-paired` with the peer's id and name, so the shell can name
 /// the device in a notification and open its page.
 pub fn emit_device_paired(app_handle: &AppHandle, endpoint_id: &str, display_name: &str) {

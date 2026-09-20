@@ -99,13 +99,13 @@
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" aria-hidden="true" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5fd0ff"/><stop offset="1" stop-color="#2f86ff"/></linearGradient><radialGradient id="h" cx="0.3" cy="0.2" r="0.8"><stop offset="0" stop-color="#fff" stop-opacity="0.25"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><rect width="96" height="96" rx="27" fill="url(#g)"/><rect width="96" height="96" rx="27" fill="url(#h)"/><g transform="translate(12 12) scale(3)"><path transform="rotate(-22 12 12)" d="M12 2.6C15.6 2.6 17.4 5.4 17.2 8.8C17 11.6 15.8 13 15.9 15.8C16 19 14.6 21.4 11.9 21.4C9.3 21.4 8 19.2 8.1 16.2C8.2 13.3 6.8 11.6 6.8 8.8C6.8 5.3 8.6 2.6 12 2.6Z" fill="#fff"/><g transform="rotate(-22 12 12)" fill="none" stroke="#ff5a5f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.7 12.6C8.7 9.7 10.3 7.6 12.1 6.5C13.9 7.6 15.3 9.7 16.2 12.4"/><circle cx="12.1" cy="6.5" r="0.4"/></g></g></svg>
     <div>
       <h1 id="title">flipflop</h1>
-      <p class="sub">Swap files and text with this device, right from your browser.</p>
+      <p class="sub" id="sub">Swap files and text with this device, right from your browser.</p>
     </div>
   </header>
 
   <div class="banner" id="banner"></div>
 
-  <section class="card">
+  <section class="card" id="send-card">
     <h2 id="send-title">Send</h2>
     <div class="drop" id="drop" role="button" tabindex="0">
       <strong>Choose files</strong>
@@ -121,7 +121,7 @@
     <div class="list" id="uploads" style="margin-top:12px"></div>
   </section>
 
-  <section class="card">
+  <section class="card" id="recv-card">
     <h2 id="recv-title">Received</h2>
     <div class="list" id="items"><div class="empty">Nothing yet. What they send shows up here.</div></div>
   </section>
@@ -138,6 +138,8 @@ const remote = link.has("t");
 const base = "/" + (remote ? link.get("t") : "{{TOKEN}}") + "/";
 let version = null;
 let deviceName = "";
+// The link lets us send files and text (older apps don't say: they always did).
+let canUpload = true;
 const $ = (id) => document.getElementById(id);
 
 function el(tag, attrs, ...children) {
@@ -393,6 +395,18 @@ function renderItems(items) {
   }
 }
 
+// The send form only while the link takes uploads; the downloads whenever
+// there is something, or nothing else to show.
+function showAccess(upload, anyItems) {
+  canUpload = upload;
+  $("send-card").hidden = !upload;
+  $("recv-card").hidden = upload && !anyItems;
+  $("sub").textContent = upload
+    ? (anyItems ? "Swap files and text with this device, right from your browser."
+                : "Send files and text to this device, right from your browser.")
+    : "Download what this device shares with you, right from your browser.";
+}
+
 async function poll() {
   let failures = 0;
   for (;;) {
@@ -414,6 +428,7 @@ async function poll() {
         $("recv-title").textContent = "From " + deviceName;
       }
       renderItems(state.items);
+      showAccess(state.upload !== false, state.items.length > 0);
     } catch (e) {
       failures++;
       if (remote && String(e).includes("no browser link")) {
@@ -449,13 +464,13 @@ function sendText() {
       button.textContent = "Sent";
       setTimeout(() => { button.textContent = "Send text"; }, 1600);
     })
-    .catch(() => alert("The text could not be sent."))
+    .catch(() => alert(canUpload ? "The text could not be sent." : "Sending here was turned off."))
     .finally(() => { button.disabled = !$("text").value.trim(); });
 }
 
 function enqueue(files) {
   files = files.filter((f) => f.file.size >= 0);
-  if (!files.length) return;
+  if (!files.length || !canUpload) return;
   const total = files.reduce((n, f) => n + f.file.size, 0);
   const title = files.length === 1 ? files[0].name.split("/").pop() : files.length + " files";
   const status = el("div", { class: "meta" }, "Waiting…");
@@ -501,7 +516,8 @@ async function put(job, index, done) {
   }
   const text = await res.text();
   if (res.status !== 200) {
-    throw new Error(res.status === 410 ? "Cancelled on " + deviceName : (text || "Failed"));
+    throw new Error(res.status === 410 ? "Cancelled on " + deviceName
+      : res.status === 403 ? "Sending here was turned off" : (text || "Failed"));
   }
 }
 

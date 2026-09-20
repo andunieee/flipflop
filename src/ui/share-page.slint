@@ -1,0 +1,468 @@
+// Sharing beyond paired peers: Quick share (a flipflop device nearby,
+// without pairing) and browser links (someone without flipflop). Desktop has
+// a page for each; phones put both on one page.
+
+import { State, Logic, PeerRow, QuickOffer } from "globals.slint";
+import {
+    Theme, Card, HintText, SectionHeader, PageTitle, Avatar, Icon, Icons, Overline,
+    PrimaryButton, SecondaryButton, GhostButton, ScrollView,
+} from "components.slint";
+import { Composer, TransferCard } from "peer-page.slint";
+
+// What the next quick share or link sends.
+component WhatToSendCard inherits Card {
+    in property <string> hint;
+    border-color: State.outbox-count > 0 ? Theme.accent-border : Theme.border;
+
+    public function commit() {
+        composer.commit();
+    }
+
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+
+        HorizontalLayout {
+            SectionHeader { label: "What to send"; icon: Icons.send; }
+            if State.outbox-count > 0: GhostButton { label: "Clear"; clicked => { Logic.outbox-clear(); } }
+        }
+        if root.hint != "": HintText { label: root.hint; }
+        composer := Composer { }
+    }
+}
+
+component IncomingButtons inherits HorizontalLayout {
+    in property <QuickOffer> offer;
+    spacing: Theme.space-1;
+    VerticalLayout {
+        alignment: center;
+        GhostButton { label: "Decline"; clicked => { Logic.quick-decline(root.offer.key); } }
+    }
+    VerticalLayout {
+        alignment: center;
+        PrimaryButton { label: "Accept"; clicked => { Logic.quick-accept(root.offer.key); } }
+    }
+}
+
+// A quick share someone nearby offered us.
+component IncomingRow inherits Rectangle {
+    in property <QuickOffer> offer;
+
+    border-radius: Theme.radius;
+    background: Theme.accent-soft;
+    border-width: 1px;
+    border-color: Theme.accent-border;
+
+    VerticalLayout {
+        padding: Theme.space-2 + 2px;
+        padding-left: Theme.space-3;
+        spacing: Theme.space-2;
+
+        HorizontalLayout {
+            spacing: Theme.space-3;
+
+            VerticalLayout {
+                alignment: center;
+                Avatar { initials: root.offer.initials; size: 34px; tint: Theme.accent; ink: white; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: root.offer.sender + " wants to send you";
+                    color: Theme.accent-text;
+                    font-size: Theme.font-xs;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.offer.title + " · " + root.offer.size;
+                    color: Theme.text-strong;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+            }
+            if !State.touch: IncomingButtons { offer: root.offer; }
+        }
+        // Phones: under the name, which needs the width.
+        if State.touch: HorizontalLayout {
+            alignment: end;
+            IncomingButtons { offer: root.offer; }
+        }
+    }
+}
+
+component IncomingCard inherits Card {
+    border-color: Theme.accent-border;
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+        SectionHeader { label: "Incoming"; icon: Icons.inbox; }
+        HintText { label: "Only this download is accepted; they don't become a peer."; }
+        for offer in State.quick-incoming: IncomingRow { offer: offer; }
+    }
+}
+
+component DeviceRow inherits Rectangle {
+    in property <PeerRow> device;
+    in property <bool> can-send;
+    callback send(string);
+
+    border-radius: Theme.radius;
+    background: Theme.inset-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding: Theme.space-2 + 2px;
+        padding-left: Theme.space-3;
+        spacing: Theme.space-3;
+
+        VerticalLayout {
+            alignment: center;
+            Avatar { initials: root.device.initials; size: 34px; tint: Theme.chip-bg-hover; ink: Theme.text; }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.device.name;
+                color: Theme.text-strong;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: root.device.detail;
+                color: Theme.text-muted;
+                font-size: Theme.font-xs;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            PrimaryButton {
+                label: "Send";
+                icon: Icons.send;
+                enabled: root.can-send;
+                clicked => { root.send(root.device.endpoint-id); }
+            }
+        }
+    }
+}
+
+// flipflop devices around, each a Send away.
+component NearbyCard inherits Card {
+    in property <string> title: "Send to a device nearby";
+    callback send(string);
+    // Something to send is in the composer.
+    property <bool> has-content: State.paste-input != "" || State.outbox-count > 0;
+
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+
+        SectionHeader { label: root.title; icon: Icons.nearby; }
+        HintText {
+            label: root.has-content
+                ? "flipflop devices on your network. They're asked to accept this one share; nothing gets paired."
+                : "Add something to send first. flipflop devices on your network are listed here.";
+        }
+        if State.nearby-note != "": HintText { label: State.nearby-note; }
+        if State.nearby-devices.length == 0: Rectangle {
+            height: 56px;
+            border-radius: Theme.radius;
+            border-width: 1px;
+            border-color: Theme.border;
+            Text {
+                text: "Looking for devices…";
+                color: Theme.text-faint;
+                font-size: Theme.font-sm;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        for device in State.nearby-devices: DeviceRow {
+            device: device;
+            can-send: root.has-content;
+            send(id) => { root.send(id); }
+        }
+    }
+}
+
+// One of two choices, as a tappable card.
+component OptionCard inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <image> icon;
+    in property <bool> selected;
+    callback clicked;
+
+    // Pairs share the row evenly, whatever their text.
+    horizontal-stretch: 1;
+    preferred-width: 120px;
+    min-width: 0;
+    border-radius: Theme.radius;
+    background: root.selected ? Theme.accent-soft
+        : ta.has-hover ? Theme.card-bg-hover
+        : Theme.inset-bg;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.accent : Theme.border;
+    animate background { duration: 90ms; }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    VerticalLayout {
+        padding: Theme.space-3;
+        spacing: Theme.space-1;
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    source: root.icon;
+                    size: 18px;
+                    tint: root.selected ? Theme.accent-text : Theme.text-muted;
+                }
+            }
+            Text {
+                text: root.title;
+                color: Theme.text-strong;
+                font-weight: 650;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: root.subtitle;
+            color: Theme.text-muted;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// A new browser link: where the other person is, and what it's for.
+component LinkCreateCard inherits Card {
+    // Has its own "what to send" (desktop); phones share the page's.
+    in property <bool> with-composer: true;
+    callback create();
+    // Something to send is in the composer.
+    property <bool> has-content: State.paste-input != "" || State.outbox-count > 0;
+
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+
+        SectionHeader { label: "New browser link"; icon: Icons.globe; }
+        HintText { label: "For someone without flipflop: they open the link in any browser, no app needed."; }
+
+        Overline { label: "WHERE ARE THEY?"; }
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            OptionCard {
+                title: "Same Wi-Fi";
+                subtitle: "On this network or your hotspot";
+                icon: Icons.nearby;
+                selected: !State.link-web;
+                clicked => { State.link-web = false; }
+            }
+            OptionCard {
+                title: "Anywhere";
+                subtitle: "Over the internet, end-to-end encrypted";
+                icon: Icons.globe;
+                selected: State.link-web;
+                clicked => { State.link-web = true; }
+            }
+        }
+
+        Overline { label: "WHAT FOR?"; }
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            OptionCard {
+                title: "Send";
+                subtitle: "They download what you add";
+                icon: Icons.arrow-up;
+                selected: !State.link-receive;
+                clicked => { State.link-receive = false; }
+            }
+            OptionCard {
+                title: "Receive";
+                subtitle: "They send you files and text";
+                icon: Icons.arrow-down;
+                selected: State.link-receive;
+                clicked => { State.link-receive = true; }
+            }
+        }
+
+        if !State.link-receive && root.with-composer: VerticalLayout {
+            spacing: Theme.space-3;
+            Overline { label: "WHAT TO SEND"; }
+            Composer { }
+        }
+        if !State.link-receive && !root.with-composer: HintText {
+            label: root.has-content
+                ? "The link offers what's in “What to send” above."
+                : "Add something to “What to send” above first.";
+        }
+
+        HintText {
+            label: State.link-receive
+                ? "The page can only send you things. Turn that off, or offer them files, from the link's page."
+                : "The page can only download. Let them send you files too from the link's page.";
+        }
+
+        HorizontalLayout {
+            alignment: State.touch ? stretch : end;
+            PrimaryButton {
+                label: "Create link";
+                icon: Icons.link;
+                enabled: State.link-receive || root.has-content;
+                clicked => { root.create(); }
+            }
+        }
+    }
+}
+
+component LinkRow inherits Rectangle {
+    in property <PeerRow> link;
+
+    height: State.touch ? 60px : 52px;
+    border-radius: Theme.radius;
+    background: ta.pressed ? Theme.chip-bg-hover : ta.has-hover ? Theme.card-bg-hover : Theme.inset-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    animate background { duration: 90ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            Logic.select-peer(root.link.endpoint-id);
+            State.page = "peer";
+            State.peer-open = true;
+            Logic.page-changed("peer");
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-2;
+        spacing: Theme.space-3;
+        VerticalLayout {
+            alignment: center;
+            Avatar { icon: Icons.globe; size: 32px; show-presence: true; online: root.link.online; }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.link.name;
+                color: Theme.text-strong;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: root.link.detail;
+                color: Theme.text-muted;
+                font-size: Theme.font-xs;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.chevron-right; size: 18px; tint: Theme.text-faint; }
+        }
+    }
+}
+
+component OpenLinksCard inherits Card {
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-2;
+        SectionHeader { label: "Open links"; icon: Icons.link; }
+        HintText { label: "Open one to show its QR code, send more, or let them send you files."; }
+        for link in State.links: LinkRow { link: link; }
+    }
+}
+
+// Desktop: Quick share.
+export component QuickSharePage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-4;
+            alignment: start;
+
+            PageTitle {
+                title: "Quick share";
+                subtitle: "Send to a flipflop device nearby without adding it as a peer.";
+            }
+            if State.quick-incoming.length > 0: IncomingCard { }
+            what := WhatToSendCard { }
+            NearbyCard {
+                send(id) => {
+                    what.commit();
+                    Logic.quick-send(id);
+                }
+            }
+            for transfer in State.quick-transfers: TransferCard { transfer: transfer; }
+        }
+    }
+}
+
+// Desktop: Share via link.
+export component ShareLinkPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-4;
+            alignment: start;
+
+            PageTitle {
+                title: "Share via link";
+                subtitle: "A temporary page for someone without flipflop. Make as many as you like.";
+            }
+            LinkCreateCard { create => { Logic.link-create(); } }
+            if State.links.length > 0: OpenLinksCard { }
+        }
+    }
+}
+
+// Phones: both, sharing one "what to send".
+export component PhoneSharePage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-4;
+            alignment: start;
+
+            PageTitle {
+                title: "Share";
+                subtitle: "With a device nearby, or anyone through a browser link. Nothing gets paired.";
+            }
+            if State.quick-incoming.length > 0: IncomingCard { }
+            what := WhatToSendCard { }
+            NearbyCard {
+                title: "Quick share nearby";
+                send(id) => {
+                    what.commit();
+                    Logic.quick-send(id);
+                }
+            }
+            for transfer in State.quick-transfers: TransferCard { transfer: transfer; }
+            LinkCreateCard {
+                with-composer: false;
+                create => {
+                    what.commit();
+                    Logic.link-create();
+                }
+            }
+            if State.links.length > 0: OpenLinksCard { }
+        }
+    }
+}

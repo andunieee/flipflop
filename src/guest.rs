@@ -1,20 +1,24 @@
-//! Browser link: a temporary web page on the local network, so someone
-//! without flipflop can swap files and text with us from any browser.
+//! Browser links: temporary web pages, so someone without flipflop can swap
+//! files and text with us from any browser.
 //!
-//! While a link is open the guest shows up as one more peer, "Browser", with
-//! the usual send card, transfer cards and history. What we send becomes an
-//! offer on the web page for the browser to download; what the page uploads
-//! is saved like a peer's files, in `<downloads>/Browser`. Nothing is paired
-//! or remembered: ending the link stops the server and withdraws whatever
-//! wasn't downloaded yet. The link itself is the key, a random token in its
-//! path; there are no prompts.
+//! Any number of links can be open at once. Each shows up as one more peer,
+//! "Browser 1", "Browser 2"…, with the usual send card, transfer cards and
+//! history. What we send becomes an offer on its page for the browser to
+//! download; what the page uploads is saved like a peer's files, in
+//! `<downloads>/Browser`, but only while the link allows uploads: a link
+//! made for sending starts without, one made for receiving with, and either
+//! can be switched later. Nothing is paired or remembered: ending a link
+//! withdraws whatever wasn't downloaded yet. A link's key is a random token
+//! in its path; there are no prompts.
 //!
-//! The link comes in two forms. On the same network, the page is served
-//! from here over plain HTTP. From anywhere else, it is a static page on the
-//! web ([`WEB_PAGE`], built from `web/`) that runs iroh in the browser and
-//! reaches us through our home relay, carrying the same HTTP requests
-//! (`http::serve_tunnel`). Its URL holds the token and our address in the
-//! fragment, which browsers never send to the page's host.
+//! A link is made for one of two places, and only answers there. On the
+//! same network, the page is served from here over plain HTTP. From anywhere
+//! else, it is a static page on the web ([`WEB_PAGE`], built from `web/`)
+//! that runs iroh in the browser and reaches us through our home relay,
+//! carrying the same HTTP requests (`http::serve_tunnel`). Its URL holds the
+//! token and our address in the fragment, which browsers never send to the
+//! page's host. One server and one tunnel serve every open link, and stop
+//! with the last one.
 //!
 //! The server only runs while the app does (no Android foreground service).
 
@@ -48,9 +52,12 @@ use crate::transfers::{self, PASTE_FILE_NAME, PASTE_MAX_BYTES};
 use crate::{android, AppWindow, Logic, PeerRow, State, TransferRow};
 use http::Reply;
 
-/// The guest's peer id: its transfer rows and history entries carry it.
-pub(crate) const GUEST_ID: &str = "browser";
-const GUEST_NAME: &str = "Browser";
+/// Peer ids of links start with this (`browser-<token prefix>`); their
+/// transfer rows and history entries carry them. Older history used just
+/// `browser`.
+const GUEST_ID_PREFIX: &str = "browser";
+/// Where every link's uploads are saved, under the downloads folder.
+const GUEST_FOLDER: &str = "Browser";
 
 /// The page on the web: `src/guest/page.html` plus iroh in wasm (`web/`),
 /// published to GitHub Pages by `.github/workflows/pages.yml`.
@@ -69,45 +76,67 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 const CHUNK: usize = 256 * 1024;
 
 pub(crate) fn is_guest(peer_id: &str) -> bool {
-    peer_id == GUEST_ID
+    peer_id.starts_with(GUEST_ID_PREFIX)
 }
 
-/// The open browser link, if any. Shared through `AppCtx`.
+/// The open browser links. Shared through `AppCtx`.
 #[derive(Clone, Default)]
-pub(crate) struct Guest {
-    session: Arc<Mutex<Option<Session>>>,
+pub(crate) struct Guests {
+    hub: Arc<Mutex<Hub>>,
     starting: Arc<AtomicBool>,
 }
 
-struct Session {
-    shared: Arc<Shared>,
+#[derive(Default)]
+struct Hub {
+    /// Running while any link is open.
+    server: Option<Server>,
+    /// Oldest first.
+    links: Vec<Link>,
+    /// Numbers this run's links: "Browser 1", "Browser 2"…
+    made: u32,
+}
+
+/// Serves every link: HTTP on the LAN, and the web page's tunnel.
+struct Server {
     port: u16,
     /// Our LAN addresses, likeliest to work first; `address` is the one shown.
     addresses: Vec<Ipv4Addr>,
     address: usize,
-    /// Showing the link for the web (anywhere) rather than the LAN one.
-    web: bool,
-    _server: AbortOnDropHandle<()>,
+    _http: AbortOnDropHandle<()>,
     /// Takes the web page's connections; `None` without a node.
-    _tunnel: Option<AbortOnDropHandle<()>>,
+    tunnel: Option<AbortOnDropHandle<()>>,
+}
+
+struct Link {
+    shared: Arc<Shared>,
     _presence: AbortOnDropHandle<()>,
 }
 
-impl Session {
-    fn url(&self, ctx: &AppCtx) -> Option<String> {
-        if self.web {
-            return self.web_url(ctx);
-        }
-        let ip = self.addresses.get(self.address)?;
-        Some(format!("http://{ip}:{}/{}", self.port, self.shared.token))
+impl Hub {
+    fn link(&self, id: &str) -> Option<&Arc<Shared>> {
+        self.links.iter().map(|l| &l.shared).find(|s| s.id == id)
     }
 
-    /// `<page>#t=<token>&e=<endpoint id>&r=<relay url>`; `None` until we
-    /// have a home relay (none at all with the relay disabled).
-    fn web_url(&self, ctx: &AppCtx) -> Option<String> {
-        self._tunnel.as_ref()?;
-        let (endpoint_id, relay_url) = ctx.node()?.guest_address();
-        Some(web_url(&self.shared.token, &endpoint_id, &relay_url?))
+    /// The link `token` opens, reached over the web tunnel (`web`) or the LAN.
+    fn by_token(&self, token: &str, web: bool) -> Option<Arc<Shared>> {
+        self.links
+            .iter()
+            .map(|l| &l.shared)
+            .find(|s| s.web == web && s.token_matches(token))
+            .cloned()
+    }
+
+    fn url(&self, ctx: &AppCtx, shared: &Shared) -> Option<String> {
+        let server = self.server.as_ref()?;
+        if shared.web {
+            // `<page>#t=<token>&e=<endpoint id>&r=<relay url>`; none until
+            // we have a home relay (never with the relay disabled).
+            server.tunnel.as_ref()?;
+            let (endpoint_id, relay_url) = ctx.node()?.guest_address();
+            return Some(web_url(&shared.token, &endpoint_id, &relay_url?));
+        }
+        let ip = server.addresses.get(server.address)?;
+        Some(format!("http://{ip}:{}/{}", server.port, shared.token))
     }
 }
 
@@ -120,20 +149,28 @@ fn web_url(token: &str, endpoint_id: &str, relay_url: &str) -> String {
     format!("{WEB_PAGE}#{fragment}")
 }
 
-impl Guest {
-    fn shared(&self) -> Option<Arc<Shared>> {
-        self.session.lock().unwrap().as_ref().map(|s| s.shared.clone())
+impl Guests {
+    fn shared(&self, id: &str) -> Option<Arc<Shared>> {
+        self.hub.lock().unwrap().link(id).cloned()
     }
 
-    pub(crate) fn is_active(&self) -> bool {
-        self.session.lock().unwrap().is_some()
+    fn all(&self) -> Vec<Arc<Shared>> {
+        let hub = self.hub.lock().unwrap();
+        hub.links.iter().map(|l| l.shared.clone()).collect()
     }
 }
 
 /// Server-side state of a link, shared by the HTTP handlers and the UI.
 struct Shared {
     ctx: AppCtx,
+    /// Its peer id (`browser-…`) and name ("Browser 2").
+    id: String,
+    name: String,
     token: String,
+    /// Made for anywhere (the web page over iroh), else the LAN.
+    web: bool,
+    /// The page may send us files and text.
+    upload: AtomicBool,
     device_name: String,
     inner: Mutex<Inner>,
     /// Bumped whenever the page's content changes (wakes long polls).
@@ -237,18 +274,13 @@ struct BatchFile {
 enum Ended {
     /// Cancel on our transfer card.
     CancelledHere,
+    /// Uploads were switched off for the link.
+    UploadsOff,
     ByBrowser,
     Stalled,
     LinkClosed,
 }
 
-fn guest_peer() -> TransferPeer {
-    TransferPeer {
-        endpoint_id: GUEST_ID.to_string(),
-        display_name: Some(GUEST_NAME.to_string()),
-        device_type: None,
-    }
-}
 
 /// `<bytes>:<total>:<speed x1000>`, as the engine reports progress.
 fn progress_payload(bytes: u64, total: u64, since: Instant) -> String {
@@ -271,6 +303,18 @@ impl Drop for PartFile {
 impl Shared {
     fn token(&self) -> &str {
         &self.token
+    }
+
+    fn peer(&self) -> TransferPeer {
+        TransferPeer {
+            endpoint_id: self.id.clone(),
+            display_name: Some(self.name.clone()),
+            device_type: None,
+        }
+    }
+
+    fn can_upload(&self) -> bool {
+        self.upload.load(Ordering::SeqCst)
     }
 
     fn token_matches(&self, candidate: &str) -> bool {
@@ -361,7 +405,7 @@ impl Shared {
             );
             self.finish_row(key, "Sent to the browser".to_string());
         }
-        json!({"v": version, "name": self.device_name, "items": items})
+        json!({"v": version, "name": self.device_name, "upload": self.can_upload(), "items": items})
     }
 
     /// Drop a done send's row; its history entry takes over.
@@ -521,7 +565,7 @@ impl Shared {
     // ------------------------------------------------------ browser pushes
 
     fn save_dir(&self) -> PathBuf {
-        transfers::save_dir(&self.ctx, GUEST_NAME, GUEST_ID)
+        transfers::save_dir(&self.ctx, GUEST_FOLDER, &self.id)
     }
 
     fn recorder(&self, ctx: Ctx, direction: TransferDirection) -> Arc<Recorder> {
@@ -552,7 +596,7 @@ impl Shared {
                 payload_bytes: bytes,
                 item_count: 1,
                 save_path: Some(save_dir.to_string_lossy().into_owned()),
-                peer: Some(guest_peer()),
+                peer: Some(self.peer()),
                 ..Ctx::default()
             },
             TransferDirection::Receive,
@@ -608,17 +652,21 @@ impl Shared {
                 payload_bytes: total,
                 item_count: top_level.len() as u32,
                 save_path: Some(save_dir.to_string_lossy().into_owned()),
-                peer: Some(guest_peer()),
+                peer: Some(self.peer()),
                 ..Ctx::default()
             },
             TransferDirection::Receive,
         );
         let key = self.ctx.transfers.new_key("recv");
+        let peer_id = self.id.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let id = {
             let mut inner = self.inner.lock().unwrap();
             if inner.closed {
                 return http::error(StatusCode::GONE, "The link has ended");
+            }
+            if !self.can_upload() {
+                return http::error(StatusCode::FORBIDDEN, "Sending here is turned off");
             }
             inner.next_id += 1;
             let id = inner.next_id;
@@ -653,7 +701,7 @@ impl Shared {
                 &ui,
                 TransferRow {
                     key: key.into(),
-                    peer_id: GUEST_ID.into(),
+                    peer_id: peer_id.into(),
                     sending: false,
                     active: true,
                     title: title.into(),
@@ -871,6 +919,10 @@ fn end_batch(ctx: &AppCtx, batch: Batch, why: Ended) {
                 toast(&ui, &msg, true);
             }
             (Ended::LinkClosed, None) => transfers::remove_row(&ui, &key),
+            (Ended::UploadsOff, None) => {
+                transfers::remove_row(&ui, &key);
+                toast(&ui, "Receive stopped: sending to you is off", false);
+            }
             (Ended::ByBrowser, None) => {
                 transfers::remove_row(&ui, &key);
                 toast(&ui, "The browser stopped sending", false);
@@ -1038,17 +1090,21 @@ fn scan(paths: &[PathBuf]) -> io::Result<Files> {
 }
 
 /// Put `paths` (or a pasted text: one paste file, with its private `dir`)
-/// on the page. UI thread; `staged` share-sheet files are claimed by the
-/// caller's row until the link ends.
-pub(crate) fn offer(
+/// on the page of the link `peer_id`. UI thread; `staged` share-sheet files
+/// are claimed by the caller's row until the link ends.
+pub(crate) fn offer_paths(
     ctx: &AppCtx,
     ui: &AppWindow,
+    peer_id: &str,
     paths: Vec<PathBuf>,
     staged: Vec<PathBuf>,
     paste_dir: Option<PathBuf>,
 ) {
-    let Some(shared) = ctx.guest.shared() else {
+    let Some(shared) = ctx.guest.shared(peer_id) else {
         toast(ui, "The browser link has ended", true);
+        if let Some(dir) = paste_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         return;
     };
     let key = ctx.transfers.new_key("send");
@@ -1057,7 +1113,7 @@ pub(crate) fn offer(
         ui,
         TransferRow {
             key: key.clone().into(),
-            peer_id: GUEST_ID.into(),
+            peer_id: peer_id.into(),
             sending: true,
             active: true,
             title: transfers::items_title(&first_name, paths.len()).into(),
@@ -1113,7 +1169,7 @@ pub(crate) fn offer(
                 payload_bytes: bytes,
                 item_count,
                 path_type,
-                peer: Some(guest_peer()),
+                peer: Some(shared.peer()),
                 text,
                 ..Ctx::default()
             },
@@ -1153,9 +1209,9 @@ pub(crate) fn offer(
     });
 }
 
-/// Stop on a send to the browser: take it off the page. UI thread.
-pub(crate) fn withdraw(ctx: &AppCtx, key: &str) {
-    if let Some(shared) = ctx.guest.shared() {
+/// Stop on a send to a browser (`peer_id`): take it off the page. UI thread.
+pub(crate) fn withdraw(ctx: &AppCtx, peer_id: &str, key: &str) {
+    if let Some(shared) = ctx.guest.shared(peer_id) {
         let offer = {
             let mut inner = shared.inner.lock().unwrap();
             match inner.offers.iter().position(|o| o.key == key) {
@@ -1283,96 +1339,105 @@ fn describe_browser(ua: &str) -> String {
     }
 }
 
-/// The guest's row in the peer list, while a link is open.
-pub(crate) fn peer_row(ctx: &AppCtx) -> Option<PeerRow> {
-    let shared = ctx.guest.shared()?;
+/// "Same Wi-Fi · download only"
+fn link_detail(shared: &Shared) -> String {
+    let place = if shared.web { "Anywhere" } else { "Same Wi-Fi" };
+    let access = if shared.can_upload() {
+        "can send to you"
+    } else {
+        "download only"
+    };
+    format!("{place} · {access}")
+}
+
+fn peer_row_of(shared: &Shared) -> PeerRow {
     let (online, label) = shared.presence();
-    Some(PeerRow {
-        endpoint_id: GUEST_ID.into(),
-        name: GUEST_NAME.into(),
+    PeerRow {
+        endpoint_id: shared.id.clone().into(),
+        name: shared.name.clone().into(),
         initials: "".into(),
         detail: if online {
-            label
+            format!("{label} · {}", link_detail(shared))
         } else {
-            "Waiting for a browser to open the link".to_string()
+            link_detail(shared)
         }
         .into(),
         online,
         guest: true,
         ..Default::default()
-    })
+    }
 }
 
-/// Refresh the guest's row (and page header) in place. UI thread.
-fn sync_row(ctx: &AppCtx, ui: &AppWindow) {
-    let Some(row) = peer_row(ctx) else { return };
+/// The open links' rows in the peer list, newest first.
+pub(crate) fn peer_rows(ctx: &AppCtx) -> Vec<PeerRow> {
+    ctx.guest.all().iter().rev().map(|s| peer_row_of(s)).collect()
+}
+
+/// Refresh a link's row (and page header) in place. UI thread.
+fn sync_row(ui: &AppWindow, shared: &Shared) {
+    let row = peer_row_of(shared);
     let state = ui.global::<State>();
-    let peers = state.get_peers();
-    for i in 0..peers.row_count() {
-        if let Some(old) = peers.row_data(i).filter(|p| p.guest) {
-            let row = PeerRow {
-                sending: old.sending,
-                receiving: old.receiving,
-                ..row.clone()
-            };
-            peers.set_row_data(i, row);
+    for model in [state.get_peers(), state.get_links()] {
+        for i in 0..model.row_count() {
+            if let Some(old) = model.row_data(i).filter(|p| p.endpoint_id == row.endpoint_id) {
+                model.set_row_data(
+                    i,
+                    PeerRow {
+                        sending: old.sending,
+                        receiving: old.receiving,
+                        ..row.clone()
+                    },
+                );
+            }
         }
     }
-    if is_guest(&state.get_selected_id()) {
+    if state.get_selected_id() == row.endpoint_id {
         show_selected(&state, Some(&row));
     }
 }
 
-/// Mirror the link (URL, QR code) into the UI. UI thread.
-fn show_link(ctx: &AppCtx, ui: &AppWindow, session: Option<&Session>) {
+/// Mirror the selected link (URL, QR code, uploads) into the UI. UI thread.
+pub(crate) fn show_link(ctx: &AppCtx, ui: &AppWindow) {
     let state = ui.global::<State>();
-    let url = session.and_then(|s| s.url(ctx)).unwrap_or_default();
+    let selected = state.get_selected_id();
+    let hub = ctx.guest.hub.lock().unwrap();
+    let shared = hub.link(&selected);
+    let url = shared.and_then(|s| hub.url(ctx, s)).unwrap_or_default();
     if url != state.get_guest_url().as_str() {
         if let Some(buf) = (!url.is_empty()).then(|| crate::qr::render(&url)).flatten() {
             state.set_guest_qr(slint::Image::from_rgb8(buf));
         }
         state.set_guest_url(SharedString::from(url));
     }
-    state.set_guest_active(session.is_some());
-    state.set_guest_web(session.is_some_and(|s| s.web));
-    state.set_guest_more_addresses(session.is_some_and(|s| !s.web && s.addresses.len() > 1));
+    let web = shared.is_some_and(|s| s.web);
+    state.set_guest_web(web);
+    state.set_guest_upload(shared.is_some_and(|s| s.can_upload()));
+    let more = !web && hub.server.as_ref().is_some_and(|s| s.addresses.len() > 1);
+    state.set_guest_more_addresses(shared.is_some() && more);
 }
 
-/// Open the guest's page. UI thread.
-fn open(ui: &AppWindow) {
+/// Open a link's page. UI thread.
+fn open(ctx: &AppCtx, ui: &AppWindow, id: &str) {
     let state = ui.global::<State>();
     state.set_rename_mode(false);
-    state.set_selected_id(GUEST_ID.into());
+    state.set_selected_id(id.into());
     state.set_page("peer".into());
     state.set_peer_open(true);
+    show_link(ctx, ui);
     ui.global::<Logic>().invoke_page_changed("peer".into());
 }
 
-async fn launch(ctx: &AppCtx) -> io::Result<Session> {
+async fn launch_server(ctx: &AppCtx, hub: Arc<Mutex<Hub>>) -> io::Result<Server> {
     let listener = match tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, PORT)).await {
         Ok(listener) => listener,
         Err(_) => tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await?,
     };
     let port = listener.local_addr()?.port();
     let addresses = local_addresses().await;
-    let device_name = ctx
-        .node()
-        .map(|node| node.device_info().display_name)
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "flipflop".to_string());
-    let shared = Arc::new(Shared {
-        ctx: ctx.clone(),
-        token: random_token(),
-        device_name,
-        inner: Mutex::new(Inner::default()),
-        version: watch::Sender::new(1),
-        presence: Mutex::new(Presence::default()),
-    });
     tracing::info!(port, ?addresses, "browser link: listening");
-    let server = tokio::spawn(http::serve(listener, shared.clone()));
+    let http = tokio::spawn(http::serve(listener, hub.clone()));
     let tunnel = ctx.node().map(|node| {
         let mut inbox = node.guest_inbox().listen();
-        let shared = shared.clone();
         tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
             loop {
@@ -1380,28 +1445,23 @@ async fn launch(ctx: &AppCtx) -> io::Result<Session> {
                     conn = inbox.recv() => {
                         let Some(conn) = conn else { break };
                         tracing::info!(remote = %conn.remote_id().fmt_short(), "browser link: web page connected");
-                        connections.spawn(http::serve_tunnel(conn, shared.clone()));
+                        connections.spawn(http::serve_tunnel(conn, hub.clone()));
                     }
                     Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 }
             }
         })
     });
-    let presence = tokio::spawn(watch_presence(shared.clone()));
-    Ok(Session {
-        shared,
+    Ok(Server {
         port,
-        // Nobody on our network to share with: offer the web link.
-        web: addresses.is_empty(),
         addresses,
         address: 0,
-        _server: AbortOnDropHandle::new(server),
-        _tunnel: tunnel.map(AbortOnDropHandle::new),
-        _presence: AbortOnDropHandle::new(presence),
+        _http: AbortOnDropHandle::new(http),
+        tunnel: tunnel.map(AbortOnDropHandle::new),
     })
 }
 
-/// Keep the guest's online dot in step with the browser.
+/// Keep a link's online dot in step with its browser.
 async fn watch_presence(shared: Arc<Shared>) {
     let mut connected = false;
     let mut ticks = tokio::time::interval(Duration::from_secs(2));
@@ -1412,58 +1472,119 @@ async fn watch_presence(shared: Arc<Shared>) {
             continue;
         }
         connected = now;
-        let ctx = shared.ctx.clone();
-        let _ = shared.ctx.weak.upgrade_in_event_loop(move |ui| {
-            sync_row(&ctx, &ui);
+        let weak = shared.ctx.weak.clone();
+        let shared = shared.clone();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            sync_row(&ui, &shared);
             if connected {
-                toast(&ui, "A browser opened the link", false);
+                toast(&ui, &format!("A browser opened {}", shared.name), false);
             }
         });
     }
 }
 
-/// Open a link (or show the open one). UI thread.
-pub(crate) fn start(ctx: &AppCtx) {
-    if ctx.guest.is_active() {
-        if let Some(ui) = ctx.weak.upgrade() {
-            open(&ui);
-        }
-        return;
-    }
+/// What a new link starts with.
+pub(crate) struct NewLink {
+    /// For the page on the web (anywhere), else the LAN.
+    pub web: bool,
+    /// The page may send us files and text.
+    pub upload: bool,
+    /// Offered on the page right away.
+    pub offers: Vec<transfers::Outgoing>,
+}
+
+/// Open a new link (starting the server with the first one) and show its
+/// page. UI thread.
+pub(crate) fn create(ctx: &AppCtx, link: NewLink) {
     if ctx.guest.starting.swap(true, Ordering::SeqCst) {
+        for offer in link.offers {
+            offer.discard(ctx);
+        }
         return;
     }
     let ctx = ctx.clone();
     ctx.rt.clone().spawn(async move {
-        let result = launch(&ctx).await;
-        ctx.guest.starting.store(false, Ordering::SeqCst);
+        let running = ctx.guest.hub.lock().unwrap().server.is_some();
+        let server = if running {
+            Ok(None)
+        } else {
+            launch_server(&ctx, ctx.guest.hub.clone()).await.map(Some)
+        };
+        let device_name = ctx
+            .node()
+            .map(|node| node.device_info().display_name)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "flipflop".to_string());
         let ctx_ui = ctx.clone();
-        let _ = ctx.weak.upgrade_in_event_loop(move |ui| match result {
-            Ok(session) => {
-                let mut slot = ctx_ui.guest.session.lock().unwrap();
-                show_link(&ctx_ui, &ui, Some(&session));
-                *slot = Some(session);
-                drop(slot);
-                refresh_peers(&ctx_ui);
-                open(&ui);
-            }
-            Err(e) => {
-                tracing::warn!("browser link: could not start: {e}");
-                toast(&ui, &format!("Could not open a browser link: {e}"), true);
+        let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
+            let ctx = ctx_ui;
+            ctx.guest.starting.store(false, Ordering::SeqCst);
+            let server = match server {
+                Ok(server) => server,
+                Err(e) => {
+                    tracing::warn!("browser link: could not start: {e}");
+                    toast(&ui, &format!("Could not open a browser link: {e}"), true);
+                    for offer in link.offers {
+                        offer.discard(&ctx);
+                    }
+                    return;
+                }
+            };
+            let token = random_token();
+            let shared = {
+                let mut hub = ctx.guest.hub.lock().unwrap();
+                if hub.server.is_none() {
+                    hub.server = server;
+                }
+                hub.made += 1;
+                let shared = Arc::new(Shared {
+                    ctx: ctx.clone(),
+                    id: format!("{GUEST_ID_PREFIX}-{}", &token[..8]),
+                    name: format!("Browser {}", hub.made),
+                    token,
+                    web: link.web,
+                    upload: AtomicBool::new(link.upload),
+                    device_name,
+                    inner: Mutex::new(Inner::default()),
+                    version: watch::Sender::new(1),
+                    presence: Mutex::new(Presence::default()),
+                });
+                let presence = ctx.rt.spawn(watch_presence(shared.clone()));
+                hub.links.push(Link {
+                    shared: shared.clone(),
+                    _presence: AbortOnDropHandle::new(presence),
+                });
+                shared
+            };
+            refresh_peers(&ctx);
+            open(&ctx, &ui, &shared.id);
+            for offer in link.offers {
+                offer_paths(&ctx, &ui, &shared.id, offer.paths, offer.staged, offer.cleanup);
             }
         });
     });
 }
 
-/// End the link: stop the server, withdraw what's still offered, drop
-/// unfinished uploads. UI thread.
-pub(crate) fn stop(ctx: &AppCtx) {
-    let Some(session) = ctx.guest.session.lock().unwrap().take() else {
-        return;
+/// End a link: withdraw what's still offered, drop unfinished uploads, and
+/// stop the server after the last one. UI thread.
+pub(crate) fn stop(ctx: &AppCtx, id: &str) {
+    let (link, server) = {
+        let mut hub = ctx.guest.hub.lock().unwrap();
+        let Some(i) = hub.links.iter().position(|l| l.shared.id == id) else {
+            return;
+        };
+        let link = hub.links.remove(i);
+        let server = if hub.links.is_empty() {
+            hub.server.take()
+        } else {
+            None
+        };
+        (link, server)
     };
-    let shared = session.shared.clone();
     // Stops the server and every connection with it.
-    drop(session);
+    drop(server);
+    let shared = link.shared.clone();
+    drop(link);
     let (offers, batches) = {
         let mut inner = shared.inner.lock().unwrap();
         inner.closed = true;
@@ -1490,16 +1611,38 @@ pub(crate) fn stop(ctx: &AppCtx) {
         end_batch(ctx, batch, Ended::LinkClosed);
     }
     if let Some(ui) = &ui {
-        show_link(ctx, ui, None);
-        toast(ui, "Browser link closed", false);
+        show_link(ctx, ui);
+        toast(ui, &format!("{} closed", shared.name), false);
     }
     refresh_peers(ctx);
     refresh_history(ctx);
 }
 
+/// Let a link's page send us files and text, or not. Turning it off stops
+/// the uploads under way. UI thread.
+pub(crate) fn set_upload(ctx: &AppCtx, id: &str, on: bool) {
+    let Some(shared) = ctx.guest.shared(id) else { return };
+    if shared.upload.swap(on, Ordering::SeqCst) == on {
+        return;
+    }
+    let batches = if on {
+        HashMap::new()
+    } else {
+        std::mem::take(&mut shared.inner.lock().unwrap().batches)
+    };
+    for (_, batch) in batches {
+        end_batch(ctx, batch, Ended::UploadsOff);
+    }
+    shared.bump();
+    if let Some(ui) = ctx.weak.upgrade() {
+        sync_row(&ui, &shared);
+        show_link(ctx, &ui);
+    }
+}
+
 /// Re-read our addresses after a network change. Any thread.
 pub(crate) fn refresh_addresses(ctx: &AppCtx) {
-    if !ctx.guest.is_active() {
+    if ctx.guest.hub.lock().unwrap().server.is_none() {
         return;
     }
     let ctx = ctx.clone();
@@ -1507,14 +1650,16 @@ pub(crate) fn refresh_addresses(ctx: &AppCtx) {
         let addresses = local_addresses().await;
         let ctx_ui = ctx.clone();
         let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
-            let mut slot = ctx_ui.guest.session.lock().unwrap();
-            let Some(session) = slot.as_mut() else { return };
-            let shown = session.addresses.get(session.address).copied();
-            session.address = shown
-                .and_then(|ip| addresses.iter().position(|a| *a == ip))
-                .unwrap_or(0);
-            session.addresses = addresses;
-            show_link(&ctx_ui, &ui, Some(session));
+            {
+                let mut hub = ctx_ui.guest.hub.lock().unwrap();
+                let Some(server) = hub.server.as_mut() else { return };
+                let shown = server.addresses.get(server.address).copied();
+                server.address = shown
+                    .and_then(|ip| addresses.iter().position(|a| *a == ip))
+                    .unwrap_or(0);
+                server.addresses = addresses;
+            }
+            show_link(&ctx_ui, &ui);
         });
     });
 }
@@ -1524,13 +1669,28 @@ pub(crate) fn register(ctx: &AppCtx) {
         return;
     };
     let logic = ui.global::<Logic>();
-    {
-        let ctx = ctx.clone();
-        logic.on_guest_start(move || start(&ctx));
+    // The link whose page is showing.
+    fn selected(ctx: &AppCtx) -> Option<String> {
+        ctx.weak
+            .upgrade()
+            .map(|ui| ui.global::<State>().get_selected_id().to_string())
+            .filter(|id| is_guest(id))
     }
     {
         let ctx = ctx.clone();
-        logic.on_guest_stop(move || stop(&ctx));
+        logic.on_guest_stop(move || {
+            if let Some(id) = selected(&ctx) {
+                stop(&ctx, &id);
+            }
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        logic.on_guest_set_upload(move |on| {
+            if let Some(id) = selected(&ctx) {
+                set_upload(&ctx, &id, on);
+            }
+        });
     }
     {
         let ctx = ctx.clone();
@@ -1550,22 +1710,46 @@ pub(crate) fn register(ctx: &AppCtx) {
         let ctx = ctx.clone();
         logic.on_guest_next_address(move || {
             let Some(ui) = ctx.weak.upgrade() else { return };
-            let mut slot = ctx.guest.session.lock().unwrap();
-            let Some(session) = slot.as_mut() else { return };
-            if !session.addresses.is_empty() {
-                session.address = (session.address + 1) % session.addresses.len();
+            {
+                let mut hub = ctx.guest.hub.lock().unwrap();
+                let Some(server) = hub.server.as_mut() else { return };
+                if !server.addresses.is_empty() {
+                    server.address = (server.address + 1) % server.addresses.len();
+                }
             }
-            show_link(&ctx, &ui, Some(session));
+            show_link(&ctx, &ui);
         });
     }
     {
+        // "Share via link": a new link from the page's choices; one made for
+        // sending offers what the composer holds.
         let ctx = ctx.clone();
-        logic.on_guest_set_web(move |web| {
+        logic.on_link_create(move || {
             let Some(ui) = ctx.weak.upgrade() else { return };
-            let mut slot = ctx.guest.session.lock().unwrap();
-            let Some(session) = slot.as_mut() else { return };
-            session.web = web;
-            show_link(&ctx, &ui, Some(session));
+            let state = ui.global::<State>();
+            // One at a time; don't take the composer's content meanwhile.
+            if ctx.guest.starting.load(Ordering::SeqCst) {
+                return;
+            }
+            let receive = state.get_link_receive();
+            let offers = if receive {
+                Vec::new()
+            } else {
+                let offers = transfers::take_composed(&ctx, &ui);
+                if offers.is_empty() {
+                    toast(&ui, "Add something to send first", false);
+                    return;
+                }
+                offers
+            };
+            create(
+                &ctx,
+                NewLink {
+                    web: state.get_link_web(),
+                    upload: receive,
+                    offers,
+                },
+            );
         });
     }
 }

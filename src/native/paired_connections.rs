@@ -517,6 +517,14 @@ impl PairedConnectionManager {
                         return true;
                     }
                 }
+                message @ (ControlMessage::QuickShare { .. }
+                | ControlMessage::QuickShareDeclined { .. }) => {
+                    crate::native::pairing_util::emit_quick_share_message(
+                        &self.app_handle,
+                        &remote_id,
+                        &message,
+                    );
+                }
                 _other => {
 
                 }

@@ -59,6 +59,22 @@ pub enum ControlMessage {
         #[serde(default)]
         os: String,
     },
+    /// One-off share with a device we don't pair with: the receiver is asked
+    /// to accept this download only, and no record of either side is kept.
+    /// `id` names it in a `QuickShareDeclined` answer.
+    QuickShare {
+        id: String,
+        blob_ticket: String,
+        file_count: u32,
+        total_size: u64,
+        /// "report.pdf", "3 items", "text"
+        title: String,
+        sender_name: String,
+        #[serde(default)]
+        device_type: String,
+    },
+    /// The receiver turned a `QuickShare` down (accepting is the download).
+    QuickShareDeclined { id: String },
 }
 
 impl ControlMessage {
@@ -75,6 +91,8 @@ impl ControlMessage {
             Self::WhoAreYou => "who-are-you",
             Self::Identity { .. } => "identity",
             Self::PairRequest { .. } => "pair-request",
+            Self::QuickShare { .. } => "quick-share",
+            Self::QuickShareDeclined { .. } => "quick-share-declined",
         }
     }
 }
