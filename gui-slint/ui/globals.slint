@@ -91,6 +91,15 @@ export global State {
     in-out property <int> relay-mode: 0; // 0 default, 1 disabled, 2 custom
     in-out property <string> relay-urls: "";
     in-out property <string> relay-token: "";
+    in-out property <int> relay-fallback: 0; // 0 strict, 1 public
+    in-out property <string> relay-test-status: "";
+    in-out property <bool> relay-testing: false;
+    in-out property <string> relay-status: "";
+    in-out property <int> discovery-mode: 0; // 0 default, 1 custom
+    in-out property <string> discovery-pkarr-url: "";
+    in-out property <string> discovery-dns-origin: "";
+    in-out property <string> discovery-test-status: "";
+    in-out property <bool> discovery-testing: false;
     in-out property <int> discoverability: 0; // 0 everyone, 1 paired-only, 2 off
     in-out property <bool> history-enabled: true;
     in-out property <string> settings-status: "";
@@ -126,4 +135,7 @@ export global Logic {
     callback pick-downloads-dir();
     callback save-settings();
     callback rename-self-name();
+    callback test-relay();
+    callback check-relay-status();
+    callback test-discovery();
 }
