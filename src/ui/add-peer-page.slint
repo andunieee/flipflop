@@ -191,30 +191,6 @@ export component AddPeerPage inherits Rectangle {
                 }
             }
 
-            // Someone without flipflop: a browser link instead.
-            Card {
-                VerticalLayout {
-                    padding: Theme.card-padding;
-                    spacing: Theme.space-3;
-
-                    SectionHeader { label: "No flipflop on their device?"; icon: Icons.globe; }
-                    HintText {
-                        label: "Share through a browser link instead: they send or receive files from any browser, no app needed.";
-                    }
-                    HorizontalLayout {
-                        alignment: start;
-                        SecondaryButton {
-                            label: "Share via link";
-                            icon: Icons.globe;
-                            clicked => {
-                                State.page = "share-link";
-                                Logic.page-changed("share-link");
-                            }
-                        }
-                    }
-                }
-            }
-
             // Our own address
             Card {
                 VerticalLayout {
