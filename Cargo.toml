@@ -120,7 +120,7 @@ strip = true
 
 # --------------------------------------------------------------- Android
 #
-# Build with: cargo apk run -p flipflop
+# Build with: just android-install (debug, as com.flipflop.app.debug)
 # (see docs/development.md, Android section for the toolchain setup)
 
 [package.metadata.android]
