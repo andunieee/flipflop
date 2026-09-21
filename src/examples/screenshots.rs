@@ -263,6 +263,13 @@ fn main() {
     render(&window, desktop, &out.join("toast.ppm"));
     state.set_toast_text("".into());
 
+    // The document shared with the peer.
+    state.set_peer_tab("doc".into());
+    state.set_doc_text("Shopping list\n- milk\n- bread\n\nWi-Fi at the cabin: pinecone42".into());
+    render(&window, desktop, &out.join("doc.ppm"));
+    state.set_peer_tab("main".into());
+    state.set_doc_text("".into());
+
     show_guest(&state);
     render(&window, desktop, &out.join("guest.ppm"));
     let web_url = "https://andunieee.github.io/flipflop/#t=n3rp36io3ncgwvbr7wzq&e=ae9a9cc0cc827c4e764969d70f936f5ba53be4e2280aa2e31cb878c6fb92c947&r=https%3A%2F%2Fuse1-1.relay.n0.iroh.link.%2F";
@@ -324,6 +331,13 @@ fn main() {
     render(&window, phone, &out.join("phone-peers.ppm"));
     state.set_peer_open(true);
     render(&window, phone, &out.join("phone-outbox.ppm"));
+
+    // Phone: the shared document.
+    state.set_peer_tab("doc".into());
+    state.set_doc_text("Shopping list\n- milk\n- bread".into());
+    render(&window, phone, &out.join("phone-doc.ppm"));
+    state.set_peer_tab("main".into());
+    state.set_doc_text("".into());
 
     // Phone: the "Send app" chooser.
     let apps = [

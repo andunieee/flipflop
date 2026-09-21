@@ -147,6 +147,10 @@ export global State {
     in-out property <bool> rename-mode: false;
     in-out property <string> rename-input: "";
     in-out property <[HistoryRow]> history;
+    // peer page tab: "main" (send, receive, history) | "doc" (the document
+    // shared with the peer) and that document's text
+    in-out property <string> peer-tab: "main";
+    in-out property <string> doc-text: "";
 
     // a send to the selected peer is in flight (hides "Send files…")
     in-out property <bool> selected-sending: false;
@@ -231,6 +235,10 @@ export global Logic {
     callback pick-app();
     callback app-filter-changed(string);
     callback app-chosen(string);
+
+    // shared document: the tab was switched; the text was edited
+    callback peer-tab-changed(string);
+    callback doc-edited(string);
 
     // per-peer history
     callback refresh-history();

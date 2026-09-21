@@ -77,6 +77,23 @@ Implemented:
   to disk through a service worker (`web/sw.js`), or are buffered in memory
   where there is none. Needs the relay (not "disabled"); a custom relay
   works only if browsers may connect to it without an auth token.
+- **Shared document**, each paired peer's page has a second tab, "Document":
+  one text document, an [Automerge](https://automerge.org) doc, that both
+  devices edit. It is saved in `<data dir>/shared-docs/<peer id>.automerge`
+  (every edit appended, compacted at startup), so it survives restarts and
+  edits made while the peer is away. Changes are synced with Automerge's sync
+  protocol as `DocSync` control messages (base64, paired peers only) on the
+  paired control connection: a message when the connection comes up, then one
+  after every local edit or received message that leaves something to say, so
+  only the missing changes are sent, whenever both are online
+  (`native/shared_doc.rs`). Both sides start from a byte-identical empty doc
+  (fixed actor and time), so edits made before they ever met merge instead of
+  one side's text object winning. A remote change refreshes the open tab
+  through the `shared-doc-changed` event; the text box is only rewritten if
+  the text differs, though a remote change inside it can still move the
+  cursor (Slint's `TextEdit` doesn't expose it). Not for browser links.
+  A `DocSync` may be up to 32 MiB (a first sync carries the whole history),
+  other control messages 1 MiB.
 - **Notifications**, toasts: an in-window overlay on desktop, native
   `Toast`s on Android.
 
@@ -199,6 +216,7 @@ carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
 - `src/emitter.rs`, the node service's `EventEmitter` (an event queue the UI
   drains on a timer) and `apply_transfer_event`, the engine event → transfer
   row mapping.
+- `src/native/shared_doc.rs`, the shared documents: storage, merge, sync.
 - `src/recorder.rs`, slim port of the Tauri shell's history recorder.
 - `src/settings.rs`, settings persistence.
 - `examples/screenshots.rs`, renders every page with sample data, headless.
