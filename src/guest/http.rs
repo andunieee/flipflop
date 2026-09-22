@@ -3,9 +3,9 @@
 //! through the relay: there each bidirectional stream carries one exchange.
 //!
 //! Every path starts with a link's random token; anything else is a 404, so
-//! the server answers nobody who wasn't given a link. A link only answers
-//! over the transport it was made for (LAN or web), and the upload routes
-//! only while it allows uploads (403 otherwise).
+//! the server answers nobody who wasn't given a link. A link answers on
+//! both transports, and the upload routes only while it allows uploads (403
+//! otherwise).
 //!
 //! - `GET  /<token>/`                   the page
 //! - `GET  /<token>/api/state?v=<n>`    what's offered, long-polled until it changes from `n`
@@ -59,7 +59,7 @@ pub(super) async fn serve(listener: TcpListener, hub: Arc<Mutex<Hub>>) {
                         continue;
                     }
                 };
-                connections.spawn(serve_io(stream, hub.clone(), false));
+                connections.spawn(serve_io(stream, hub.clone()));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
@@ -73,21 +73,20 @@ pub(super) async fn serve_tunnel(conn: Connection, hub: Arc<Mutex<Hub>>) {
         tokio::select! {
             accepted = conn.accept_bi() => {
                 let Ok((send, recv)) = accepted else { break };
-                streams.spawn(serve_io(tokio::io::join(recv, send), hub.clone(), true));
+                streams.spawn(serve_io(tokio::io::join(recv, send), hub.clone()));
             }
             Some(_) = streams.join_next(), if !streams.is_empty() => {}
         }
     }
 }
 
-/// `web`: the connection came through the web page's tunnel.
-async fn serve_io<T>(io: T, hub: Arc<Mutex<Hub>>, web: bool)
+async fn serve_io<T>(io: T, hub: Arc<Mutex<Hub>>)
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let service = hyper::service::service_fn(move |req| {
         let hub = hub.clone();
-        async move { Ok::<_, Infallible>(route(&hub, web, req).await) }
+        async move { Ok::<_, Infallible>(route(&hub, req).await) }
     });
     // The web page finishes its side of a stream once the request is sent,
     // which hyper would otherwise take for the connection closing.
@@ -218,11 +217,11 @@ fn query_param<'a>(req: &'a Request<Incoming>, key: &str) -> Option<&'a str> {
         .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
 }
 
-async fn route(hub: &Mutex<Hub>, web: bool, req: Request<Incoming>) -> Reply {
+async fn route(hub: &Mutex<Hub>, req: Request<Incoming>) -> Reply {
     let path = req.uri().path().to_string();
     let mut parts = path.trim_start_matches('/').split('/');
     let token = parts.next().unwrap_or_default();
-    let Some(shared) = hub.lock().unwrap().by_token(token, web) else {
+    let Some(shared) = hub.lock().unwrap().by_token(token) else {
         return not_found();
     };
     let shared = &shared;

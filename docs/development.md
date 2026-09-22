@@ -49,10 +49,10 @@ Implemented:
   paired or remembered; the rows stay on the Quick share page. The receiver
   must be discoverable to "Everyone" and on a direct path, as for any
   stranger's control message.
-- **Browser links**, for someone without flipflop: "Share via link" makes a
+- **Guest links**, for someone without flipflop: "Share via link" makes a
   temporary page for the same Wi-Fi or anywhere, to send (download only) or
   to receive (uploads allowed). Any number can be open; each is one more
-  peer ("Browser 1", "Browser 2"…, id `browser-<token prefix>`) with its own
+  peer ("Guest 1", "Guest 2"…, id `browser-<token prefix>`) with its own
   QR code, URL, send card, transfers and history, and a switch to allow
   uploads or not (the page shows its upload form only while allowed, and
   the server answers the upload routes with 403 otherwise). One small
@@ -63,7 +63,7 @@ Implemented:
   key: no prompts, and every other path is a 404. Sends to a link become
   offers on its page (one file as is, a folder or several files as a
   streamed, stored zip with an exact length; text shown inline); uploads
-  are saved to `<downloads>/Browser`. Closing a link withdraws whatever
+  are saved to `<downloads>/Guest`. Closing a link withdraws whatever
   wasn't downloaded. Plain HTTP (no secure context in the page, so its Copy
   button falls back to `execCommand`), IPv4 only, and only while the app
   runs (no Android foreground service).
@@ -120,7 +120,7 @@ crate builds as a `cdylib` (`src/lib.rs`) plus the desktop bin; the window
 switches to a single-pane layout with a bottom nav bar when there is no room
 for the sidebar (`State.compact`), and uses larger touch-sized rows and
 buttons on Android (`State.touch`). The bottom nav has Peers (with "Add
-peer" at the top of the list), Share (Quick share and browser links on one
+peer" at the top of the list), Share (Quick share and guest links on one
 page, sharing one "what to send") and Settings; the desktop sidebar has Add
 peer, Quick share and Share via link as separate pages.
 
@@ -199,7 +199,7 @@ carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
 - `src/app.rs`, startup, node events, peers/pairing/history/settings wiring.
 - `src/transfers.rs`, send and receive flows (quick shares included); one
   `TransferRow` per transfer.
-- `src/guest.rs`, the browser links: links, offers, uploads; `guest/http.rs`
+- `src/guest.rs`, the guest links: links, offers, uploads; `guest/http.rs`
   is the server and routes, `guest/zip.rs` the streaming zip writer,
   `guest/page.html` the page itself.
 - `web/`, the browser link's page on the web: a separate wasm crate (the

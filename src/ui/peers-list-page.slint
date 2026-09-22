@@ -49,7 +49,7 @@ component PeerListItem inherits Rectangle {
                 text: root.peer.sending && root.peer.receiving ? "Sending and receiving…"
                     : root.peer.sending ? "Sending…"
                     : root.peer.receiving ? "Receiving…"
-                    : root.peer.guest ? (root.peer.online ? "Browser connected" : "Browser link open")
+                    : root.peer.guest ? (root.peer.online ? "Guest connected" : "Guest link open")
                     : root.peer.online ? "Online" : "Offline";
                 color: root.peer.sending ? Theme.warn
                     : root.peer.receiving ? Theme.info

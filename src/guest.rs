@@ -1,19 +1,18 @@
-//! Browser links: temporary web pages, so someone without flipflop can swap
+//! Guest links: temporary web pages, so someone without flipflop can swap
 //! files and text with us from any browser.
 //!
 //! Any number of links can be open at once. Each shows up as one more peer,
-//! "Browser 1", "Browser 2"…, with the usual send card, transfer cards and
+//! "Guest 1", "Guest 2"…, with the usual send card, transfer cards and
 //! history. What we send becomes an offer on its page for the browser to
 //! download; what the page uploads is saved like a peer's files, in
-//! `<downloads>/Browser`, but only while the link allows uploads: a link
-//! made for sending starts without, one made for receiving with, and either
-//! can be switched later. Nothing is paired or remembered: ending a link
-//! withdraws whatever wasn't downloaded yet. A link's key is a random token
-//! in its path; there are no prompts.
+//! `<downloads>/Guest`, but only while the link allows uploads: a link
+//! made without receiving starts without, and it can be switched later.
+//! Nothing is paired or remembered: ending a link withdraws whatever wasn't
+//! downloaded yet. A link's key is a random token in its path; there are no
+//! prompts.
 //!
-//! A link is made for one of two places, and only answers there. On the
-//! same network, the page is served from here over plain HTTP. From anywhere
-//! else, it is a static page on the web ([`WEB_PAGE`], built from `web/`)
+//! A link answers in two places. On the same network, the page is served
+//! from here over plain HTTP. From anywhere else, it is a static page on the web ([`WEB_PAGE`], built from `web/`)
 //! that runs iroh in the browser and reaches us through our home relay,
 //! carrying the same HTTP requests (`http::serve_tunnel`). Its URL holds the
 //! token and our address in the fragment, which browsers never send to the
@@ -57,7 +56,7 @@ use http::Reply;
 /// `browser`.
 const GUEST_ID_PREFIX: &str = "browser";
 /// Where every link's uploads are saved, under the downloads folder.
-const GUEST_FOLDER: &str = "Browser";
+const GUEST_FOLDER: &str = "Guest";
 
 /// The page on the web: `src/guest/page.html` plus iroh in wasm (`web/`),
 /// published to GitHub Pages by `.github/workflows/pages.yml`.
@@ -92,7 +91,7 @@ struct Hub {
     server: Option<Server>,
     /// Oldest first.
     links: Vec<Link>,
-    /// Numbers this run's links: "Browser 1", "Browser 2"…
+    /// Numbers this run's links: "Guest 1", "Guest 2"…
     made: u32,
 }
 
@@ -117,26 +116,30 @@ impl Hub {
         self.links.iter().map(|l| &l.shared).find(|s| s.id == id)
     }
 
-    /// The link `token` opens, reached over the web tunnel (`web`) or the LAN.
-    fn by_token(&self, token: &str, web: bool) -> Option<Arc<Shared>> {
+    /// The link `token` opens, over the LAN or the web tunnel.
+    fn by_token(&self, token: &str) -> Option<Arc<Shared>> {
         self.links
             .iter()
             .map(|l| &l.shared)
-            .find(|s| s.web == web && s.token_matches(token))
+            .find(|s| s.token_matches(token))
             .cloned()
     }
 
-    fn url(&self, ctx: &AppCtx, shared: &Shared) -> Option<String> {
+    /// The link's address on the same network.
+    fn lan_url(&self, shared: &Shared) -> Option<String> {
         let server = self.server.as_ref()?;
-        if shared.web {
-            // `<page>#t=<token>&e=<endpoint id>&r=<relay url>`; none until
-            // we have a home relay (never with the relay disabled).
-            server.tunnel.as_ref()?;
-            let (endpoint_id, relay_url) = ctx.node()?.guest_address();
-            return Some(web_url(&shared.token, &endpoint_id, &relay_url?));
-        }
         let ip = server.addresses.get(server.address)?;
         Some(format!("http://{ip}:{}/{}", server.port, shared.token))
+    }
+
+    /// The link's address for anywhere: `<page>#t=<token>&e=<endpoint
+    /// id>&r=<relay url>`; none until we have a home relay (never with the
+    /// relay disabled).
+    fn web_url(&self, ctx: &AppCtx, shared: &Shared) -> Option<String> {
+        let server = self.server.as_ref()?;
+        server.tunnel.as_ref()?;
+        let (endpoint_id, relay_url) = ctx.node()?.guest_address();
+        Some(web_url(&shared.token, &endpoint_id, &relay_url?))
     }
 }
 
@@ -163,12 +166,10 @@ impl Guests {
 /// Server-side state of a link, shared by the HTTP handlers and the UI.
 struct Shared {
     ctx: AppCtx,
-    /// Its peer id (`browser-…`) and name ("Browser 2").
+    /// Its peer id (`browser-…`) and name ("Guest 2").
     id: String,
     name: String,
     token: String,
-    /// Made for anywhere (the web page over iroh), else the LAN.
-    web: bool,
     /// The page may send us files and text.
     upload: AtomicBool,
     device_name: String,
@@ -1101,7 +1102,7 @@ pub(crate) fn offer_paths(
     paste_dir: Option<PathBuf>,
 ) {
     let Some(shared) = ctx.guest.shared(peer_id) else {
-        toast(ui, "The browser link has ended", true);
+        toast(ui, "The guest link has ended", true);
         if let Some(dir) = paste_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -1339,15 +1340,14 @@ fn describe_browser(ua: &str) -> String {
     }
 }
 
-/// "Same Wi-Fi · download only"
+/// "download only"
 fn link_detail(shared: &Shared) -> String {
-    let place = if shared.web { "Anywhere" } else { "Same Wi-Fi" };
     let access = if shared.can_upload() {
         "can send to you"
     } else {
         "download only"
     };
-    format!("{place} · {access}")
+    access.to_string()
 }
 
 fn peer_row_of(shared: &Shared) -> PeerRow {
@@ -1402,17 +1402,22 @@ pub(crate) fn show_link(ctx: &AppCtx, ui: &AppWindow) {
     let selected = state.get_selected_id();
     let hub = ctx.guest.hub.lock().unwrap();
     let shared = hub.link(&selected);
-    let url = shared.and_then(|s| hub.url(ctx, s)).unwrap_or_default();
-    if url != state.get_guest_url().as_str() {
-        if let Some(buf) = (!url.is_empty()).then(|| crate::qr::render(&url)).flatten() {
+    let lan = shared.and_then(|s| hub.lan_url(s)).unwrap_or_default();
+    if lan != state.get_guest_url().as_str() {
+        if let Some(buf) = (!lan.is_empty()).then(|| crate::qr::render(&lan)).flatten() {
             state.set_guest_qr(slint::Image::from_rgb8(buf));
         }
-        state.set_guest_url(SharedString::from(url));
+        state.set_guest_url(SharedString::from(lan));
     }
-    let web = shared.is_some_and(|s| s.web);
-    state.set_guest_web(web);
+    let web = shared.and_then(|s| hub.web_url(ctx, s)).unwrap_or_default();
+    if web != state.get_guest_web_url().as_str() {
+        if let Some(buf) = (!web.is_empty()).then(|| crate::qr::render(&web)).flatten() {
+            state.set_guest_web_qr(slint::Image::from_rgb8(buf));
+        }
+        state.set_guest_web_url(SharedString::from(web));
+    }
     state.set_guest_upload(shared.is_some_and(|s| s.can_upload()));
-    let more = !web && hub.server.as_ref().is_some_and(|s| s.addresses.len() > 1);
+    let more = hub.server.as_ref().is_some_and(|s| s.addresses.len() > 1);
     state.set_guest_more_addresses(shared.is_some() && more);
 }
 
@@ -1485,8 +1490,6 @@ async fn watch_presence(shared: Arc<Shared>) {
 
 /// What a new link starts with.
 pub(crate) struct NewLink {
-    /// For the page on the web (anywhere), else the LAN.
-    pub web: bool,
     /// The page may send us files and text.
     pub upload: bool,
     /// Offered on the page right away.
@@ -1523,7 +1526,7 @@ pub(crate) fn create(ctx: &AppCtx, link: NewLink) {
                 Ok(server) => server,
                 Err(e) => {
                     tracing::warn!("browser link: could not start: {e}");
-                    toast(&ui, &format!("Could not open a browser link: {e}"), true);
+                    toast(&ui, &format!("Could not open a guest link: {e}"), true);
                     for offer in link.offers {
                         offer.discard(&ctx);
                     }
@@ -1540,9 +1543,8 @@ pub(crate) fn create(ctx: &AppCtx, link: NewLink) {
                 let shared = Arc::new(Shared {
                     ctx: ctx.clone(),
                     id: format!("{GUEST_ID_PREFIX}-{}", &token[..8]),
-                    name: format!("Browser {}", hub.made),
+                    name: format!("Guest {}", hub.made),
                     token,
-                    web: link.web,
                     upload: AtomicBool::new(link.upload),
                     device_name,
                     inner: Mutex::new(Inner::default()),
@@ -1694,9 +1696,10 @@ pub(crate) fn register(ctx: &AppCtx) {
     }
     {
         let ctx = ctx.clone();
-        logic.on_guest_copy_url(move || {
+        logic.on_guest_copy_url(move |web| {
             let Some(ui) = ctx.weak.upgrade() else { return };
-            let url = ui.global::<State>().get_guest_url().to_string();
+            let state = ui.global::<State>();
+            let url = if web { state.get_guest_web_url() } else { state.get_guest_url() }.to_string();
             if url.is_empty() {
                 return;
             }
@@ -1732,20 +1735,19 @@ pub(crate) fn register(ctx: &AppCtx) {
                 return;
             }
             let receive = state.get_link_receive();
-            let offers = if receive {
-                Vec::new()
+            let has_content = state.get_paste_input() != "" || state.get_outbox_count() > 0;
+            if !receive && !has_content {
+                toast(&ui, "Add something to send first", false);
+                return;
+            }
+            let offers = if has_content {
+                transfers::take_composed(&ctx, &ui)
             } else {
-                let offers = transfers::take_composed(&ctx, &ui);
-                if offers.is_empty() {
-                    toast(&ui, "Add something to send first", false);
-                    return;
-                }
-                offers
+                Vec::new()
             };
             create(
                 &ctx,
                 NewLink {
-                    web: state.get_link_web(),
                     upload: receive,
                     offers,
                 },
