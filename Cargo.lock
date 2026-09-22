@@ -1876,12 +1876,13 @@ dependencies = [
 
 [[package]]
 name = "flipflop"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "android-build",
  "anyhow",
  "arboard",
  "automerge",
+ "blake3",
  "bytes",
  "chrono",
  "crc32fast",

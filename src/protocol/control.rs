@@ -78,9 +78,39 @@ pub enum ControlMessage {
     /// One message of the Automerge sync protocol for the document shared
     /// with a paired peer (base64). Paired peers only.
     DocSync { data: String },
+    /// One message of the Automerge sync protocol for a group's document
+    /// (base64). The sender must be a paired peer or a member of the group;
+    /// a paired peer may also be starting a group with us (an invitation).
+    GroupSync { group_id: String, data: String },
+    /// Asks a group member who holds a file for it. The answer is a
+    /// `GroupFileOffer` or `GroupFileDenied` with the same `request_id`.
+    GroupFileRequest {
+        group_id: String,
+        file_id: String,
+        request_id: String,
+    },
+    /// A download of the requested file, for the requester only.
+    GroupFileOffer {
+        request_id: String,
+        blob_ticket: String,
+    },
+    /// The holder cannot or will not serve the file.
+    GroupFileDenied { request_id: String, reason: String },
 }
 
 impl ControlMessage {
+    /// Whether this is group traffic, which group members may send as well
+    /// as paired peers.
+    pub fn is_group(&self) -> bool {
+        matches!(
+            self,
+            Self::GroupSync { .. }
+                | Self::GroupFileRequest { .. }
+                | Self::GroupFileOffer { .. }
+                | Self::GroupFileDenied { .. }
+        )
+    }
+
     /// Stable label for diagnostics, matching the serde tag. The variant name
     /// and nothing else, payloads carry names, tickets and signatures.
     pub fn kind(&self) -> &'static str {
@@ -97,6 +127,10 @@ impl ControlMessage {
             Self::QuickShare { .. } => "quick-share",
             Self::QuickShareDeclined { .. } => "quick-share-declined",
             Self::DocSync { .. } => "doc-sync",
+            Self::GroupSync { .. } => "group-sync",
+            Self::GroupFileRequest { .. } => "group-file-request",
+            Self::GroupFileOffer { .. } => "group-file-offer",
+            Self::GroupFileDenied { .. } => "group-file-denied",
         }
     }
 }
@@ -203,6 +237,8 @@ const MAX_CONTROL: usize = 1024 * 1024;
 const MAX_DOC_SYNC: usize = 32 * 1024 * 1024;
 /// How a serialized `DocSync` begins (serde writes the tag first).
 const DOC_SYNC_PREFIX: &[u8] = br#"{"type":"doc-sync""#;
+/// Likewise for `GroupSync`.
+const GROUP_SYNC_PREFIX: &[u8] = br#"{"type":"group-sync""#;
 
 pub async fn write_message(
     send: &mut (impl tokio::io::AsyncWrite + Unpin),
@@ -210,7 +246,10 @@ pub async fn write_message(
 ) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
     let body = serde_json::to_vec(message)?;
-    let max = if matches!(message, ControlMessage::DocSync { .. }) {
+    let max = if matches!(
+        message,
+        ControlMessage::DocSync { .. } | ControlMessage::GroupSync { .. }
+    ) {
         MAX_DOC_SYNC
     } else {
         MAX_CONTROL
@@ -239,14 +278,22 @@ pub async fn read_message(
     let mut body = vec![0u8; len];
     if len > MAX_CONTROL {
         // Only a document sync may be this large: check its tag before
-        // reading the rest.
-        let head = DOC_SYNC_PREFIX.len().min(len);
-        recv.read_exact(&mut body[..head]).await?;
-        anyhow::ensure!(
-            body[..head] == DOC_SYNC_PREFIX[..head] && head == DOC_SYNC_PREFIX.len(),
-            "invalid control message length"
-        );
-        recv.read_exact(&mut body[head..]).await?;
+        // reading the rest. The two tags differ in length, so read the
+        // shorter one and then the difference if it matches the longer.
+        let short = DOC_SYNC_PREFIX.len().min(len);
+        recv.read_exact(&mut body[..short]).await?;
+        let prefix = if body[..short] == DOC_SYNC_PREFIX[..] {
+            DOC_SYNC_PREFIX
+        } else {
+            let head = GROUP_SYNC_PREFIX.len().min(len);
+            recv.read_exact(&mut body[short..head.max(short)]).await?;
+            anyhow::ensure!(
+                head == GROUP_SYNC_PREFIX.len() && body[..head] == GROUP_SYNC_PREFIX[..],
+                "invalid control message length"
+            );
+            GROUP_SYNC_PREFIX
+        };
+        recv.read_exact(&mut body[prefix.len()..]).await?;
     } else {
         recv.read_exact(&mut body).await?;
     }
@@ -327,6 +374,24 @@ mod nearby_message_tests {
             .unwrap();
         client.write_all(&body).await.unwrap();
         assert!(read_message(&mut server).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn large_group_sync_round_trips() {
+        let big = "A".repeat(3 * 1024 * 1024);
+        let (mut client, mut server) = tokio::io::duplex(8 * 1024 * 1024);
+        let sync = ControlMessage::GroupSync {
+            group_id: "ab".repeat(16),
+            data: big.clone(),
+        };
+        write_message(&mut client, &sync).await.unwrap();
+        match read_message(&mut server).await.unwrap() {
+            ControlMessage::GroupSync { group_id, data } => {
+                assert_eq!(group_id, "ab".repeat(16));
+                assert_eq!(data, big);
+            }
+            other => panic!("expected GroupSync, got {other:?}"),
+        }
     }
 
     #[test]

@@ -105,6 +105,7 @@ export component PeersListPage inherits Rectangle {
 
             if State.peers.length == 0: EmptyPeersCard { }
             for peer in State.peers: PeerListItem { peer: peer; }
+
         }
     }
 }

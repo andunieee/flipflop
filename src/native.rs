@@ -1,6 +1,8 @@
 pub mod bluetooth;
 pub mod device_identity;
 pub mod export;
+pub mod group;
+pub mod group_service;
 pub mod history;
 pub mod identity_store;
 pub mod import;

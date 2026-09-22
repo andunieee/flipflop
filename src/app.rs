@@ -559,6 +559,7 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
         }
         "paired-device-presence" => {
             refresh_peers(ctx);
+            crate::group_ui::refresh(ctx);
             let came_online = parsed
                 .as_ref()
                 .and_then(|v| v.get("online"))
@@ -638,6 +639,9 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
         "paired-invite-received" => {
             transfers::accept_invite(ctx, parsed.unwrap_or_default());
         }
+        "groups-changed" => {
+            crate::group_ui::refresh(ctx);
+        }
         "shared-doc-changed" => {
             let id = parsed
                 .as_ref()
@@ -706,6 +710,7 @@ fn start_node(ctx: &AppCtx) {
                 transfers::start_restored(&ctx_bg);
                 refresh_peers(&ctx_bg);
                 refresh_suggestions(&ctx_bg);
+                crate::group_ui::refresh(&ctx_bg);
                 let weak = ctx_bg.weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = weak.upgrade() {
@@ -1532,6 +1537,9 @@ fn register_settings(ctx: &AppCtx) {
                 refresh_peers(&ctx);
                 refresh_suggestions(&ctx);
                 refresh_history(&ctx);
+            } else if page == "group" || page == "new-group" {
+                refresh_peers(&ctx);
+                crate::group_ui::refresh(&ctx);
             } else if page == "add-peer" {
                 refresh_suggestions(&ctx);
                 refresh_peers(&ctx);
@@ -1605,6 +1613,12 @@ pub fn run() {
     {
         let ctx_shared = ctx.clone();
         crate::android::on_shared(move |staged, text, origin| {
+            // Files picked for a group are not for sending.
+            if origin == crate::android::Origin::Picker
+                && crate::group_ui::adopt_picked(&ctx_shared, &staged)
+            {
+                return;
+            }
             transfers::refresh_outbox(&ctx_shared);
             let Some(ui) = ctx_shared.weak.upgrade() else {
                 return;
@@ -1650,6 +1664,7 @@ pub fn run() {
     register_node(&ctx);
     register_peers(&ctx);
     register_add_peer(&ctx);
+    crate::group_ui::register(&ctx);
     register_history(&ctx);
     register_settings(&ctx);
     crate::qr::register(&ctx);

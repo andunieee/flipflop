@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::native::device_identity::{DeviceIdentity, PairedDeviceStore};
 use crate::native::node::AccessState;
+use crate::native::group_service::GroupService;
 use crate::native::shared_doc::SharedDocs;
 use crate::native::pairing_util::{
     build_control_connect_addr, emit_paired_invite_received,
@@ -39,6 +40,7 @@ pub struct PairedConnectionManager {
     presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
     app_handle: AppHandle,
     docs: Arc<SharedDocs>,
+    groups: Arc<GroupService>,
     sessions: Arc<RwLock<HashMap<String, Connection>>>,
     waiters: Arc<Mutex<HashMap<String, SessionWaiter>>>,
     tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
@@ -53,6 +55,7 @@ impl PairedConnectionManager {
         presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
         app_handle: AppHandle,
         docs: Arc<SharedDocs>,
+        groups: Arc<GroupService>,
     ) -> Self {
 
         Self {
@@ -63,6 +66,7 @@ impl PairedConnectionManager {
             presence,
             app_handle,
             docs,
+            groups,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             waiters: Arc::new(Mutex::new(HashMap::new())),
             tasks: Arc::new(Mutex::new(HashMap::new())),
@@ -73,6 +77,11 @@ impl PairedConnectionManager {
     /// The documents shared with paired peers.
     pub fn docs(&self) -> &Arc<SharedDocs> {
         &self.docs
+    }
+
+    /// The groups this device is in.
+    pub fn groups(&self) -> &Arc<GroupService> {
+        &self.groups
     }
 
     pub fn attach_runtime(&self, runtime: Arc<Mutex<crate::native::runtime::NodeRuntime>>) {
@@ -311,6 +320,7 @@ impl PairedConnectionManager {
             presence: self.presence.clone(),
             app_handle: self.app_handle.clone(),
             docs: self.docs.clone(),
+            groups: self.groups.clone(),
             sessions: self.sessions.clone(),
             waiters: self.waiters.clone(),
             tasks: self.tasks.clone(),
@@ -538,6 +548,9 @@ impl PairedConnectionManager {
                 ControlMessage::DocSync { data } => {
                     self.docs.receive(&remote_id, &data, conn).await;
                 }
+                message if message.is_group() => {
+                    self.groups.handle_message(&remote_id, conn, message, true).await;
+                }
                 _other => {
 
                 }
@@ -643,7 +656,11 @@ impl PairedConnectionManager {
         let docs = self.docs.clone();
         let peer = key.to_string();
         if let Some(conn) = self.sessions.read().await.get(key).cloned() {
-            tokio::spawn(async move { docs.connected(&peer, &conn).await });
+            let groups = self.groups.clone();
+            tokio::spawn(async move {
+                groups.set_connection(&peer, conn.clone()).await;
+                docs.connected(&peer, &conn).await
+            });
         }
     }
 

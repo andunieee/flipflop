@@ -324,7 +324,12 @@ pub async fn wait_until_absent(node: &TestNode, endpoint_id: &str, deadline: Dur
 pub async fn spawn_paired_nodes() -> (TestNode, TestNode) {
     let host = spawn_node("alice").await;
     let joiner = spawn_node("bob").await;
+    pair(&host, &joiner).await;
+    (host, joiner)
+}
 
+/// Pairs two running nodes with each other.
+pub async fn pair(host: &TestNode, joiner: &TestNode) {
     let ticket = host
         .start_pairing_host(Some(300))
         .await
@@ -363,8 +368,6 @@ pub async fn spawn_paired_nodes() -> (TestNode, TestNode) {
         },
     )
     .await;
-
-    (host, joiner)
 }
 
 /// A sender and a receiver node, paired with each other, for transfer tests.
