@@ -1,0 +1,4 @@
+* Automerge: documents sync live between peers, with edits merged automatically
+* Quick share: send to nearby Android devices without pairing
+* Browser link rewritten: also works over the internet, not only local Wi-Fi, and you can open several links at once
+* GPL-3.0 license (required by the new UI toolkit)
