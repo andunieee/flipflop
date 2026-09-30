@@ -51,6 +51,28 @@ mod android {
         });
     }
 
+    fn ble_permissions_granted() -> bool {
+        with_activity(|env, a| env.call_method(a, "blePermissionsGranted", "()Z", &[])?.z()).unwrap_or(false)
+    }
+
+    /// Hand blew (the BLE layer under iroh-ble-transport) the JVM, then make sure the Bluetooth
+    /// permission is granted, asking if needed. Returns false if it was denied or timed out.
+    pub fn ensure_ble_permission() -> bool {
+        let ctx = ndk_context::android_context();
+        blew::platform::android::init_jvm(unsafe { jni22::JavaVM::from_raw(ctx.vm().cast()) });
+        if ble_permissions_granted() {
+            return true;
+        }
+        call_void("requestBlePermissions");
+        for _ in 0..600 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if ble_permissions_granted() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn start_qr_scan() {
         call_void("startQrScan");
     }
@@ -108,4 +130,12 @@ mod android {
         let text = jstr(&mut env, &text);
         crate::ble::android::on_status(text);
     }
+}
+
+/// Whether the BLE transport can be started now. On Android this asks for the Bluetooth permission
+/// and waits for the answer (the transport can only be added when the endpoint is bound);
+/// elsewhere there is nothing to ask.
+#[cfg(not(target_os = "android"))]
+pub fn ensure_ble_permission() -> bool {
+    true
 }

@@ -8,7 +8,7 @@ use flipflop::core::{Core, Event};
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let dir = std::env::temp_dir().join("flipflop-headless");
-    let core = Core::start(&dir, |event| match event {
+    let core = Core::start(&dir, true, |event| match event {
         Event::Peers(peers) => {
             for p in peers {
                 println!("peer {} {:?} lan={} ble={} connected={}", p.id, p.name, p.lan, p.ble, p.connected);
