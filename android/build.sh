@@ -20,6 +20,7 @@ blew_dir=$(cd .. && cargo metadata --format-version 1 | python3 -c 'import json,
 rm -rf blew-kt && mkdir -p blew-kt
 cp -r "$blew_dir/android/src/main/java/org" blew-kt/
 rm -f blew-kt/org/jakebot/blew/BlewPlugin.kt
+./patch-blew.py blew-kt/org/jakebot/blew   # backport to Android < 13
 
 task=assembleDebug; [ "$profile" = release ] && task=assembleRelease
 gradle --no-daemon -q "$task"

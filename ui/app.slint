@@ -75,6 +75,11 @@ export component MainWindow inherits Window {
     in property <bool> live-camera;
     in-out property <int> tab: 0;
 
+    // Space taken at the bottom by the Android navigation bar or, while it is up, the soft keyboard.
+    // The reported keyboard height already reaches down over the navigation bar. (Deriving it from the
+    // window height instead would be a binding loop with the root layout.)
+    property <length> bottom-inset: max(root.safe-area-insets.bottom, root.virtual-keyboard-size.height);
+
     callback rename(string);
     callback connect(string);
     callback disconnect(string);
@@ -88,7 +93,7 @@ export component MainWindow inherits Window {
     VerticalLayout {
         padding: 12px;
         padding-top: 12px + root.safe-area-insets.top;
-        padding-bottom: 12px + root.safe-area-insets.bottom;
+        padding-bottom: 12px + root.bottom-inset;
         padding-left: 12px + root.safe-area-insets.left;
         padding-right: 12px + root.safe-area-insets.right;
         spacing: 10px;
