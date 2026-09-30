@@ -1,27 +1,6 @@
-# Rust build artifacts
 /target
-**/target
-
-# IDE and editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Trashes
-Thumbs.db
-
-# Logs
-*.log
-*.jks
-
-# Flatpak builds
-build-dir/
-.flatpak-builder/
-*.flatpak
-Cargo.toml.orig
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+android/local.properties

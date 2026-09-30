@@ -1,22 +1,24 @@
-//! Shared UI + logic for the Slint frontend.
-//!
-//! The same code builds as the desktop binary (`flipflop`) and as
-//! the cdylib loaded by the Android `NativeActivity` (see `android.rs` and
-//! docs/development.md, Android section).
-
-pub mod android;
 pub mod app;
-pub mod emitter;
-pub mod engine;
-pub mod format;
-pub mod group_ui;
-pub mod guest;
-pub mod native;
-pub mod protocol;
+pub mod ble;
+pub mod core;
 pub mod platform;
 pub mod qr;
-pub mod recorder;
+#[cfg(not(target_os = "android"))]
+pub mod scan;
 pub mod settings;
-pub mod transfers;
 
-slint::include_modules!();
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(android_app: slint::android::AndroidApp) {
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Warn).with_tag("flipflop"),
+    );
+    let dir = android_app
+        .internal_data_path()
+        .unwrap_or_else(|| std::path::PathBuf::from("/data/local/tmp/flipflop"));
+    platform::init(android_app.activity_as_ptr());
+    slint::android::init(android_app).unwrap();
+    if let Err(err) = app::run(dir) {
+        log::error!("flipflop exited: {err:#}");
+    }
+}

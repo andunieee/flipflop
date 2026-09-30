@@ -1,223 +1,55 @@
 [package]
 name = "flipflop"
-version = "0.0.7"
-edition = "2021"
-license = "AGPL-3.0-only"
-description = "Send files and text straight to your own trusted devices, desktop and Android, over LAN, Bluetooth or the internet"
-rust-version = "1.92"
+version = "0.1.0"
+edition = "2024"
 
-# The crate is a lib (cdylib) so it can be loaded as an Android native
-# activity; the desktop build is a thin bin calling into the same code.
 [lib]
-name = "flipflop"
 crate-type = ["cdylib", "rlib"]
-path = "src/lib.rs"
 
 [[bin]]
 name = "flipflop"
 path = "src/main.rs"
 
-[[example]]
-name = "screenshots"
-path = "src/examples/screenshots.rs"
-
-[[example]]
-name = "probe_custom_relay"
-path = "src/examples/probe_custom_relay.rs"
-
-[build-dependencies]
-slint-build = "=1.18.1"
-# Compiles android/java into a dex for Android builds (as Slint does).
-android-build = "0.1"
-
-# Embeds the app icon and version info into flipflop.exe (see build.rs).
-[target.'cfg(windows)'.build-dependencies]
-winresource = "0.1"
-
 [dependencies]
-anyhow = "1"
-tokio = { version = "1.34.0", features = ["full"] }
+iroh = "1.4.1"
+iroh-mdns-address-lookup = "0.6.1"
+iroh-tickets = "1.0.0"
+n0-future = "0.3.2"
+n0-watcher = "1.0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-dirs = "5"
-chrono = "0.4"
-# unstable-custom-transports: Bluetooth (see native/bluetooth.rs). Not covered by
-# semver, so iroh updates may need adapting it.
-iroh = { version = "1.0.3", features = ["platform-verifier", "unstable-custom-transports"] }
-# Only used to read a ticket's blob hash.
-iroh-blobs = "0.103"
-iroh-base = "1.0.3"
-iroh-mdns-address-lookup = "0.4"
-n0-future = "0.3"
-# Same versions iroh uses; they appear in its custom-transport API.
-n0-watcher = "1"
-noq-udp = "1"
-irpc = { version = "0.17", default-features = false }
-num_cpus = "1.16.0"
-bytes = "=1.11.1"
-derive_more = { version = "2.0.1", features = ["display", "from_str"] }
-data-encoding = "2.8.0"
-url = "2"
-walkdir = "2.4.0"
-keyring = "3"
-uuid = { version = "1", features = ["v4"] }
-# backend-android-activity-06 is inert off-Android (only used on
-# target_os = "android"); enabling it unconditionally keeps one dep set.
-# Exact pin. Not 1.17.x: it requires an `i-slint-backend-android-activity
-# =1.17.1` that was never published to crates.io. Not 1.16.x: its Flickable
-# grows its scroll clamp height to the Android IME inset (the nav bar, even
-# with no keyboard up), so ScrollViews stop short of the bottom.
-slint = { version = "=1.18.1", features = ["backend-android-activity-06"] }
+qrcode = { version = "0.14", default-features = false }
+rqrr = "0.11"
+anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-qrcode = { version = "0.14.1", default-features = false }
-# Browser link (src/guest): a small HTTP/1.1 server, versions iroh already
-# pulls in. netwatch lists our LAN addresses (iroh's own, works on Android).
-hyper = { version = "1", features = ["server", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
-http-body-util = "0.1"
-netwatch = "0.19"
-crc32fast = "1"
-getrandom = "0.3"
-automerge = "0.12.0"
-blake3 = "1"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Pin to the same rustls iroh resolves so dyn ServerCertVerifier types unify.
-# default-features = false avoids an extra aws-lc-sys build; ring comes via iroh.
-rustls = { version = "=0.23.36", default-features = false, features = ["std"] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.3", features = ["wasm_js"] }
-iroh-blobs = { version = "0.103", default-features = false }
-iroh = { version = "1.0.3", default-features = false, features = ["tls-ring"] }
-tokio = { version = "1.34.0", features = ["io-util", "macros", "rt", "sync"] }
-web-time = "1"
-
-[dev-dependencies]
-# Above and beyond [dependencies]: process control + temp dirs for tests.
-duct = "0.13.6"
-nix = { version = "0.29", features = ["signal", "process"] }
-rand = "0.10"
-tempfile = "3.8.1"
+tracing-subscriber = "0.3"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-rfd = "0.15"
-# wayland-data-control: native Wayland clipboard (falls back to X11). Without
-# it, copies land on XWayland and never reach Wayland apps.
-arboard = { version = "3", features = ["wayland-data-control"] }
-open = "5"
+slint = "1.18"
+hostname = "0.4"
+dirs = "6"
+nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17", features = ["bluetoothd"] }
+futures = "0.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-skia"] }
+android-activity = "0.6"
 jni = "0.21"
-rqrr = "0.11.0"
+ndk-context = "0.1"
+android_logger = "0.15"
+log = "0.4"
+
+[build-dependencies]
+slint-build = "1.18"
 
 [profile.release]
-panic = "abort"
 opt-level = "s"
-codegen-units = 1
-lto = true
-debug = "none"
+lto = "thin"
 strip = true
 
-# --------------------------------------------------------------- Android
-#
-# Build with: just android-install (debug, as com.flipflop.app.debug)
-# (see docs/development.md, Android section for the toolchain setup)
-
-[package.metadata.android]
-package = "com.flipflop.app"
-apk_name = "flipflop"
-# Launcher icon + launch theme; PNGs are generated by src/android/gen-res.sh.
-resources = "src/android/res"
-# Slint's Android backend needs API >= 26.
-build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
-
-# cargo-apk derives the APK versionCode from `version` and refuses an
-# explicit one: (1 << 24) | major << 16 | minor << 8 | patch. It is
-# repeated here only so F-Droid's update checker can read it; the release
-# workflow fails if it doesn't match. Bump it together with `version`.
-[package.metadata.fdroid]
-version_code = 16777223
-
-[package.metadata.android.sdk]
-min_sdk_version = 26
-target_sdk_version = 35
-
-[package.metadata.android.application]
-label = "flipflop"
-icon = "@mipmap/ic_launcher"
-theme = "@style/AppTheme"
-
-[package.metadata.android.application.activity]
-config_changes = "orientation|keyboardHidden|screenSize"
-
-# Reachable peers need plain internet access only; everything else is
-# app-private storage.
-[[package.metadata.android.uses_permission]]
-name = "android.permission.INTERNET"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.ACCESS_NETWORK_STATE"
-# Received files go to the public Downloads folder; Android 8/9 need this
-# for that (11+ needs nothing, 10 falls back to app-private storage).
-[[package.metadata.android.uses_permission]]
-name = "android.permission.WRITE_EXTERNAL_STORAGE"
-max_sdk_version = 28
-# Without this Android drops multicast to the app, so it can publish its own
-# mDNS records but never receives other devices', LAN peers appear one-way.
-[[package.metadata.android.uses_permission]]
-name = "android.permission.CHANGE_WIFI_MULTICAST_STATE"
-
-# Bluetooth transport (src/native/src/bluetooth.rs, BluetoothLink.java):
-# BLE advertising/scanning plus L2CAP channels, Android 10+ only. Before
-# Android 12 the legacy pair is granted at install and scanning needs
-# location; from 12 the "nearby devices" trio is requested at runtime, and
-# location still is, since cargo-apk can't mark BLUETOOTH_SCAN
-# neverForLocation.
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH"
-max_sdk_version = 30
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_ADMIN"
-max_sdk_version = 30
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_SCAN"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_ADVERTISE"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_CONNECT"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.ACCESS_FINE_LOCATION"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.ACCESS_COARSE_LOCATION"
-# Optional: devices without it simply run without the Bluetooth transport.
-[[package.metadata.android.uses_feature]]
-name = "android.hardware.bluetooth_le"
-required = false
-
-# Scanning a peer's QR code (QrCamera.java). Optional, like Bluetooth.
-[[package.metadata.android.uses_permission]]
-name = "android.permission.CAMERA"
-[[package.metadata.android.uses_feature]]
-name = "android.hardware.camera"
-required = false
-
-# "Send app" lists launchable apps; Android 11+ hides other packages unless
-# the manifest declares what it looks for.
-[[package.metadata.android.queries.intent]]
-actions = ["android.intent.action.MAIN"]
-categories = ["android.intent.category.LAUNCHER"]
-
-# A share made while the app runs arrives in a second activity instance,
-# which brings the main window's task back to the front.
-[[package.metadata.android.uses_permission]]
-name = "android.permission.REORDER_TASKS"
-
-# Appear in the system share sheet ("Send to flipflop"); shared
-# content is staged into the app-private outbox and offered per peer.
-[[package.metadata.android.application.activity.intent_filter]]
-actions = ["android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"]
-categories = ["android.intent.category.DEFAULT"]
-
-[[package.metadata.android.application.activity.intent_filter.data]]
-mime_type = "*/*"
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

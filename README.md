@@ -1,25 +1,18 @@
 # flipflop
 
-Establish a trusted tunnel between two or more devices: from that point on one can send files to the other anytime.
+Rust + Slint peer-to-peer app (desktop and Android). Peers connect with [iroh](https://iroh.computer).
 
-It works through bluetooth, LAN or even through the wild internet. It uses [Iroh](https://iroh.computer).
+- **LAN**: devices announce over mDNS (service `_flipflop._udp`) with their name; they appear under *Nearby*.
+- **QR**: *Add by QR* shows your ticket as a QR code and scans others' (webcam on desktop, system scanner on Android). Tickets can also be pasted.
+- **BLE**: every device advertises a GATT service whose characteristic holds `{name, ticket}` and scans for it. BLE is discovery only; the connection itself is iroh over IP.
+- **Name**: generated as `<hostname or model> (<os>)`, editable in the UI, persisted.
 
-Use it to share stuff between all your devices, and maybe devices of your family members, in the same household or afar, sharing links, plain text, anything.
+## Run
 
-![flipflop on the desktop](docs/screenshot.png)
+    cargo run                      # desktop
+    cargo test                     # unit + two-node integration tests
+    cargo run --example headless   # CLI node for debugging (optionally pass a ticket or endpoint id)
+    ./android/build.sh [debug|release] [abi...]   # needs cargo-ndk, NDK 27, Android SDK, gradle
+    adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
-## Download
-
-Get the latest Linux, macOS and Windows builds and the Android APK from the [releases page](https://github.com/andunieee/flipflop/releases/latest).
-
-On Windows, you can either run the executable direclty or use the `-setup.exe` installer.
-Because Microsoft hates the world, they will show a "Windows protected your PC" warning when you try.
-
-Because Apple hates the world even more, I can't publish it for iOS.
-
-## Build
-
-```sh
-cargo run --release          # desktop
-just android-install         # Android (needs cargo-apk, Android SDK + NDK)
-```
+Linux BLE needs BlueZ (`bluetoothd`) and libdbus.
