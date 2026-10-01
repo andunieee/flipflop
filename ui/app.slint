@@ -158,7 +158,7 @@ export component MainWindow inherits Window {
             ListView {
                 vertical-stretch: 1;
                 for line in root.chat: Rectangle {
-                    height: bubble.preferred-height + 8px;
+                    height: msg.preferred-height + 12px + 8px;
                     bubble := Rectangle {
                         x: line.mine ? parent.width - self.width : 0px;
                         y: 4px;
