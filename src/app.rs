@@ -11,7 +11,7 @@ use iroh::EndpointId;
 use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use tokio::runtime::Handle;
 
-use crate::core::{Core, Event, Peer};
+use crate::core::{Core, Event, GroupInfo, GroupsView, MemberState, Peer};
 
 slint::include_modules!();
 
@@ -20,6 +20,8 @@ struct UiState {
     chats: HashMap<EndpointId, Vec<ChatLine>>,
     peers: Vec<Peer>,
     selected: Option<EndpointId>,
+    groups: GroupsView,
+    open_group: Option<String>,
 }
 
 type State = Arc<Mutex<UiState>>;
@@ -104,11 +106,104 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         }
     });
 
-    ui.on_disconnect({
-        let slot = slot.clone();
+    ui.on_new_group({
+        let (slot, weak, state) = (slot.clone(), ui.as_weak(), state.clone());
+        move || {
+            let Some(core) = slot.get() else { return };
+            let id = core.create_group();
+            let mut st = state.lock().unwrap();
+            st.open_group = Some(id);
+            if let Some(ui) = weak.upgrade() {
+                show_group(&ui, &st);
+            }
+        }
+    });
+
+    ui.on_open_group_id({
+        let (weak, state) = (ui.as_weak(), state.clone());
         move |id| {
-            if let (Some(core), Ok(id)) = (slot.get(), id.parse::<EndpointId>()) {
-                core.disconnect(id);
+            let mut st = state.lock().unwrap();
+            st.open_group = Some(id.to_string());
+            if let Some(ui) = weak.upgrade() {
+                show_group(&ui, &st);
+            }
+        }
+    });
+
+    ui.on_close_group({
+        let (weak, state) = (ui.as_weak(), state.clone());
+        move || {
+            let mut st = state.lock().unwrap();
+            st.open_group = None;
+            if let Some(ui) = weak.upgrade() {
+                show_group(&ui, &st);
+            }
+        }
+    });
+
+    ui.on_add_to_group({
+        let slot = slot.clone();
+        move |group, peer| {
+            if let (Some(core), Ok(peer)) = (slot.get(), peer.parse::<EndpointId>()) {
+                core.add_to_group(&group, peer);
+            }
+        }
+    });
+
+    ui.on_accept_invite({
+        let slot = slot.clone();
+        move |inviter, group| {
+            if let (Some(core), Ok(inviter)) = (slot.get(), inviter.parse::<EndpointId>()) {
+                core.accept_invite(inviter, &group);
+            }
+        }
+    });
+
+    ui.on_reject_invite({
+        let slot = slot.clone();
+        move |inviter, group| {
+            if let (Some(core), Ok(inviter)) = (slot.get(), inviter.parse::<EndpointId>()) {
+                core.reject_invite(inviter, &group);
+            }
+        }
+    });
+
+    ui.on_save_edit({
+        let slot = slot.clone();
+        move |kind, id, text| {
+            let Some(core) = slot.get() else { return };
+            match kind.as_str() {
+                "peer" => {
+                    if let Ok(id) = id.parse::<EndpointId>() {
+                        core.rename_contact(id, &text);
+                    }
+                }
+                "group" => core.rename_group(&id, &text),
+                _ => {}
+            }
+        }
+    });
+
+    ui.on_delete_edit({
+        let (slot, weak, state) = (slot.clone(), ui.as_weak(), state.clone());
+        move |kind, id| {
+            let Some(core) = slot.get() else { return };
+            match kind.as_str() {
+                "peer" => {
+                    if let Ok(id) = id.parse::<EndpointId>() {
+                        core.forget_contact(id);
+                        core.disconnect(id);
+                    }
+                }
+                "group" => {
+                    core.delete_group(&id);
+                    let mut st = state.lock().unwrap();
+                    st.open_group = None;
+                    if let Some(ui) = weak.upgrade() {
+                        show_group(&ui, &st);
+                    }
+                }
+                _ => {}
             }
         }
     });
@@ -260,10 +355,14 @@ fn on_event(weak: &slint::Weak<MainWindow>, state: &State, event: Event) {
                 .iter()
                 .map(|p| PeerItem {
                     id: p.id.to_string().into(),
-                    name: p.name.clone().into(),
+                    title: p.alias.clone().unwrap_or_else(|| p.name.clone()).into(),
+                    subtitle: if p.alias.is_some() { p.name.clone().into() } else { SharedString::default() },
+                    alias: p.alias.clone().unwrap_or_default().into(),
+                    short: p.id.fmt_short().to_string().into(),
                     lan: p.lan,
                     ble: p.ble,
                     connected: p.connected,
+                    saved: p.saved,
                 })
                 .collect();
             let state = state.clone();
@@ -276,6 +375,39 @@ fn on_event(weak: &slint::Weak<MainWindow>, state: &State, event: Event) {
                     st.selected = None;
                 }
                 show_chat(&ui, &st);
+            });
+        }
+        Event::Groups(view) => {
+            let state = state.clone();
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                let items: Vec<GroupItem> = view
+                    .groups
+                    .iter()
+                    .map(|g| GroupItem {
+                        id: g.id.clone().into(),
+                        title: group_title(g).into(),
+                        subtitle: if g.alias.is_some() { g.haiku.clone().into() } else { SharedString::default() },
+                        summary: group_summary(g).into(),
+                    })
+                    .collect();
+                let invites: Vec<InviteItem> = view
+                    .invites
+                    .iter()
+                    .map(|i| InviteItem {
+                        inviter_id: i.inviter.to_string().into(),
+                        group_id: i.group.clone().into(),
+                        inviter_name: i.inviter_name.clone().into(),
+                        group_title: i.haiku.clone().into(),
+                    })
+                    .collect();
+                ui.set_groups(ModelRc::new(VecModel::from(items)));
+                ui.set_invites(ModelRc::new(VecModel::from(invites)));
+                let mut st = state.lock().unwrap();
+                st.groups = view;
+                if st.open_group.as_ref().is_some_and(|id| !st.groups.groups.iter().any(|g| g.id == *id)) {
+                    st.open_group = None;
+                }
+                show_group(&ui, &st);
             });
         }
         Event::Message { peer, mine, text } => {
@@ -292,11 +424,56 @@ fn on_event(weak: &slint::Weak<MainWindow>, state: &State, event: Event) {
 fn show_chat(ui: &MainWindow, st: &UiState) {
     match st.selected {
         Some(id) => {
-            let name = st.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
+            let name = st.peers.iter().find(|p| p.id == id).map(|p| p.alias.clone().unwrap_or_else(|| p.name.clone())).unwrap_or_default();
             ui.set_chat_peer_name(name.into());
             ui.set_chat(ModelRc::new(VecModel::from(st.chats.get(&id).cloned().unwrap_or_default())));
             ui.set_chat_peer_id(SharedString::from(id.to_string()));
         }
         None => ui.set_chat_peer_id("".into()),
     }
+}
+
+fn group_title(g: &GroupInfo) -> String {
+    g.alias.clone().unwrap_or_else(|| g.haiku.clone())
+}
+
+fn group_summary(g: &GroupInfo) -> String {
+    let count = |s: MemberState| g.members.iter().filter(|m| m.state == s).count();
+    let mut parts = vec![format!("{} joined", count(MemberState::Accepted))];
+    for (n, label) in [(count(MemberState::Sent), "invited"), (count(MemberState::Pending), "waiting"), (count(MemberState::Declined), "declined")] {
+        if n > 0 {
+            parts.push(format!("{n} {label}"));
+        }
+    }
+    parts.join(" · ")
+}
+
+/// Fill the group detail view (or clear it when no group is open).
+fn show_group(ui: &MainWindow, st: &UiState) {
+    let group = st.open_group.as_ref().and_then(|id| st.groups.groups.iter().find(|g| g.id == *id));
+    let Some(g) = group else {
+        ui.set_open_group("".into());
+        return;
+    };
+    let members: Vec<MemberItem> = g
+        .members
+        .iter()
+        .map(|m| {
+            let (status, kind) = match m.state {
+                MemberState::Accepted => ("joined", 0),
+                MemberState::Sent => ("invited", 1),
+                MemberState::Pending => ("waiting for them to be online", 2),
+                MemberState::Declined => ("declined", 3),
+            };
+            MemberItem { name: m.name.clone().into(), status: status.into(), kind }
+        })
+        .collect();
+    let candidates: Vec<CandidateItem> =
+        g.candidates.iter().map(|(id, name)| CandidateItem { id: id.to_string().into(), name: name.clone().into() }).collect();
+    ui.set_group_title(group_title(g).into());
+    ui.set_group_haiku(g.haiku.clone().into());
+    ui.set_group_alias(g.alias.clone().unwrap_or_default().into());
+    ui.set_members(ModelRc::new(VecModel::from(members)));
+    ui.set_candidates(ModelRc::new(VecModel::from(candidates)));
+    ui.set_open_group(g.id.clone().into());
 }

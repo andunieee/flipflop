@@ -1,11 +1,13 @@
 pub mod app;
 pub mod ble;
 pub mod core;
+pub mod haiku;
 pub mod platform;
 pub mod qr;
 #[cfg(not(target_os = "android"))]
 pub mod scan;
 pub mod settings;
+pub mod state;
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]

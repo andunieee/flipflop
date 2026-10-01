@@ -1,11 +1,12 @@
-//! Networking core: one iroh endpoint, LAN discovery (mDNS), peer bookkeeping and a tiny
-//! hello/chat protocol. UI-agnostic; the UI subscribes through the event callback.
+//! Networking core: one iroh endpoint, LAN discovery (mDNS), peer bookkeeping, saved contacts that
+//! reconnect automatically, group invites and a tiny hello/chat protocol. UI-agnostic; the UI
+//! subscribes through the event callback.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -23,7 +24,12 @@ use n0_watcher::Watcher;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use crate::settings::Settings;
+use crate::{
+    settings::{Settings, clean_name},
+    state::{Contact, Group, Invite, Member, Reply, State, Store},
+};
+
+pub use crate::state::MemberState;
 
 pub const ALPN: &[u8] = b"flipflop/0";
 const MDNS_SERVICE: &str = "flipflop";
@@ -32,15 +38,53 @@ const MAX_MSG_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Peer {
     pub id: EndpointId,
+    /// The name the peer itself uses (or a short id if we have never heard one).
     pub name: String,
+    /// Our local rename, if any (saved contacts only).
+    pub alias: Option<String>,
+    /// In the contact list: reconnects automatically.
+    pub saved: bool,
     pub lan: bool,
     pub ble: bool,
     pub connected: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberInfo {
+    pub id: EndpointId,
+    /// Display name (alias, else the peer's own name).
+    pub name: String,
+    pub state: MemberState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupInfo {
+    pub id: String,
+    pub haiku: String,
+    pub alias: Option<String>,
+    pub members: Vec<MemberInfo>,
+    /// Contacts that could still be added.
+    pub candidates: Vec<(EndpointId, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InviteInfo {
+    pub inviter: EndpointId,
+    pub inviter_name: String,
+    pub group: String,
+    pub haiku: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GroupsView {
+    pub groups: Vec<GroupInfo>,
+    pub invites: Vec<InviteInfo>,
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     Peers(Vec<Peer>),
+    Groups(GroupsView),
     /// Our own shareable ticket changed (new addresses, relay came up…).
     Ticket(String),
     /// Our own name changed (also fired once at start-up).
@@ -54,6 +98,9 @@ pub enum Event {
 enum Msg {
     Hello { name: String },
     Text { text: String },
+    /// "Please join this group" (the haiku name derives from the id, so only the id travels).
+    GroupInvite { group: String },
+    GroupReply { group: String, accept: bool },
 }
 
 /// What a BLE peripheral serves and a BLE central reads: our name and ticket.
@@ -79,6 +126,12 @@ struct Inner {
     ble_transport_status: String,
     memory: MemoryLookup,
     settings: Mutex<Settings>,
+    store: Mutex<Store>,
+    /// Reconnect backoff per contact: (not before, current delay). Absent = try now.
+    retry: Mutex<HashMap<EndpointId, (Instant, Duration)>>,
+    dialing: Mutex<HashSet<EndpointId>>,
+    /// Held while snapshotting and emitting, so the UI never sees an older view after a newer one.
+    publish_lock: Mutex<()>,
     peers: Mutex<BTreeMap<EndpointId, PeerEntry>>,
     ticket: Mutex<String>,
     ble_payload: watch::Sender<Option<BlePayload>>,
@@ -141,12 +194,17 @@ impl Core {
             ble_transport_status,
             memory,
             settings: Mutex::new(settings),
+            store: Mutex::new(Store::load(data_dir)),
+            retry: Mutex::default(),
+            dialing: Mutex::default(),
+            publish_lock: Mutex::default(),
             peers: Mutex::default(),
             ticket: Mutex::default(),
             ble_payload: watch::channel(None).0,
             on_event: Box::new(on_event),
         }));
         core.emit(Event::Name(name));
+        core.publish();
         core.spawn_background(lan_events);
         Ok(core)
     }
@@ -201,25 +259,115 @@ impl Core {
 
     // ---- peers ------------------------------------------------------------------------
 
-    fn publish_peers(&self) {
+    /// Run `f` on the persistent state, save it and tell the UI.
+    fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+        let result = {
+            let mut store = self.0.store.lock().unwrap();
+            let result = f(&mut store.state);
+            store.save();
+            result
+        };
+        self.publish();
+        result
+    }
+
+    /// Names peers use for themselves right now (handshake, else announcement).
+    fn live_names(&self) -> BTreeMap<EndpointId, String> {
         let peers = self.0.peers.lock().unwrap();
-        let mut list: Vec<Peer> = peers
+        peers.iter().filter_map(|(id, p)| Some((*id, p.hello_name.clone().or_else(|| p.announced_name.clone())?))).collect()
+    }
+
+    /// Push the peer list and the groups view to the UI.
+    fn publish(&self) {
+        let _ordered = self.0.publish_lock.lock().unwrap();
+        let state = {
+            let store = self.0.store.lock().unwrap();
+            State {
+                contacts: store.state.contacts.clone(),
+                groups: store.state.groups.clone(),
+                invites: store.state.invites.clone(),
+                rejected: Vec::new(),
+                replies: Vec::new(),
+                forgotten: Vec::new(),
+            }
+        };
+        let live = self.live_names();
+        let contact = |id: &EndpointId| state.contacts.iter().find(|c| c.id == id.to_string());
+        let remote_name = |id: &EndpointId| {
+            live.get(id)
+                .cloned()
+                .or_else(|| contact(id).and_then(|c| c.name.clone()))
+                .unwrap_or_else(|| id.fmt_short().to_string())
+        };
+        let display_name = |id: &EndpointId| contact(id).and_then(|c| c.alias.clone()).unwrap_or_else(|| remote_name(id));
+
+        let mut list: Vec<Peer> = {
+            let peers = self.0.peers.lock().unwrap();
+            let mut list: Vec<Peer> = peers
+                .iter()
+                .map(|(id, p)| Peer {
+                    id: *id,
+                    name: remote_name(id),
+                    alias: contact(id).and_then(|c| c.alias.clone()),
+                    saved: contact(id).is_some(),
+                    lan: p.lan,
+                    ble: p.ble || p.ble_t,
+                    connected: p.conn.is_some(),
+                })
+                .collect();
+            // Saved contacts stay listed while offline.
+            for c in &state.contacts {
+                let Ok(id) = c.id.parse::<EndpointId>() else { continue };
+                if !peers.contains_key(&id) {
+                    list.push(Peer { id, name: remote_name(&id), alias: c.alias.clone(), saved: true, lan: false, ble: false, connected: false });
+                }
+            }
+            list
+        };
+        list.sort_by(|a, b| {
+            b.connected
+                .cmp(&a.connected)
+                .then_with(|| b.saved.cmp(&a.saved))
+                .then_with(|| a.alias.as_ref().unwrap_or(&a.name).cmp(b.alias.as_ref().unwrap_or(&b.name)))
+        });
+        self.emit(Event::Peers(list));
+
+        let groups = state
+            .groups
             .iter()
-            .map(|(id, p)| Peer {
-                id: *id,
-                name: p
-                    .hello_name
-                    .clone()
-                    .or_else(|| p.announced_name.clone())
-                    .unwrap_or_else(|| id.fmt_short().to_string()),
-                lan: p.lan,
-                ble: p.ble || p.ble_t,
-                connected: p.conn.is_some(),
+            .filter_map(|g| {
+                let haiku = crate::haiku::name(&parse_gid(&g.id)?);
+                let members: Vec<MemberInfo> = g
+                    .members
+                    .iter()
+                    .filter_map(|m| {
+                        let id = m.peer.parse::<EndpointId>().ok()?;
+                        Some(MemberInfo { id, name: display_name(&id), state: m.state })
+                    })
+                    .collect();
+                let candidates = state
+                    .contacts
+                    .iter()
+                    .filter_map(|c| c.id.parse::<EndpointId>().ok())
+                    .filter(|id| !members.iter().any(|m| m.id == *id))
+                    .map(|id| (id, display_name(&id)))
+                    .collect();
+                Some(GroupInfo { id: g.id.clone(), haiku, alias: g.alias.clone(), members, candidates })
             })
             .collect();
-        drop(peers);
-        list.sort_by(|a, b| b.connected.cmp(&a.connected).then_with(|| a.name.cmp(&b.name)));
-        self.emit(Event::Peers(list));
+        let invites = state
+            .invites
+            .iter()
+            .filter_map(|i| {
+                let inviter = i.inviter.parse::<EndpointId>().ok()?;
+                Some(InviteInfo { inviter, inviter_name: display_name(&inviter), group: i.group.clone(), haiku: crate::haiku::name(&parse_gid(&i.group)?) })
+            })
+            .collect();
+        self.emit(Event::Groups(GroupsView { groups, invites }));
+    }
+
+    fn publish_peers(&self) {
+        self.publish();
     }
 
     /// Update a peer entry and republish the list. Dead entries (not connected, no source) are removed.
@@ -227,15 +375,23 @@ impl Core {
         if id == self.id() {
             return;
         }
-        {
+        let appeared = {
             let mut peers = self.0.peers.lock().unwrap();
             let entry = peers.entry(id).or_default();
+            let was_reachable = entry.lan || entry.ble || entry.ble_t;
             f(entry);
-            if !entry.lan && !entry.ble && !entry.ble_t && entry.conn.is_none() {
+            let reachable = entry.lan || entry.ble || entry.ble_t;
+            let appeared = reachable && !was_reachable;
+            if !reachable && entry.conn.is_none() {
                 peers.remove(&id);
             }
+            appeared
+        };
+        if appeared {
+            // A saved contact just showed up nearby: don't wait out its reconnect backoff.
+            self.0.retry.lock().unwrap().remove(&id);
         }
-        self.publish_peers();
+        self.publish();
     }
 
     /// A peer seen over BLE: remember how to reach it (address from its ticket) and its name.
@@ -277,6 +433,8 @@ impl Core {
 
     pub async fn connect(&self, id: EndpointId) -> Result<()> {
         if self.0.peers.lock().unwrap().get(&id).is_some_and(|p| p.conn.is_some()) {
+            // Already connected (they dialed us, say): asking to connect saves them.
+            self.remember(id);
             return Ok(());
         }
         let conn = self
@@ -285,7 +443,7 @@ impl Core {
             .connect(id, ALPN)
             .await
             .map_err(|e| anyhow!("could not connect: {e}"))?;
-        self.adopt(conn);
+        self.adopt(conn, true);
         Ok(())
     }
 
@@ -311,16 +469,29 @@ impl Core {
     }
 
     /// Register a live connection (incoming or outgoing) and start serving it.
-    fn adopt(&self, conn: Connection) {
+    fn adopt(&self, conn: Connection, outgoing: bool) {
         let id = conn.remote_id();
         let stable = conn.stable_id();
+        // Both sides may dial each other at once. They must agree on which connection survives:
+        // the one dialed by the endpoint with the smaller id.
+        let new_wins = if outgoing { self.id() < id } else { id < self.id() };
         let previous = {
             let mut peers = self.0.peers.lock().unwrap();
-            peers.entry(id).or_default().conn.replace(conn.clone())
+            let entry = peers.entry(id).or_default();
+            if !new_wins && entry.conn.as_ref().is_some_and(|c| c.close_reason().is_none()) {
+                conn.close(0u32.into(), b"duplicate");
+                return;
+            }
+            entry.conn.replace(conn.clone())
         };
         if let Some(old) = previous {
             old.close(0u32.into(), b"replaced");
         }
+        // Connections we dial are saved; so are incoming ones, unless the user deleted that contact.
+        if outgoing || !self.is_forgotten(id) {
+            self.remember(id);
+        }
+        self.0.retry.lock().unwrap().remove(&id);
         self.publish_peers();
         self.emit(Event::Notice(format!("connected to {}", id.fmt_short())));
 
@@ -330,16 +501,24 @@ impl Core {
             if let Err(err) = send_msg(&conn, &hello).await {
                 tracing::debug!("hello failed: {err:#}");
             }
+            this.flush(id).await;
             while let Ok(mut rx) = conn.accept_uni().await {
                 let Ok(bytes) = rx.read_to_end(MAX_MSG_BYTES).await else { continue };
                 match serde_json::from_slice::<Msg>(&bytes) {
                     Ok(Msg::Hello { name }) => {
-                        let name = crate::settings::clean_name(&name);
-                        this.update_peer(id, |p| p.hello_name = Some(name));
+                        let name = clean_name(&name);
+                        this.update_peer(id, |p| p.hello_name = Some(name.clone()));
+                        this.with_state(|st| {
+                            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == id.to_string()) {
+                                c.name = Some(name);
+                            }
+                        });
                     }
                     Ok(Msg::Text { text }) => {
                         this.emit(Event::Message { peer: id, mine: false, text });
                     }
+                    Ok(Msg::GroupInvite { group }) => this.on_invite(id, group),
+                    Ok(Msg::GroupReply { group, accept }) => this.on_reply(id, group, accept),
                     Err(err) => tracing::debug!("bad message: {err}"),
                 }
             }
@@ -354,6 +533,213 @@ impl Core {
         });
     }
 
+    // ---- contacts ---------------------------------------------------------------------
+
+    /// Every peer we connect to goes in the contact list (and is redialed from now on).
+    fn remember(&self, id: EndpointId) {
+        let name = self.0.peers.lock().unwrap().get(&id).and_then(|p| p.hello_name.clone().or_else(|| p.announced_name.clone()));
+        self.with_state(|st| {
+            let key = id.to_string();
+            st.forgotten.retain(|f| *f != key);
+            match st.contacts.iter_mut().find(|c| c.id == key) {
+                Some(c) => {
+                    if name.is_some() {
+                        c.name = name;
+                    }
+                }
+                None => st.contacts.push(Contact { id: key, name, alias: None }),
+            }
+        });
+    }
+
+    /// Local rename; an empty alias goes back to the peer's own name.
+    pub fn rename_contact(&self, id: EndpointId, alias: &str) {
+        let alias = Some(clean_name(alias)).filter(|a| !a.is_empty());
+        self.with_state(|st| {
+            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == id.to_string()) {
+                c.alias = alias;
+            }
+        });
+    }
+
+    /// Remove from the contact list: no more automatic reconnects, and they are not saved again
+    /// just because they connect to us.
+    pub fn forget_contact(&self, id: EndpointId) {
+        self.0.retry.lock().unwrap().remove(&id);
+        self.with_state(|st| {
+            let key = id.to_string();
+            st.contacts.retain(|c| c.id != key);
+            if !st.forgotten.contains(&key) {
+                st.forgotten.push(key);
+            }
+        });
+    }
+
+    fn is_forgotten(&self, id: EndpointId) -> bool {
+        self.0.store.lock().unwrap().state.forgotten.contains(&id.to_string())
+    }
+
+    // ---- groups -----------------------------------------------------------------------
+
+    /// Create an empty group with a random id (and so a random haiku name). Returns the id.
+    pub fn create_group(&self) -> String {
+        let id = new_group_id();
+        self.with_state(|st| st.groups.push(Group { id: id.clone(), alias: None, members: Vec::new() }));
+        id
+    }
+
+    pub fn rename_group(&self, group: &str, alias: &str) {
+        let alias = Some(clean_name(alias)).filter(|a| !a.is_empty());
+        self.with_state(|st| {
+            if let Some(g) = st.groups.iter_mut().find(|g| g.id == group) {
+                g.alias = alias;
+            }
+        });
+    }
+
+    pub fn delete_group(&self, group: &str) {
+        self.with_state(|st| st.groups.retain(|g| g.id != group));
+    }
+
+    /// Put a contact in a group. The invite goes out now if they are connected, otherwise on their
+    /// next connection. Adding someone who declined asks them again.
+    pub fn add_to_group(&self, group: &str, peer: EndpointId) {
+        self.remember_unconnected(peer);
+        let key = peer.to_string();
+        self.with_state(|st| {
+            let Some(g) = st.groups.iter_mut().find(|g| g.id == group) else { return };
+            match g.members.iter_mut().find(|m| m.peer == key) {
+                Some(m) if m.state == MemberState::Declined => m.state = MemberState::Pending,
+                Some(_) => {}
+                None => g.members.push(Member { peer: key, state: MemberState::Pending }),
+            }
+        });
+        self.flush_later(peer);
+    }
+
+    fn remember_unconnected(&self, id: EndpointId) {
+        if !self.0.store.lock().unwrap().state.contacts.iter().any(|c| c.id == id.to_string()) {
+            self.remember(id);
+        }
+    }
+
+    pub fn accept_invite(&self, inviter: EndpointId, group: &str) {
+        self.answer_invite(inviter, group, true);
+    }
+
+    /// Decline, and remember it: further invites from this peer to this group are not shown.
+    pub fn reject_invite(&self, inviter: EndpointId, group: &str) {
+        self.answer_invite(inviter, group, false);
+    }
+
+    fn answer_invite(&self, inviter: EndpointId, group: &str, accept: bool) {
+        let who = inviter.to_string();
+        self.with_state(|st| {
+            let invite = Invite { inviter: who.clone(), group: group.to_string() };
+            st.invites.retain(|i| *i != invite);
+            if accept {
+                match st.groups.iter_mut().find(|g| g.id == group) {
+                    Some(g) => {
+                        if !g.members.iter().any(|m| m.peer == who) {
+                            g.members.push(Member { peer: who.clone(), state: MemberState::Accepted });
+                        }
+                    }
+                    None => st.groups.push(Group {
+                        id: group.to_string(),
+                        alias: None,
+                        members: vec![Member { peer: who.clone(), state: MemberState::Accepted }],
+                    }),
+                }
+            } else if !st.rejected.contains(&invite) {
+                st.rejected.push(invite);
+            }
+            queue_reply(st, &who, group, accept);
+        });
+        self.flush_later(inviter);
+    }
+
+    fn on_invite(&self, from: EndpointId, group: String) {
+        if parse_gid(&group).is_none() {
+            return;
+        }
+        let who = from.to_string();
+        let reply = self.with_state(|st| {
+            let invite = Invite { inviter: who.clone(), group: group.clone() };
+            if st.rejected.contains(&invite) {
+                // Not shown again; just tell them (again) so they stop asking.
+                queue_reply(st, &who, &group, false);
+                true
+            } else if let Some(g) = st.groups.iter_mut().find(|g| g.id == group) {
+                // We are already in this group.
+                if !g.members.iter().any(|m| m.peer == who) {
+                    g.members.push(Member { peer: who.clone(), state: MemberState::Accepted });
+                }
+                queue_reply(st, &who, &group, true);
+                true
+            } else {
+                if !st.invites.contains(&invite) {
+                    st.invites.push(invite);
+                }
+                false
+            }
+        });
+        if reply {
+            self.flush_later(from);
+        }
+    }
+
+    fn on_reply(&self, from: EndpointId, group: String, accept: bool) {
+        let who = from.to_string();
+        self.with_state(|st| {
+            let state = if accept { MemberState::Accepted } else { MemberState::Declined };
+            if let Some(m) = st.groups.iter_mut().find(|g| g.id == group).and_then(|g| g.members.iter_mut().find(|m| m.peer == who)) {
+                m.state = state;
+            }
+        });
+    }
+
+    fn flush_later(&self, peer: EndpointId) {
+        let this = self.clone();
+        tokio::spawn(async move { this.flush(peer).await });
+    }
+
+    /// Send everything that was waiting for this peer: undelivered or unanswered invites and
+    /// answers to its invites. Receivers de-duplicate, so sending twice is harmless.
+    async fn flush(&self, peer: EndpointId) {
+        let Some(conn) = self.0.peers.lock().unwrap().get(&peer).and_then(|p| p.conn.clone()) else { return };
+        let key = peer.to_string();
+        let (invites, replies) = {
+            let store = self.0.store.lock().unwrap();
+            let invites: Vec<String> = store
+                .state
+                .groups
+                .iter()
+                .filter(|g| g.members.iter().any(|m| m.peer == key && matches!(m.state, MemberState::Pending | MemberState::Sent)))
+                .map(|g| g.id.clone())
+                .collect();
+            let replies: Vec<Reply> = store.state.replies.iter().filter(|r| r.peer == key).cloned().collect();
+            (invites, replies)
+        };
+        for group in invites {
+            if send_msg(&conn, &Msg::GroupInvite { group: group.clone() }).await.is_err() {
+                return;
+            }
+            self.with_state(|st| {
+                if let Some(m) = st.groups.iter_mut().find(|g| g.id == group).and_then(|g| g.members.iter_mut().find(|m| m.peer == key)) {
+                    if m.state == MemberState::Pending {
+                        m.state = MemberState::Sent;
+                    }
+                }
+            });
+        }
+        for r in replies {
+            if send_msg(&conn, &Msg::GroupReply { group: r.group.clone(), accept: r.accept }).await.is_err() {
+                return;
+            }
+            self.with_state(|st| st.replies.retain(|x| !(x.peer == r.peer && x.group == r.group)));
+        }
+    }
+
     // ---- background tasks -------------------------------------------------------------
 
     fn spawn_background(&self, mut events: impl n0_future::Stream<Item = DiscoveryEvent> + Unpin + Send + 'static) {
@@ -364,7 +750,7 @@ impl Core {
                 let this = this.clone();
                 tokio::spawn(async move {
                     match incoming.await {
-                        Ok(conn) => this.adopt(conn),
+                        Ok(conn) => this.adopt(conn, false),
                         Err(err) => tracing::debug!("incoming connection failed: {err}"),
                     }
                 });
@@ -417,6 +803,48 @@ impl Core {
             });
         }
 
+        // Saved contacts always reconnect, backing off while they are unreachable.
+        let this = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let ids: Vec<EndpointId> = this
+                    .0
+                    .store
+                    .lock()
+                    .unwrap()
+                    .state
+                    .contacts
+                    .iter()
+                    .filter_map(|c| c.id.parse().ok())
+                    .filter(|id| *id != this.id())
+                    .collect();
+                for id in ids {
+                    let connected = this.0.peers.lock().unwrap().get(&id).is_some_and(|p| p.conn.is_some());
+                    let due = this.0.retry.lock().unwrap().get(&id).is_none_or(|(at, _)| *at <= Instant::now());
+                    if connected || !due || !this.0.dialing.lock().unwrap().insert(id) {
+                        continue;
+                    }
+                    let this = this.clone();
+                    tokio::spawn(async move {
+                        let result = this.connect(id).await;
+                        this.0.dialing.lock().unwrap().remove(&id);
+                        let mut retry = this.0.retry.lock().unwrap();
+                        match result {
+                            Ok(()) => {
+                                retry.remove(&id);
+                            }
+                            Err(err) => {
+                                tracing::debug!("reconnect to {} failed: {err:#}", id.fmt_short());
+                                let delay = retry.get(&id).map_or(Duration::from_secs(5), |(_, d)| (*d * 2).min(Duration::from_secs(60)));
+                                retry.insert(id, (Instant::now() + delay, delay));
+                            }
+                        }
+                    });
+                }
+            }
+        });
+
         // Keep our shareable ticket current.
         let this = self.clone();
         tokio::spawn(async move {
@@ -429,6 +857,28 @@ impl Core {
             }
         });
     }
+}
+
+/// Queue an answer for the inviter, replacing any older answer for the same group.
+fn queue_reply(st: &mut State, peer: &str, group: &str, accept: bool) {
+    st.replies.retain(|r| !(r.peer == peer && r.group == group));
+    st.replies.push(Reply { peer: peer.to_string(), group: group.to_string(), accept });
+}
+
+fn parse_gid(hex: &str) -> Option<[u8; 16]> {
+    if hex.len() != 32 || !hex.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// 16 random bytes, hex encoded. (Borrows iroh's secret-key generator as a source of randomness.)
+fn new_group_id() -> String {
+    iroh::SecretKey::generate().to_bytes()[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn user_data(name: &str) -> UserData {
