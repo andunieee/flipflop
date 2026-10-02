@@ -52,6 +52,12 @@ pub struct Peer {
     pub lan: bool,
     pub ble: bool,
     pub connected: bool,
+    /// We paired with them.
+    pub paired: bool,
+    /// They paired with us.
+    pub paired_us: bool,
+    /// Both paired: the implied group of the two of us.
+    pub pair_group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +78,8 @@ pub struct GroupInfo {
     pub candidates: Vec<(EndpointId, String)>,
     pub auto_download: bool,
     pub auto_stop: bool,
+    /// An implied group (see [`Core::pair`]): the other device. Not listed with the groups.
+    pub with: Option<EndpointId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +118,9 @@ enum Msg {
     /// "Please join this group" (the haiku name derives from the id, so only the id travels).
     GroupInvite { group: String },
     GroupReply { group: String, accept: bool },
+    /// "I paired with you" / "I no longer pair with you".
+    Pair,
+    Unpair,
 }
 
 /// What a BLE peripheral serves and a BLE central reads: our name and ticket.
@@ -333,6 +344,7 @@ impl Core {
                 rejected: Vec::new(),
                 replies: Vec::new(),
                 forgotten: Vec::new(),
+                paired_us: store.state.paired_us.clone(),
                 shares: Vec::new(),
                 received: Vec::new(),
             }
@@ -346,26 +358,39 @@ impl Core {
                 .unwrap_or_else(|| id.fmt_short().to_string())
         };
         let display_name = |id: &EndpointId| contact(id).and_then(|c| c.alias.clone()).unwrap_or_else(|| remote_name(id));
+        let pairing = |id: &EndpointId| {
+            let paired = contact(id).is_some_and(|c| c.paired);
+            let paired_us = state.paired_us.contains(&id.to_string());
+            let group = (paired && paired_us).then(|| pair_group_id(&self.id(), id));
+            (paired, paired_us, group)
+        };
 
         let mut list: Vec<Peer> = {
             let peers = self.0.peers.lock().unwrap();
             let mut list: Vec<Peer> = peers
                 .iter()
-                .map(|(id, p)| Peer {
-                    id: *id,
-                    name: remote_name(id),
-                    alias: contact(id).and_then(|c| c.alias.clone()),
-                    saved: contact(id).is_some(),
-                    lan: p.lan,
-                    ble: p.ble || p.ble_t,
-                    connected: p.conn.is_some(),
+                .map(|(id, p)| {
+                    let (paired, paired_us, pair_group) = pairing(id);
+                    Peer {
+                        id: *id,
+                        name: remote_name(id),
+                        alias: contact(id).and_then(|c| c.alias.clone()),
+                        saved: contact(id).is_some(),
+                        lan: p.lan,
+                        ble: p.ble || p.ble_t,
+                        connected: p.conn.is_some(),
+                        paired,
+                        paired_us,
+                        pair_group,
+                    }
                 })
                 .collect();
             // Saved contacts stay listed while offline.
             for c in &state.contacts {
                 let Ok(id) = c.id.parse::<EndpointId>() else { continue };
                 if !peers.contains_key(&id) {
-                    list.push(Peer { id, name: remote_name(&id), alias: c.alias.clone(), saved: true, lan: false, ble: false, connected: false });
+                    let (paired, paired_us, pair_group) = pairing(&id);
+                    list.push(Peer { id, name: remote_name(&id), alias: c.alias.clone(), saved: true, lan: false, ble: false, connected: false, paired, paired_us, pair_group });
                 }
             }
             list
@@ -405,6 +430,7 @@ impl Core {
                     candidates,
                     auto_download: g.auto_download,
                     auto_stop: g.auto_stop,
+                    with: g.with.as_ref().and_then(|w| w.parse().ok()),
                 })
             })
             .collect();
@@ -481,6 +507,8 @@ impl Core {
         self.0.memory.add_endpoint_info(addr);
         self.update_peer(id, |_| {});
         self.connect(id).await?;
+        // Scanning or pasting someone's code is choosing to pair with them.
+        self.pair(id);
         Ok(id)
     }
 
@@ -565,6 +593,8 @@ impl Core {
             if let Err(err) = send_msg(&conn, &hello).await {
                 tracing::debug!("hello failed: {err:#}");
             }
+            // Our side of the pairing, so a change made while they were away still reaches them.
+            let _ = send_msg(&conn, &if this.is_paired(id) { Msg::Pair } else { Msg::Unpair }).await;
             this.flush(id).await;
             while let Ok(mut rx) = conn.accept_uni().await {
                 let Ok(bytes) = rx.read_to_end(MAX_SYNC_BYTES).await else { continue };
@@ -590,6 +620,8 @@ impl Core {
                     }
                     Ok(Msg::GroupInvite { group }) => this.on_invite(id, group),
                     Ok(Msg::GroupReply { group, accept }) => this.on_reply(id, group, accept),
+                    Ok(Msg::Pair) => this.on_pair(id, true),
+                    Ok(Msg::Unpair) => this.on_pair(id, false),
                     Err(err) => tracing::debug!("bad message: {err}"),
                 }
             }
@@ -622,7 +654,7 @@ impl Core {
                         c.name = name;
                     }
                 }
-                None => st.contacts.push(Contact { id: key, name, alias: None }),
+                None => st.contacts.push(Contact { id: key, name, alias: None, paired: false }),
             }
         });
     }
@@ -648,10 +680,91 @@ impl Core {
                 st.forgotten.push(key);
             }
         });
+        self.tell(id, Msg::Unpair);
+        self.sync_pair_group(id);
     }
 
     fn is_forgotten(&self, id: EndpointId) -> bool {
         self.0.store.lock().unwrap().state.forgotten.contains(&id.to_string())
+    }
+
+    // ---- pairing ----------------------------------------------------------------------
+
+    /// Pair with a peer: we trust it, and tell it so. Once it has paired with us as well, the two
+    /// of us share an implied group.
+    pub fn pair(&self, id: EndpointId) {
+        self.remember_unconnected(id);
+        self.with_state(|st| {
+            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == id.to_string()) {
+                c.paired = true;
+            }
+        });
+        self.tell(id, Msg::Pair);
+        self.sync_pair_group(id);
+    }
+
+    /// Stop trusting a peer. The implied group goes away on both sides.
+    pub fn unpair(&self, id: EndpointId) {
+        self.with_state(|st| {
+            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == id.to_string()) {
+                c.paired = false;
+            }
+        });
+        self.tell(id, Msg::Unpair);
+        self.sync_pair_group(id);
+    }
+
+    fn is_paired(&self, id: EndpointId) -> bool {
+        self.0.store.lock().unwrap().state.contacts.iter().any(|c| c.id == id.to_string() && c.paired)
+    }
+
+    fn on_pair(&self, from: EndpointId, paired: bool) {
+        let key = from.to_string();
+        let known = self.0.store.lock().unwrap().state.paired_us.contains(&key);
+        if known != paired {
+            self.with_state(|st| {
+                st.paired_us.retain(|p| *p != key);
+                if paired {
+                    st.paired_us.push(key);
+                }
+            });
+        }
+        self.sync_pair_group(from);
+    }
+
+    /// Send a message to a peer if it is connected (pairing is re-announced on every connection).
+    fn tell(&self, id: EndpointId, msg: Msg) {
+        let Some(conn) = self.0.peers.lock().unwrap().get(&id).and_then(|p| p.conn.clone()) else { return };
+        tokio::spawn(async move {
+            let _ = send_msg(&conn, &msg).await;
+        });
+    }
+
+    /// The implied group exists exactly while both of us have paired.
+    fn sync_pair_group(&self, id: EndpointId) {
+        let key = id.to_string();
+        let gid = pair_group_id(&self.id(), &id);
+        let (mutual, exists) = {
+            let store = self.0.store.lock().unwrap();
+            let st = &store.state;
+            (st.contacts.iter().any(|c| c.id == key && c.paired) && st.paired_us.contains(&key), st.groups.iter().any(|g| g.id == gid))
+        };
+        match (mutual, exists) {
+            (true, false) => {
+                self.with_state(|st| {
+                    let mut g = Group::new(gid.clone(), vec![Member { peer: key.clone(), state: MemberState::Accepted }]);
+                    g.with = Some(key.clone());
+                    st.groups.push(g);
+                });
+                self.join_doc(&gid);
+                self.sync_peer_soon(&gid, id);
+            }
+            (false, true) => {
+                self.drop_doc(&gid);
+                self.with_state(|st| st.groups.retain(|g| g.id != gid));
+            }
+            _ => {}
+        }
     }
 
     // ---- groups -----------------------------------------------------------------------
@@ -685,6 +798,10 @@ impl Core {
     }
 
     pub fn delete_group(&self, group: &str) {
+        // An implied group goes away with the pairing, not on its own.
+        if self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == group && g.with.is_some()) {
+            return;
+        }
         self.drop_doc(group);
         self.with_state(|st| st.groups.retain(|g| g.id != group));
     }
@@ -969,6 +1086,16 @@ impl Core {
 fn queue_reply(st: &mut State, peer: &str, group: &str, accept: bool) {
     st.replies.retain(|r| !(r.peer == peer && r.group == group));
     st.replies.push(Reply { peer: peer.to_string(), group: group.to_string(), accept });
+}
+
+/// The id of the implied group of two devices: the same on both, whoever computes it.
+fn pair_group_id(a: &EndpointId, b: &EndpointId) -> String {
+    let (lo, hi) = if a.as_bytes() <= b.as_bytes() { (a, b) } else { (b, a) };
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flipflop pair group");
+    hasher.update(lo.as_bytes());
+    hasher.update(hi.as_bytes());
+    hasher.finalize().as_bytes()[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn parse_gid(hex: &str) -> Option<[u8; 16]> {
