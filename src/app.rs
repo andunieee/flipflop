@@ -480,6 +480,7 @@ fn open_group(weak: &slint::Weak<AppWindow>, mirror: &Mirror, id: Option<String>
     let mut shared = mirror.lock().unwrap();
     shared.open_group = id.clone();
     let state = ui.global::<State>();
+    state.set_open_group(id.clone().unwrap_or_default().into());
     match id {
         Some(_) => {
             state.set_page("group".into());
@@ -541,6 +542,7 @@ fn on_event(weak: &slint::Weak<AppWindow>, mirror: &Mirror, event: Event) {
                 shared.views.retain(|id, _| ids.contains(id));
                 if shared.open_group.as_ref().is_some_and(|id| !ids.contains(id)) {
                     shared.open_group = None;
+                    ui.global::<State>().set_open_group(SharedString::default());
                     ui.global::<State>().set_page("groups".into());
                 }
                 show_groups(&ui, &shared);
