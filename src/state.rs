@@ -37,6 +37,33 @@ pub struct Group {
     pub id: String,
     pub alias: Option<String>,
     pub members: Vec<Member>,
+    /// Download every file offered in the group as soon as it shows up.
+    #[serde(default = "yes")]
+    pub auto_download: bool,
+    /// Stop sharing our files once every member has downloaded them.
+    #[serde(default)]
+    pub auto_stop: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Group {
+    pub fn new(id: String, members: Vec<Member>) -> Group {
+        Group { id, alias: None, members, auto_download: true, auto_stop: false }
+    }
+}
+
+/// A file we offered to a group: where its bytes are, so we can serve them.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Share {
+    pub group: String,
+    pub file: String,
+    pub path: PathBuf,
+    /// We made the copy at `path` (Android pickers); it is deleted when sharing stops.
+    #[serde(default)]
+    pub staged: bool,
 }
 
 /// An invite we received and the user has not answered yet.
@@ -66,6 +93,11 @@ pub struct State {
     /// them again; connecting to them ourselves does.
     #[serde(default)]
     pub forgotten: Vec<String>,
+    #[serde(default)]
+    pub shares: Vec<Share>,
+    /// Files we downloaded: where each one went.
+    #[serde(default)]
+    pub received: Vec<Share>,
 }
 
 pub struct Store {

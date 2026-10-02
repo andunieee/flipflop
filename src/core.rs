@@ -2,6 +2,8 @@
 //! reconnect automatically, group invites and a tiny hello/chat protocol. UI-agnostic; the UI
 //! subscribes through the event callback.
 
+mod sharing;
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::Path,
@@ -30,10 +32,13 @@ use crate::{
 };
 
 pub use crate::state::MemberState;
+pub use sharing::{DocMember, FileView, GroupView, TextView};
 
 pub const ALPN: &[u8] = b"flipflop/0";
 const MDNS_SERVICE: &str = "flipflop";
+/// Control messages are JSON and small; sync messages (first byte [`sharing::SYNC_TAG`]) can carry a whole document.
 const MAX_MSG_BYTES: usize = 64 * 1024;
+const MAX_SYNC_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Peer {
@@ -65,6 +70,8 @@ pub struct GroupInfo {
     pub members: Vec<MemberInfo>,
     /// Contacts that could still be added.
     pub candidates: Vec<(EndpointId, String)>,
+    pub auto_download: bool,
+    pub auto_stop: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,6 +97,8 @@ pub enum Event {
     /// Our own name changed (also fired once at start-up).
     Name(String),
     Message { peer: EndpointId, mine: bool, text: String },
+    /// The shared content of a group changed (files, texts, scratchpad, members, transfer progress).
+    Group(GroupView),
     Notice(String),
 }
 
@@ -133,6 +142,7 @@ struct Inner {
     /// Held while snapshotting and emitting, so the UI never sees an older view after a newer one.
     publish_lock: Mutex<()>,
     peers: Mutex<BTreeMap<EndpointId, PeerEntry>>,
+    sharing: sharing::Sharing,
     ticket: Mutex<String>,
     ble_payload: watch::Sender<Option<BlePayload>>,
     on_event: Box<dyn Fn(Event) + Send + Sync>,
@@ -199,11 +209,13 @@ impl Core {
             dialing: Mutex::default(),
             publish_lock: Mutex::default(),
             peers: Mutex::default(),
+            sharing: sharing::Sharing::new(data_dir),
             ticket: Mutex::default(),
             ble_payload: watch::channel(None).0,
             on_event: Box::new(on_event),
         }));
         core.emit(Event::Name(name));
+        core.load_docs();
         core.publish();
         core.spawn_background(lan_events);
         Ok(core)
@@ -240,6 +252,7 @@ impl Core {
         self.0.endpoint.set_user_data_for_address_lookup(Some(user_data(&name)));
         self.refresh_ble_payload();
         self.emit(Event::Name(name.clone()));
+        self.refresh_doc_names();
         let this = self.clone();
         let conns: Vec<Connection> =
             self.0.peers.lock().unwrap().values().filter_map(|p| p.conn.clone()).collect();
@@ -280,6 +293,21 @@ impl Core {
     /// Push the peer list and the groups view to the UI.
     fn publish(&self) {
         let _ordered = self.0.publish_lock.lock().unwrap();
+        let (peers, groups) = self.snapshot();
+        self.emit(Event::Peers(peers));
+        self.emit(Event::Groups(groups));
+        self.refresh_group_views();
+    }
+
+    pub fn peers(&self) -> Vec<Peer> {
+        self.snapshot().0
+    }
+
+    pub fn groups(&self) -> GroupsView {
+        self.snapshot().1
+    }
+
+    fn snapshot(&self) -> (Vec<Peer>, GroupsView) {
         let state = {
             let store = self.0.store.lock().unwrap();
             State {
@@ -289,6 +317,8 @@ impl Core {
                 rejected: Vec::new(),
                 replies: Vec::new(),
                 forgotten: Vec::new(),
+                shares: Vec::new(),
+                received: Vec::new(),
             }
         };
         let live = self.live_names();
@@ -330,7 +360,6 @@ impl Core {
                 .then_with(|| b.saved.cmp(&a.saved))
                 .then_with(|| a.alias.as_ref().unwrap_or(&a.name).cmp(b.alias.as_ref().unwrap_or(&b.name)))
         });
-        self.emit(Event::Peers(list));
 
         let groups = state
             .groups
@@ -352,7 +381,15 @@ impl Core {
                     .filter(|id| !members.iter().any(|m| m.id == *id))
                     .map(|id| (id, display_name(&id)))
                     .collect();
-                Some(GroupInfo { id: g.id.clone(), haiku, alias: g.alias.clone(), members, candidates })
+                Some(GroupInfo {
+                    id: g.id.clone(),
+                    haiku,
+                    alias: g.alias.clone(),
+                    members,
+                    candidates,
+                    auto_download: g.auto_download,
+                    auto_stop: g.auto_stop,
+                })
             })
             .collect();
         let invites = state
@@ -363,7 +400,7 @@ impl Core {
                 Some(InviteInfo { inviter, inviter_name: display_name(&inviter), group: i.group.clone(), haiku: crate::haiku::name(&parse_gid(&i.group)?) })
             })
             .collect();
-        self.emit(Event::Groups(GroupsView { groups, invites }));
+        (list, GroupsView { groups, invites })
     }
 
     fn publish_peers(&self) {
@@ -492,8 +529,19 @@ impl Core {
             self.remember(id);
         }
         self.0.retry.lock().unwrap().remove(&id);
+        self.reset_doc_sync(id);
         self.publish_peers();
         self.emit(Event::Notice(format!("connected to {}", id.fmt_short())));
+
+        // File downloads: the other side opens a bidirectional stream per request.
+        let this = self.clone();
+        let serving = conn.clone();
+        tokio::spawn(async move {
+            while let Ok((tx, rx)) = serving.accept_bi().await {
+                let this = this.clone();
+                tokio::spawn(async move { this.serve_download(id, tx, rx).await });
+            }
+        });
 
         let this = self.clone();
         tokio::spawn(async move {
@@ -503,7 +551,14 @@ impl Core {
             }
             this.flush(id).await;
             while let Ok(mut rx) = conn.accept_uni().await {
-                let Ok(bytes) = rx.read_to_end(MAX_MSG_BYTES).await else { continue };
+                let Ok(bytes) = rx.read_to_end(MAX_SYNC_BYTES).await else { continue };
+                if bytes.first() == Some(&sharing::SYNC_TAG) {
+                    this.on_sync(id, &bytes[1..]);
+                    continue;
+                }
+                if bytes.len() > MAX_MSG_BYTES {
+                    continue;
+                }
                 match serde_json::from_slice::<Msg>(&bytes) {
                     Ok(Msg::Hello { name }) => {
                         let name = clean_name(&name);
@@ -523,13 +578,17 @@ impl Core {
                 }
             }
             // Only clear the slot if it still holds *this* connection (not a replacement).
+            let mut gone = false;
             this.update_peer(id, |p| {
                 if p.conn.as_ref().is_some_and(|c| c.stable_id() == stable) {
                     p.conn = None;
                     p.hello_name = None;
+                    gone = true;
                 }
             });
-            this.emit(Event::Notice(format!("disconnected from {}", id.fmt_short())));
+            if gone {
+                this.emit(Event::Notice(format!("disconnected from {}", id.fmt_short())));
+            }
         });
     }
 
@@ -584,8 +643,20 @@ impl Core {
     /// Create an empty group with a random id (and so a random haiku name). Returns the id.
     pub fn create_group(&self) -> String {
         let id = new_group_id();
-        self.with_state(|st| st.groups.push(Group { id: id.clone(), alias: None, members: Vec::new() }));
+        self.with_state(|st| st.groups.push(Group::new(id.clone(), Vec::new())));
+        self.join_doc(&id);
         id
+    }
+
+    /// Local, per-group: download offers automatically, and stop sharing what everybody has.
+    pub fn set_group_settings(&self, group: &str, auto_download: Option<bool>, auto_stop: Option<bool>) {
+        self.with_state(|st| {
+            if let Some(g) = st.groups.iter_mut().find(|g| g.id == group) {
+                g.auto_download = auto_download.unwrap_or(g.auto_download);
+                g.auto_stop = auto_stop.unwrap_or(g.auto_stop);
+            }
+        });
+        self.auto_jobs(group);
     }
 
     pub fn rename_group(&self, group: &str, alias: &str) {
@@ -598,6 +669,7 @@ impl Core {
     }
 
     pub fn delete_group(&self, group: &str) {
+        self.drop_doc(group);
         self.with_state(|st| st.groups.retain(|g| g.id != group));
     }
 
@@ -644,17 +716,19 @@ impl Core {
                             g.members.push(Member { peer: who.clone(), state: MemberState::Accepted });
                         }
                     }
-                    None => st.groups.push(Group {
-                        id: group.to_string(),
-                        alias: None,
-                        members: vec![Member { peer: who.clone(), state: MemberState::Accepted }],
-                    }),
+                    None => st.groups.push(Group::new(
+                        group.to_string(),
+                        vec![Member { peer: who.clone(), state: MemberState::Accepted }],
+                    )),
                 }
             } else if !st.rejected.contains(&invite) {
                 st.rejected.push(invite);
             }
             queue_reply(st, &who, group, accept);
         });
+        if accept {
+            self.join_doc(group);
+        }
         self.flush_later(inviter);
     }
 
@@ -696,6 +770,9 @@ impl Core {
                 m.state = state;
             }
         });
+        if accept {
+            self.sync_peer_soon(&group, from);
+        }
     }
 
     fn flush_later(&self, peer: EndpointId) {
@@ -738,6 +815,9 @@ impl Core {
             }
             self.with_state(|st| st.replies.retain(|x| !(x.peer == r.peer && x.group == r.group)));
         }
+        // Only now: the peer must have our answer before it will take our documents.
+        self.sync_peer(peer).await;
+        self.auto_jobs_all();
     }
 
     // ---- background tasks -------------------------------------------------------------
@@ -750,7 +830,10 @@ impl Core {
                 let this = this.clone();
                 tokio::spawn(async move {
                     match incoming.await {
-                        Ok(conn) => this.adopt(conn, false),
+                        Ok(conn) => {
+                            this.drop_stale(&conn).await;
+                            this.adopt(conn, false);
+                        }
                         Err(err) => tracing::debug!("incoming connection failed: {err}"),
                     }
                 });
@@ -808,7 +891,7 @@ impl Core {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(3)).await;
-                let ids: Vec<EndpointId> = this
+                let mut ids: Vec<EndpointId> = this
                     .0
                     .store
                     .lock()
@@ -819,6 +902,13 @@ impl Core {
                     .filter_map(|c| c.id.parse().ok())
                     .filter(|id| *id != this.id())
                     .collect();
+                // Fellow group members we learned about from a group's document.
+                for id in this.doc_peers() {
+                    if !ids.contains(&id) && !this.is_forgotten(id) {
+                        ids.push(id);
+                    }
+                }
+                this.auto_jobs_all();
                 for id in ids {
                     let connected = this.0.peers.lock().unwrap().get(&id).is_some_and(|p| p.conn.is_some());
                     let due = this.0.retry.lock().unwrap().get(&id).is_none_or(|(at, _)| *at <= Instant::now());
@@ -895,6 +985,7 @@ async fn send_msg(conn: &Connection, msg: &Msg) -> Result<()> {
 
 impl Core {
     pub async fn shutdown(&self) {
+        self.save_docs();
         self.0.endpoint.close().await;
     }
 }

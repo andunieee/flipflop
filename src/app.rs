@@ -8,60 +8,80 @@ use std::{
 
 use anyhow::Result;
 use iroh::EndpointId;
-use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use tokio::runtime::Handle;
 
-use crate::core::{Core, Event, GroupInfo, GroupsView, MemberState, Peer};
+use crate::{
+    core::{Core, Event, GroupInfo, GroupView, GroupsView, MemberState, Peer},
+    format, groupdoc,
+};
 
 slint::include_modules!();
 
+/// What the UI needs to remember between events. Only touched on the UI thread.
 #[derive(Default)]
-struct UiState {
-    chats: HashMap<EndpointId, Vec<ChatLine>>,
+struct Shared {
     peers: Vec<Peer>,
-    selected: Option<EndpointId>,
     groups: GroupsView,
+    views: HashMap<String, GroupView>,
     open_group: Option<String>,
 }
 
-type State = Arc<Mutex<UiState>>;
+type Mirror = Arc<Mutex<Shared>>;
 /// Filled once the background start-up has produced a [`Core`]; callbacks do nothing before that.
 type Slot = Arc<std::sync::OnceLock<Core>>;
+
+fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
+    ModelRc::new(VecModel::from(rows))
+}
 
 pub fn run(data_dir: PathBuf) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let handle = rt.handle().clone();
     let _guard = rt.enter();
 
-    let ui = MainWindow::new()?;
-    ui.set_live_camera(cfg!(not(target_os = "android")));
-    let state: State = Arc::default();
+    let ui = AppWindow::new()?;
+    {
+        let state = ui.global::<State>();
+        state.set_touch(cfg!(target_os = "android"));
+        state.set_live_camera(cfg!(not(target_os = "android")));
+    }
+    let mirror: Mirror = Arc::default();
 
     // Core starts in the background: on Android the Bluetooth stack delivers its callbacks through
     // the Java main thread, which only runs while this (native glue) thread keeps pumping the UI.
     let slot: Slot = Arc::default();
     {
-        let (slot, weak, state) = (slot.clone(), ui.as_weak(), state.clone());
+        let (slot, weak, mirror) = (slot.clone(), ui.as_weak(), mirror.clone());
         let data_dir = data_dir.clone();
         handle.spawn(async move {
             let want_ble = tokio::task::spawn_blocking(crate::platform::ensure_ble_permission)
                 .await
                 .unwrap_or(false);
-            let events = (weak.clone(), state);
+            let events = (weak.clone(), mirror);
             let core = match Core::start(&data_dir, want_ble, move |event| on_event(&events.0, &events.1, event)).await {
                 Ok(core) => core,
                 Err(err) => return set_status(&weak, format!("failed to start: {err:#}")),
             };
             let _ = slot.set(core.clone());
+            core.publish_groups();
+            {
+                let dir = core.download_dir().display().to_string();
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    let state = ui.global::<State>();
+                    state.set_node_ready(true);
+                    state.set_download_dir(dir.into());
+                });
+            }
 
-            // Two BLE statuses share one line: the iroh transport (chat over Bluetooth) and our discovery.
-            let line = Arc::new(Mutex::new((format!("transport {}", core.ble_transport_status()), String::new())));
+            // Two BLE statuses share one line: the iroh transport and our discovery.
+            let line = Arc::new(Mutex::new((format!("Bluetooth transport {}", core.ble_transport_status()), String::new())));
             let show = {
                 let line = line.clone();
-                move |weak: &slint::Weak<MainWindow>| {
+                move |weak: &slint::Weak<AppWindow>| {
                     let (t, d) = line.lock().unwrap().clone();
                     let text = if d.is_empty() { t } else { format!("{d} · {t}") };
-                    let _ = weak.upgrade_in_event_loop(move |ui| ui.set_ble_status(text.into()));
+                    let _ = weak.upgrade_in_event_loop(move |ui| ui.global::<State>().set_ble_status(text.into()));
                 }
             };
             show(&weak);
@@ -74,15 +94,24 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
 
     #[cfg(target_os = "android")]
     {
-        let (slot, weak, handle) = (slot.clone(), ui.as_weak(), handle.clone());
+        let (qr_slot, qr_weak, qr_handle) = (slot.clone(), ui.as_weak(), handle.clone());
         crate::platform::set_qr_handler(move |text| {
-            if let Some(core) = slot.get() {
-                connect_ticket(core, &weak, &handle, text);
+            if let Some(core) = qr_slot.get() {
+                connect_ticket(core, &qr_weak, &qr_handle, text);
             }
+        });
+        let (slot, mirror, weak, handle) = (slot.clone(), mirror.clone(), ui.as_weak(), handle.clone());
+        // A picked file is offered to whichever group is open.
+        crate::platform::set_file_handler(move |kind, path| {
+            let Some(core) = slot.get().cloned() else { return };
+            let Some(gid) = open_group_id(&mirror) else { return };
+            offer(&core, &weak, &handle, gid, PathBuf::from(path), None, &kind, true);
         });
     }
 
-    ui.on_rename({
+    let logic = ui.global::<Logic>();
+
+    logic.on_rename({
         let slot = slot.clone();
         move |name| {
             if let Some(core) = slot.get() {
@@ -91,57 +120,50 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         }
     });
 
-    ui.on_connect({
+    logic.on_connect({
         let (slot, weak, handle) = (slot.clone(), ui.as_weak(), handle.clone());
         move |id| {
             let (Some(core), Ok(id)) = (slot.get(), id.parse::<EndpointId>()) else { return };
             let (core, weak) = (core.clone(), weak.clone());
-            set_status(&weak, "connecting…");
+            set_status(&weak, "Connecting…");
             handle.spawn(async move {
                 match core.connect(id).await {
-                    Ok(()) => set_status(&weak, "connected"),
+                    Ok(()) => set_status(&weak, "Connected"),
                     Err(err) => set_status(&weak, format!("{err:#}")),
                 }
             });
         }
     });
 
-    ui.on_new_group({
-        let (slot, weak, state) = (slot.clone(), ui.as_weak(), state.clone());
+    logic.on_connect_ticket({
+        let (slot, weak, handle) = (slot.clone(), ui.as_weak(), handle.clone());
+        move |text| {
+            if let Some(core) = slot.get() {
+                connect_ticket(core, &weak, &handle, text.to_string());
+            }
+        }
+    });
+
+    logic.on_new_group({
+        let (slot, weak, mirror) = (slot.clone(), ui.as_weak(), mirror.clone());
         move || {
             let Some(core) = slot.get() else { return };
             let id = core.create_group();
-            let mut st = state.lock().unwrap();
-            st.open_group = Some(id);
-            if let Some(ui) = weak.upgrade() {
-                show_group(&ui, &st);
-            }
+            open_group(&weak, &mirror, Some(id));
         }
     });
 
-    ui.on_open_group_id({
-        let (weak, state) = (ui.as_weak(), state.clone());
-        move |id| {
-            let mut st = state.lock().unwrap();
-            st.open_group = Some(id.to_string());
-            if let Some(ui) = weak.upgrade() {
-                show_group(&ui, &st);
-            }
-        }
+    logic.on_open_group({
+        let (weak, mirror) = (ui.as_weak(), mirror.clone());
+        move |id| open_group(&weak, &mirror, Some(id.to_string()))
     });
 
-    ui.on_close_group({
-        let (weak, state) = (ui.as_weak(), state.clone());
-        move || {
-            let mut st = state.lock().unwrap();
-            st.open_group = None;
-            if let Some(ui) = weak.upgrade() {
-                show_group(&ui, &st);
-            }
-        }
+    logic.on_close_group({
+        let (weak, mirror) = (ui.as_weak(), mirror.clone());
+        move || open_group(&weak, &mirror, None)
     });
 
-    ui.on_add_to_group({
+    logic.on_add_to_group({
         let slot = slot.clone();
         move |group, peer| {
             if let (Some(core), Ok(peer)) = (slot.get(), peer.parse::<EndpointId>()) {
@@ -150,7 +172,7 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         }
     });
 
-    ui.on_accept_invite({
+    logic.on_accept_invite({
         let slot = slot.clone();
         move |inviter, group| {
             if let (Some(core), Ok(inviter)) = (slot.get(), inviter.parse::<EndpointId>()) {
@@ -159,7 +181,7 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         }
     });
 
-    ui.on_reject_invite({
+    logic.on_reject_invite({
         let slot = slot.clone();
         move |inviter, group| {
             if let (Some(core), Ok(inviter)) = (slot.get(), inviter.parse::<EndpointId>()) {
@@ -168,7 +190,7 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         }
     });
 
-    ui.on_save_edit({
+    logic.on_save_edit({
         let slot = slot.clone();
         move |kind, id, text| {
             let Some(core) = slot.get() else { return };
@@ -184,8 +206,8 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         }
     });
 
-    ui.on_delete_edit({
-        let (slot, weak, state) = (slot.clone(), ui.as_weak(), state.clone());
+    logic.on_delete_edit({
+        let (slot, weak, mirror) = (slot.clone(), ui.as_weak(), mirror.clone());
         move |kind, id| {
             let Some(core) = slot.get() else { return };
             match kind.as_str() {
@@ -196,64 +218,166 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
                     }
                 }
                 "group" => {
+                    open_group(&weak, &mirror, None);
                     core.delete_group(&id);
-                    let mut st = state.lock().unwrap();
-                    st.open_group = None;
-                    if let Some(ui) = weak.upgrade() {
-                        show_group(&ui, &st);
-                    }
                 }
                 _ => {}
             }
         }
     });
 
-    ui.on_connect_ticket({
-        let (slot, weak, handle) = (slot.clone(), ui.as_weak(), handle.clone());
+    // ---- group content ----------------------------------------------------------------
+
+    logic.on_send_text({
+        let (slot, weak, mirror) = (slot.clone(), ui.as_weak(), mirror.clone());
         move |text| {
-            if let Some(core) = slot.get() {
-                connect_ticket(core, &weak, &handle, text.to_string());
+            let (Some(core), Some(gid)) = (slot.get(), open_group_id(&mirror)) else { return };
+            if let Err(err) = core.send_text(&gid, &text) {
+                set_status(&weak, format!("{err:#}"));
             }
         }
     });
 
-    ui.on_open_chat({
-        let (weak, state) = (ui.as_weak(), state.clone());
+    logic.on_delete_text({
+        let (slot, weak, mirror) = (slot.clone(), ui.as_weak(), mirror.clone());
         move |id| {
-            let Ok(id) = id.parse::<EndpointId>() else { return };
-            let mut st = state.lock().unwrap();
-            st.selected = Some(id);
-            if let Some(ui) = weak.upgrade() {
-                show_chat(&ui, &st);
+            let (Some(core), Some(gid)) = (slot.get(), open_group_id(&mirror)) else { return };
+            if let Err(err) = core.delete_text(&gid, &id) {
+                set_status(&weak, format!("{err:#}"));
             }
         }
     });
 
-    ui.on_close_chat({
-        let (weak, state) = (ui.as_weak(), state.clone());
-        move || {
-            let mut st = state.lock().unwrap();
-            st.selected = None;
-            if let Some(ui) = weak.upgrade() {
-                show_chat(&ui, &st);
-            }
-        }
-    });
-
-    ui.on_send({
-        let (slot, weak, state, handle) = (slot.clone(), ui.as_weak(), state.clone(), handle.clone());
+    logic.on_copy_text({
+        let weak = ui.as_weak();
         move |text| {
-            let text = text.trim().to_string();
-            let (Some(core), Some(id)) = (slot.get(), state.lock().unwrap().selected) else { return };
-            if text.is_empty() {
+            crate::platform::copy_text(&text);
+            set_status(&weak, "Copied");
+        }
+    });
+
+    logic.on_paste(|| crate::platform::paste_text().into());
+
+    logic.on_open_link(|url| crate::platform::open_url(url.trim()));
+
+    logic.on_pad_edited({
+        let (slot, mirror) = (slot.clone(), mirror.clone());
+        move |text| {
+            if let (Some(core), Some(gid)) = (slot.get(), open_group_id(&mirror)) {
+                core.set_scratch(&gid, &text);
+            }
+        }
+    });
+
+    logic.on_paste_pad({
+        let (slot, mirror, weak) = (slot.clone(), mirror.clone(), ui.as_weak());
+        move || {
+            let (Some(core), Some(gid), Some(ui)) = (slot.get(), open_group_id(&mirror), weak.upgrade()) else { return };
+            let pasted = crate::platform::paste_text();
+            if pasted.is_empty() {
                 return;
             }
-            let (core, weak) = (core.clone(), weak.clone());
+            let state = ui.global::<State>();
+            let text = state.get_pad_text().to_string();
+            let at = if state.get_pad_focused() { (state.get_pad_cursor() as usize).min(text.len()) } else { text.len() };
+            let at = (0..=at).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
+            let new = format!("{}{}{}", &text[..at], pasted, &text[at..]);
+            state.set_pad_text(new.clone().into());
+            state.set_pad_set_cursor((at + pasted.len()) as i32);
+            core.set_scratch(&gid, &new);
+        }
+    });
+
+    logic.on_pick({
+        let (slot, mirror, weak, handle) = (slot.clone(), mirror.clone(), ui.as_weak(), handle.clone());
+        move |kind| {
+            #[cfg(target_os = "android")]
+            {
+                let _ = (&slot, &mirror, &handle);
+                if kind.as_str() == "app" {
+                    let apps: Vec<AppRow> = crate::platform::list_apps()
+                        .into_iter()
+                        .map(|(path, name, detail)| AppRow { path: path.into(), name: name.into(), detail: detail.into() })
+                        .collect();
+                    if let Some(ui) = weak.upgrade() {
+                        let state = ui.global::<State>();
+                        state.set_apps(model(apps));
+                        state.set_app_picker_open(true);
+                    }
+                } else {
+                    crate::platform::pick_files(&kind);
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let (Some(core), Some(gid)) = (slot.get().cloned(), open_group_id(&mirror)) else { return };
+                let (weak, handle2) = (weak.clone(), handle.clone());
+                let media = kind.as_str() == "media";
+                handle.spawn(async move {
+                    let mut dialog = rfd::AsyncFileDialog::new().set_title("Offer to the group");
+                    if media {
+                        dialog = dialog
+                            .add_filter("Photos and videos", &["jpg", "jpeg", "png", "gif", "webp", "heic", "mp4", "mkv", "mov", "webm"]);
+                    }
+                    for file in dialog.pick_files().await.unwrap_or_default() {
+                        let kind = if media { "media" } else { "file" };
+                        offer(&core, &weak, &handle2, gid.clone(), file.path().to_owned(), None, kind, false);
+                    }
+                });
+            }
+        }
+    });
+
+    logic.on_share_app({
+        let (slot, mirror, weak, handle) = (slot.clone(), mirror.clone(), ui.as_weak(), handle.clone());
+        move |path| {
+            let (Some(core), Some(gid)) = (slot.get().cloned(), open_group_id(&mirror)) else { return };
+            let name = weak.upgrade().and_then(|ui| {
+                let apps = ui.global::<State>().get_apps();
+                (0..apps.row_count()).filter_map(|i| apps.row_data(i)).find(|a| a.path == path).map(|a| format!("{}.apk", a.name))
+            });
+            offer(&core, &weak, &handle, gid, PathBuf::from(path.as_str()), name, "apk", false);
+        }
+    });
+
+    logic.on_stop_file({
+        let (slot, weak, mirror) = (slot.clone(), ui.as_weak(), mirror.clone());
+        move |id| {
+            let (Some(core), Some(gid)) = (slot.get(), open_group_id(&mirror)) else { return };
+            if let Err(err) = core.stop_file(&gid, &id) {
+                set_status(&weak, format!("{err:#}"));
+            }
+        }
+    });
+
+    logic.on_download_file({
+        let (slot, weak, mirror, handle) = (slot.clone(), ui.as_weak(), mirror.clone(), handle.clone());
+        move |id| {
+            let (Some(core), Some(gid)) = (slot.get().cloned(), open_group_id(&mirror)) else { return };
+            let weak = weak.clone();
             handle.spawn(async move {
-                if let Err(err) = core.send(id, text).await {
-                    set_status(&weak, format!("send failed: {err:#}"));
+                if let Err(err) = core.download_file(&gid, &id).await {
+                    set_status(&weak, format!("{err:#}"));
                 }
             });
+        }
+    });
+
+    logic.on_set_auto_download({
+        let (slot, mirror) = (slot.clone(), mirror.clone());
+        move |on| {
+            if let (Some(core), Some(gid)) = (slot.get(), open_group_id(&mirror)) {
+                core.set_group_settings(&gid, Some(on), None);
+            }
+        }
+    });
+
+    logic.on_set_auto_stop({
+        let (slot, mirror) = (slot.clone(), mirror.clone());
+        move |on| {
+            if let (Some(core), Some(gid)) = (slot.get(), open_group_id(&mirror)) {
+                core.set_group_settings(&gid, None, Some(on));
+            }
         }
     });
 
@@ -262,24 +386,24 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
     {
         use std::{cell::RefCell, rc::Rc};
         let scanner: Rc<RefCell<Option<crate::scan::Scanner>>> = Rc::default();
-        ui.on_scan({
+        logic.on_scan({
             let (slot, weak, handle, scanner) = (slot.clone(), ui.as_weak(), handle.clone(), scanner.clone());
             move || {
                 let Some(core) = slot.get().cloned() else { return };
                 let (frame_weak, done_weak) = (weak.clone(), weak.clone());
                 let handle = handle.clone();
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_scanning(true);
+                    ui.global::<State>().set_scanning(true);
                 }
                 *scanner.borrow_mut() = Some(crate::scan::start(
                     move |w, h, rgba| {
                         let _ = frame_weak.upgrade_in_event_loop(move |ui| {
                             let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h);
-                            ui.set_camera_frame(Image::from_rgba8(buf));
+                            ui.global::<State>().set_camera_frame(Image::from_rgba8(buf));
                         });
                     },
                     move |result| {
-                        let _ = done_weak.clone().upgrade_in_event_loop(move |ui| ui.set_scanning(false));
+                        let _ = done_weak.clone().upgrade_in_event_loop(move |ui| ui.global::<State>().set_scanning(false));
                         match result {
                             Ok(text) => connect_ticket(&core, &done_weak, &handle, text),
                             Err(msg) if msg == "cancelled" => {}
@@ -289,20 +413,20 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
                 ));
             }
         });
-        ui.on_cancel_scan({
+        logic.on_cancel_scan({
             let (weak, scanner) = (ui.as_weak(), scanner.clone());
             move || {
                 scanner.borrow_mut().take();
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_scanning(false);
+                    ui.global::<State>().set_scanning(false);
                 }
             }
         });
     }
     #[cfg(target_os = "android")]
     {
-        ui.on_scan(crate::platform::start_qr_scan);
-        ui.on_cancel_scan(|| {});
+        logic.on_scan(crate::platform::start_qr_scan);
+        logic.on_cancel_scan(|| {});
     }
 
     ui.run()?;
@@ -312,15 +436,32 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn connect_ticket(core: &Core, weak: &slint::Weak<MainWindow>, handle: &Handle, text: String) {
+fn open_group_id(mirror: &Mirror) -> Option<String> {
+    mirror.lock().unwrap().open_group.clone()
+}
+
+/// Offer a file to a group from a background task and report how it went.
+#[allow(clippy::too_many_arguments)]
+fn offer(core: &Core, weak: &slint::Weak<AppWindow>, handle: &Handle, gid: String, path: PathBuf, name: Option<String>, kind: &str, staged: bool) {
+    let (core, weak, kind) = (core.clone(), weak.clone(), kind.to_owned());
+    handle.spawn(async move {
+        match core.offer_file(&gid, path, name, &kind, staged).await {
+            Ok(_) => set_status(&weak, "Offered to the group"),
+            Err(err) => set_status(&weak, format!("{err:#}")),
+        }
+    });
+}
+
+fn connect_ticket(core: &Core, weak: &slint::Weak<AppWindow>, handle: &Handle, text: String) {
     let (core, weak) = (core.clone(), weak.clone());
-    set_status(&weak, "connecting…");
+    set_status(&weak, "Connecting…");
     handle.spawn(async move {
         match core.connect_ticket(&text).await {
             Ok(_) => {
                 let _ = weak.upgrade_in_event_loop(|ui| {
-                    ui.set_tab(0);
-                    ui.set_status("connected".into());
+                    let state = ui.global::<State>();
+                    state.set_page("peers".into());
+                    state.set_status("Connected".into());
                 });
             }
             Err(err) => set_status(&weak, format!("{err:#}")),
@@ -328,108 +469,99 @@ fn connect_ticket(core: &Core, weak: &slint::Weak<MainWindow>, handle: &Handle, 
     });
 }
 
-fn set_status(weak: &slint::Weak<MainWindow>, text: impl Into<String>) {
+fn set_status(weak: &slint::Weak<AppWindow>, text: impl Into<String>) {
     let text = text.into();
-    let _ = weak.upgrade_in_event_loop(move |ui| ui.set_status(text.into()));
+    let _ = weak.upgrade_in_event_loop(move |ui| ui.global::<State>().set_status(text.into()));
+}
+
+/// Open a group's page, or go back to the list (`None`).
+fn open_group(weak: &slint::Weak<AppWindow>, mirror: &Mirror, id: Option<String>) {
+    let Some(ui) = weak.upgrade() else { return };
+    let mut shared = mirror.lock().unwrap();
+    shared.open_group = id.clone();
+    let state = ui.global::<State>();
+    match id {
+        Some(_) => {
+            state.set_page("group".into());
+            state.set_group_tab("files".into());
+            show_group(&ui, &shared, true);
+        }
+        None => state.set_page("groups".into()),
+    }
 }
 
 /// Called from tokio threads.
-fn on_event(weak: &slint::Weak<MainWindow>, state: &State, event: Event) {
+fn on_event(weak: &slint::Weak<AppWindow>, mirror: &Mirror, event: Event) {
     match event {
         Event::Name(name) => {
-            let _ = weak.upgrade_in_event_loop(move |ui| ui.set_my_name(name.into()));
+            let _ = weak.upgrade_in_event_loop(move |ui| ui.global::<State>().set_my_name(name.into()));
         }
         Event::Notice(text) => set_status(weak, text),
         Event::Ticket(ticket) => {
             let qr = crate::qr::render(&ticket, 6);
             let _ = weak.upgrade_in_event_loop(move |ui| {
+                let state = ui.global::<State>();
                 if let Some((w, h, rgba)) = qr {
                     let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h);
-                    ui.set_qr(Image::from_rgba8(buf));
+                    state.set_qr(Image::from_rgba8(buf));
                 }
-                ui.set_ticket(ticket.into());
+                state.set_ticket(ticket.into());
             });
         }
         Event::Peers(peers) => {
-            let items: Vec<PeerItem> = peers
-                .iter()
-                .map(|p| PeerItem {
-                    id: p.id.to_string().into(),
-                    title: p.alias.clone().unwrap_or_else(|| p.name.clone()).into(),
-                    subtitle: if p.alias.is_some() { p.name.clone().into() } else { SharedString::default() },
-                    alias: p.alias.clone().unwrap_or_default().into(),
-                    short: p.id.fmt_short().to_string().into(),
-                    lan: p.lan,
-                    ble: p.ble,
-                    connected: p.connected,
-                    saved: p.saved,
-                })
-                .collect();
-            let state = state.clone();
+            let mirror = mirror.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                ui.set_peers(ModelRc::new(VecModel::from(items)));
-                let mut st = state.lock().unwrap();
-                st.peers = peers;
-                // Leave the chat if its peer went away.
-                if st.selected.is_some_and(|id| !st.peers.iter().any(|p| p.id == id && p.connected)) {
-                    st.selected = None;
-                }
-                show_chat(&ui, &st);
+                let rows: Vec<PeerRow> = peers
+                    .iter()
+                    .map(|p| PeerRow {
+                        id: p.id.to_string().into(),
+                        title: p.alias.clone().unwrap_or_else(|| p.name.clone()).into(),
+                        subtitle: if p.alias.is_some() { p.name.clone().into() } else { SharedString::default() },
+                        alias: p.alias.clone().unwrap_or_default().into(),
+                        short: p.id.fmt_short().to_string().into(),
+                        initials: format::initials(p.alias.as_ref().unwrap_or(&p.name)).into(),
+                        lan: p.lan,
+                        ble: p.ble,
+                        connected: p.connected,
+                        saved: p.saved,
+                    })
+                    .collect();
+                ui.global::<State>().set_peers(model(rows));
+                let mut shared = mirror.lock().unwrap();
+                shared.peers = peers;
+                show_groups(&ui, &shared);
             });
         }
         Event::Groups(view) => {
-            let state = state.clone();
+            let mirror = mirror.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                let items: Vec<GroupItem> = view
-                    .groups
-                    .iter()
-                    .map(|g| GroupItem {
-                        id: g.id.clone().into(),
-                        title: group_title(g).into(),
-                        subtitle: if g.alias.is_some() { g.haiku.clone().into() } else { SharedString::default() },
-                        summary: group_summary(g).into(),
-                    })
-                    .collect();
-                let invites: Vec<InviteItem> = view
-                    .invites
-                    .iter()
-                    .map(|i| InviteItem {
-                        inviter_id: i.inviter.to_string().into(),
-                        group_id: i.group.clone().into(),
-                        inviter_name: i.inviter_name.clone().into(),
-                        group_title: i.haiku.clone().into(),
-                    })
-                    .collect();
-                ui.set_groups(ModelRc::new(VecModel::from(items)));
-                ui.set_invites(ModelRc::new(VecModel::from(invites)));
-                let mut st = state.lock().unwrap();
-                st.groups = view;
-                if st.open_group.as_ref().is_some_and(|id| !st.groups.groups.iter().any(|g| g.id == *id)) {
-                    st.open_group = None;
+                let mut shared = mirror.lock().unwrap();
+                shared.groups = view;
+                let ids: Vec<String> = shared.groups.groups.iter().map(|g| g.id.clone()).collect();
+                shared.views.retain(|id, _| ids.contains(id));
+                if shared.open_group.as_ref().is_some_and(|id| !ids.contains(id)) {
+                    shared.open_group = None;
+                    ui.global::<State>().set_page("groups".into());
                 }
-                show_group(&ui, &st);
+                show_groups(&ui, &shared);
+                show_group(&ui, &shared, false);
             });
         }
-        Event::Message { peer, mine, text } => {
-            let state = state.clone();
+        Event::Group(view) => {
+            let mirror = mirror.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                let mut st = state.lock().unwrap();
-                st.chats.entry(peer).or_default().push(ChatLine { mine, text: text.into() });
-                show_chat(&ui, &st);
+                let mut shared = mirror.lock().unwrap();
+                let opened = shared.open_group.as_deref() == Some(view.id.as_str());
+                let local = view.scratch_local;
+                shared.views.insert(view.id.clone(), view);
+                show_groups(&ui, &shared);
+                if opened {
+                    show_group(&ui, &shared, false);
+                    let _ = local;
+                }
             });
         }
-    }
-}
-
-fn show_chat(ui: &MainWindow, st: &UiState) {
-    match st.selected {
-        Some(id) => {
-            let name = st.peers.iter().find(|p| p.id == id).map(|p| p.alias.clone().unwrap_or_else(|| p.name.clone())).unwrap_or_default();
-            ui.set_chat_peer_name(name.into());
-            ui.set_chat(ModelRc::new(VecModel::from(st.chats.get(&id).cloned().unwrap_or_default())));
-            ui.set_chat_peer_id(SharedString::from(id.to_string()));
-        }
-        None => ui.set_chat_peer_id("".into()),
+        Event::Message { .. } => {}
     }
 }
 
@@ -437,43 +569,172 @@ fn group_title(g: &GroupInfo) -> String {
     g.alias.clone().unwrap_or_else(|| g.haiku.clone())
 }
 
-fn group_summary(g: &GroupInfo) -> String {
-    let count = |s: MemberState| g.members.iter().filter(|m| m.state == s).count();
-    let mut parts = vec![format!("{} joined", count(MemberState::Accepted))];
-    for (n, label) in [(count(MemberState::Sent), "invited"), (count(MemberState::Pending), "waiting"), (count(MemberState::Declined), "declined")] {
-        if n > 0 {
-            parts.push(format!("{n} {label}"));
-        }
-    }
-    parts.join(" · ")
-}
-
-/// Fill the group detail view (or clear it when no group is open).
-fn show_group(ui: &MainWindow, st: &UiState) {
-    let group = st.open_group.as_ref().and_then(|id| st.groups.groups.iter().find(|g| g.id == *id));
-    let Some(g) = group else {
-        ui.set_open_group("".into());
-        return;
-    };
-    let members: Vec<MemberItem> = g
-        .members
+/// The groups list and the invites.
+fn show_groups(ui: &AppWindow, shared: &Shared) {
+    let rows: Vec<GroupRow> = shared
+        .groups
+        .groups
         .iter()
-        .map(|m| {
-            let (status, kind) = match m.state {
-                MemberState::Accepted => ("joined", 0),
-                MemberState::Sent => ("invited", 1),
-                MemberState::Pending => ("waiting for them to be online", 2),
-                MemberState::Declined => ("declined", 3),
-            };
-            MemberItem { name: m.name.clone().into(), status: status.into(), kind }
+        .map(|g| {
+            let view = shared.views.get(&g.id);
+            let joined = view.map_or(1, |v| v.members.len().max(1));
+            let others_online = view.is_some_and(|v| v.members.iter().any(|m| m.online && !m.me));
+            let waiting = g.members.iter().filter(|m| matches!(m.state, MemberState::Pending | MemberState::Sent)).count();
+            let mut summary = format!("{joined} member{}", if joined == 1 { "" } else { "s" });
+            if waiting > 0 {
+                summary += &format!(" · {waiting} invited");
+            }
+            if let Some(v) = view {
+                let files = v.files.iter().filter(|f| !f.stopped).count();
+                if files > 0 {
+                    summary += &format!(" · {files} file{} on offer", if files == 1 { "" } else { "s" });
+                }
+            }
+            GroupRow {
+                id: g.id.clone().into(),
+                title: group_title(g).into(),
+                subtitle: if g.alias.is_some() { g.haiku.clone().into() } else { SharedString::default() },
+                summary: summary.into(),
+                online: others_online,
+            }
         })
         .collect();
-    let candidates: Vec<CandidateItem> =
-        g.candidates.iter().map(|(id, name)| CandidateItem { id: id.to_string().into(), name: name.clone().into() }).collect();
-    ui.set_group_title(group_title(g).into());
-    ui.set_group_haiku(g.haiku.clone().into());
-    ui.set_group_alias(g.alias.clone().unwrap_or_default().into());
-    ui.set_members(ModelRc::new(VecModel::from(members)));
-    ui.set_candidates(ModelRc::new(VecModel::from(candidates)));
-    ui.set_open_group(g.id.clone().into());
+    let invites: Vec<InviteRow> = shared
+        .groups
+        .invites
+        .iter()
+        .map(|i| InviteRow {
+            inviter_id: i.inviter.to_string().into(),
+            group_id: i.group.clone().into(),
+            inviter_name: i.inviter_name.clone().into(),
+            group_title: i.haiku.clone().into(),
+        })
+        .collect();
+    let state = ui.global::<State>();
+    state.set_groups(model(rows));
+    state.set_invites(model(invites));
+}
+
+/// Fill the open group's page. `fresh`: the group was just opened, so the scratchpad is loaded
+/// whatever it held before.
+fn show_group(ui: &AppWindow, shared: &Shared, fresh: bool) {
+    let state = ui.global::<State>();
+    let Some(info) = shared.open_group.as_ref().and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id)) else {
+        return;
+    };
+    state.set_group_title(group_title(info).into());
+    state.set_group_haiku(info.haiku.clone().into());
+    state.set_group_alias(info.alias.clone().unwrap_or_default().into());
+    state.set_auto_download(info.auto_download);
+    state.set_auto_stop(info.auto_stop);
+    state.set_candidates(model(
+        info.candidates.iter().map(|(id, name)| CandidateRow { id: id.to_string().into(), name: name.clone().into() }).collect(),
+    ));
+
+    let view = shared.views.get(&info.id);
+
+    // Members: who the document lists, then invitees that have not joined.
+    let mut members: Vec<MemberRow> = view
+        .map(|v| {
+            v.members
+                .iter()
+                .map(|m| MemberRow {
+                    id: m.id.clone().into(),
+                    name: m.name.clone().into(),
+                    initials: format::initials(&m.name).into(),
+                    status: if m.me { "this device" } else if m.online { "online" } else { "offline" }.into(),
+                    tone: if m.me || m.online { "ok" } else { "muted" }.into(),
+                    online: m.online,
+                    me: m.me,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for m in &info.members {
+        if members.iter().any(|row| row.id.as_str() == m.id.to_string()) {
+            continue;
+        }
+        let (status, tone) = match m.state {
+            MemberState::Accepted => ("joined", "ok"),
+            MemberState::Sent => ("invited", "active"),
+            MemberState::Pending => ("waiting for them to be online", "warn"),
+            MemberState::Declined => ("declined", "error"),
+        };
+        members.push(MemberRow {
+            id: m.id.to_string().into(),
+            name: m.name.clone().into(),
+            initials: format::initials(&m.name).into(),
+            status: status.into(),
+            tone: tone.into(),
+            online: false,
+            me: false,
+        });
+    }
+    state.set_members(model(members));
+
+    let Some(view) = view else { return };
+    let files: Vec<FileRow> = view
+        .files
+        .iter()
+        .map(|f| {
+            let downloading = f.progress.is_some();
+            let (done, total) = f.progress.unwrap_or((0, f.size));
+            FileRow {
+                id: f.id.clone().into(),
+                name: f.name.clone().into(),
+                size: format::size(f.size).into(),
+                meta: format!("{} · {}", if f.mine { "you".to_string() } else { f.from_name.clone() }, format::time(f.ts)).into(),
+                kind: match f.kind.as_str() {
+                    "media" => 1,
+                    "apk" => 2,
+                    _ => 0,
+                },
+                mine: f.mine,
+                have: f.have,
+                stopped: f.stopped,
+                can_download: !f.mine && !f.have && !f.stopped && !downloading && f.offerer_online,
+                downloading,
+                progress: if total == 0 { 0.0 } else { done as f32 / total as f32 },
+                progress_label: format!("{} of {}", format::size(done), format::size(total)).into(),
+                audience: if f.audience == 0 {
+                    SharedString::default()
+                } else {
+                    format!("{} of {} have it", f.downloaded_by.len(), f.audience).into()
+                },
+                saved_to: f.saved_to.as_ref().map(|p| p.display().to_string()).unwrap_or_default().into(),
+                error: f.error.clone().unwrap_or_default().into(),
+            }
+        })
+        .collect();
+    state.set_files(model(files));
+    let texts: Vec<TextRow> = view
+        .texts
+        .iter()
+        .map(|t| TextRow {
+            id: t.id.clone().into(),
+            name: t.name.clone().into(),
+            text: t.text.clone().into(),
+            time: format::time(t.ts).into(),
+            mine: t.mine,
+            is_link: format::is_link(&t.text),
+        })
+        .collect();
+    state.set_texts(model(texts));
+
+    // The scratchpad: our own edits are already on screen; someone else's keep the cursor in place.
+    let shown = state.get_pad_text().to_string();
+    if fresh {
+        state.set_pad_text(view.scratch.clone().into());
+    } else if !view.scratch_local && shown != view.scratch {
+        let to_char = |text: &str, byte: i32| text[..(byte.max(0) as usize).min(text.len())].chars().count();
+        let to_byte = |text: &str, chars: usize| text.char_indices().nth(chars).map_or(text.len(), |(i, _)| i);
+        let cursor = groupdoc::map_cursor(&shown, &view.scratch, to_char(&shown, state.get_pad_cursor()));
+        let anchor = groupdoc::map_cursor(&shown, &view.scratch, to_char(&shown, state.get_pad_anchor()));
+        let focused = state.get_pad_focused();
+        state.set_pad_text(view.scratch.clone().into());
+        if focused {
+            state.set_pad_anchor_to(to_byte(&view.scratch, anchor) as i32);
+            state.set_pad_set_cursor(to_byte(&view.scratch, cursor) as i32);
+        }
+    }
 }

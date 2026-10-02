@@ -1,0 +1,378 @@
+import {
+    State, Logic, Theme, Icons, Icon, IconTile, Card, Badge, Avatar, Overline, HintText, PageTitle,
+    PrimaryButton, SecondaryButton, GhostButton, IconButton, Field, ScrollView, PeerRow, GroupRow, InviteRow,
+} from "components.slint";
+
+component InviteCard inherits Card {
+    in property <InviteRow> invite;
+    background: Theme.accent-soft;
+    border-color: Theme.accent-text.with-alpha(0.4);
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-2;
+        Text {
+            text: root.invite.inviter-name + " invites you to join";
+            font-size: Theme.font-sm;
+            color: Theme.text-muted;
+            overflow: elide;
+        }
+        Text {
+            text: root.invite.group-title;
+            font-size: Theme.font-lg;
+            font-weight: 700;
+            color: Theme.text-strong;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            PrimaryButton {
+                label: "Accept";
+                clicked => { Logic.accept-invite(root.invite.inviter-id, root.invite.group-id); }
+            }
+            SecondaryButton {
+                label: "Decline";
+                clicked => { Logic.reject-invite(root.invite.inviter-id, root.invite.group-id); }
+            }
+        }
+    }
+}
+
+component GroupCard inherits Card {
+    in property <GroupRow> group;
+    background: ta.pressed ? Theme.chip-bg : ta.has-hover ? Theme.inset-bg : Theme.card-bg;
+    animate background { duration: 90ms; }
+    ta := TouchArea {
+        clicked => { Logic.open-group(root.group.id); }
+        mouse-cursor: pointer;
+    }
+    HorizontalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                icon: Icons.groups;
+                size: 40px;
+                show-presence: true;
+                online: root.group.online;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.group.title;
+                font-size: Theme.font-lg;
+                font-weight: 650;
+                color: Theme.text-strong;
+                wrap: word-wrap;
+            }
+            if root.group.subtitle != "": Text {
+                text: root.group.subtitle;
+                font-size: Theme.font-sm;
+                color: Theme.text-muted;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.group.summary;
+                font-size: Theme.font-sm;
+                color: Theme.text-muted;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                source: Icons.chevron-right;
+                tint: Theme.text-faint;
+            }
+        }
+    }
+}
+
+export component GroupsPage inherits VerticalLayout {
+    padding: Theme.page-padding;
+    padding-bottom: Theme.space-3;
+    spacing: Theme.space-3;
+
+    HorizontalLayout {
+        spacing: Theme.space-3;
+        PageTitle {
+            horizontal-stretch: 1;
+            title: "Groups";
+            subtitle: "Share files, texts and a scratchpad with the devices you trust.";
+        }
+        VerticalLayout {
+            alignment: start;
+            PrimaryButton {
+                label: "New group";
+                icon: Icons.add-peer;
+                clicked => { Logic.new-group(); }
+            }
+        }
+    }
+
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            spacing: Theme.space-3;
+            for invite in State.invites: InviteCard { invite: invite; }
+            for group in State.groups: GroupCard { group: group; }
+            if State.groups.length == 0 && State.invites.length == 0: HintText {
+                label: "No groups yet. Create one, then invite peers; they choose whether to join.";
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+
+component PeerCard inherits Card {
+    in property <PeerRow> peer;
+    HorizontalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                initials: root.peer.initials;
+                size: 40px;
+                show-presence: true;
+                online: root.peer.connected;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+            Text {
+                text: root.peer.title;
+                font-size: Theme.font-lg;
+                font-weight: 650;
+                color: Theme.text-strong;
+                overflow: elide;
+            }
+            Text {
+                text: (root.peer.subtitle != "" ? root.peer.subtitle + " · " : "") + root.peer.short;
+                font-size: Theme.font-xs;
+                color: Theme.text-faint;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                if root.peer.connected: Badge { label: "connected"; tone: "ok"; }
+                if root.peer.saved && !root.peer.connected: Badge { label: "offline"; tone: "muted"; }
+                if root.peer.lan: Badge { label: "LAN"; tone: "active"; }
+                if root.peer.ble: Badge { label: "Bluetooth"; tone: "warn"; }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.space-2;
+            if !root.peer.connected: SecondaryButton {
+                label: "Connect";
+                clicked => { Logic.connect(root.peer.id); }
+            }
+            if root.peer.saved: GhostButton {
+                label: "Edit";
+                icon: Icons.edit;
+                clicked => {
+                    State.edit-kind = "peer";
+                    State.edit-id = root.peer.id;
+                    State.edit-original = root.peer.subtitle != "" ? root.peer.subtitle : root.peer.title;
+                    State.edit-text = root.peer.alias;
+                }
+            }
+        }
+    }
+}
+
+export component PeersPage inherits VerticalLayout {
+    padding: Theme.page-padding;
+    padding-bottom: Theme.space-3;
+    spacing: Theme.space-3;
+
+    PageTitle {
+        title: "Peers";
+        subtitle: "Devices nearby and the ones you saved. Saved peers reconnect on their own.";
+    }
+
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            spacing: Theme.space-3;
+            for peer in State.peers: PeerCard { peer: peer; }
+            if State.peers.length == 0: HintText {
+                label: "No one around yet. Other flipflop devices on this network or in Bluetooth range show up here.";
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+
+export component AddPage inherits ScrollView {
+    VerticalLayout {
+        padding: Theme.page-padding;
+        spacing: Theme.space-3;
+        alignment: start;
+
+        PageTitle {
+            title: "Add a peer";
+            subtitle: "Scan a code from the other device, or show yours.";
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-3;
+                Text {
+                    text: "Your code";
+                    font-size: Theme.font-md;
+                    font-weight: 650;
+                    color: Theme.text-strong;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: min(260px, root.width - 2 * Theme.page-padding - 2 * Theme.card-padding);
+                        height: self.width;
+                        background: white;
+                        border-radius: Theme.radius;
+                        Image {
+                            source: State.qr;
+                            image-fit: contain;
+                            width: parent.width - 12px;
+                            height: parent.height - 12px;
+                        }
+                    }
+                }
+                PrimaryButton {
+                    label: "Scan a code";
+                    icon: Icons.qr;
+                    clicked => { Logic.scan(); }
+                }
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-2;
+                Text {
+                    text: "…or paste a ticket";
+                    font-size: Theme.font-md;
+                    font-weight: 650;
+                    color: Theme.text-strong;
+                }
+                ticket-field := Field {
+                    placeholder: "paste the other device's ticket";
+                    accepted(t) => { Logic.connect-ticket(t); }
+                }
+                SecondaryButton {
+                    label: "Connect";
+                    enabled: ticket-field.text != "";
+                    clicked => { Logic.connect-ticket(ticket-field.text); }
+                }
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-2;
+                Text {
+                    text: "Your ticket";
+                    font-size: Theme.font-md;
+                    font-weight: 650;
+                    color: Theme.text-strong;
+                }
+                Field {
+                    text: State.ticket;
+                    read-only: true;
+                }
+                SecondaryButton {
+                    label: "Copy";
+                    icon: Icons.copy;
+                    clicked => { Logic.copy-text(State.ticket); }
+                }
+            }
+        }
+    }
+}
+
+export component SettingsPage inherits ScrollView {
+    VerticalLayout {
+        padding: Theme.page-padding;
+        spacing: Theme.space-3;
+        alignment: start;
+
+        PageTitle {
+            title: "Settings";
+            subtitle: "";
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-2;
+                Text {
+                    text: "This device's name";
+                    font-size: Theme.font-md;
+                    font-weight: 650;
+                    color: Theme.text-strong;
+                }
+                HintText { label: "Shown to other members next to the texts you send."; }
+                name-field := Field {
+                    text: State.my-name;
+                    placeholder: "Device name";
+                    accepted(t) => { Logic.rename(t); }
+                }
+                PrimaryButton {
+                    label: "Save";
+                    clicked => { Logic.rename(name-field.text); }
+                }
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-2;
+                Text {
+                    text: "Downloads";
+                    font-size: Theme.font-md;
+                    font-weight: 650;
+                    color: Theme.text-strong;
+                }
+                Text {
+                    text: State.download-dir;
+                    font-size: Theme.font-sm;
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-2;
+                Text {
+                    text: "Connection";
+                    font-size: Theme.font-md;
+                    font-weight: 650;
+                    color: Theme.text-strong;
+                }
+                Text {
+                    text: State.ble-status == "" ? "Starting…" : State.ble-status;
+                    font-size: Theme.font-sm;
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

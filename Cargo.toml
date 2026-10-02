@@ -19,20 +19,27 @@ iroh-mdns-address-lookup = "0.6.1"
 iroh-tickets = "1.0.0"
 n0-future = "0.3.2"
 n0-watcher = "1.0.1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs", "io-util", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 qrcode = { version = "0.14", default-features = false }
 rqrr = "0.11"
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+automerge = "0.12.0"
+blake3 = "1"
+clap = { version = "4", features = ["derive", "env"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 slint = "1.18"
 hostname = "0.4"
 dirs = "6"
 nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+open = "5"
+rfd = "0.15"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17", features = ["bluetoothd"] }

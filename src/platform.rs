@@ -85,6 +85,70 @@ mod android {
         false
     }
 
+    /// Move a downloaded file into the public Downloads folder; returns where it ended up.
+    pub fn file_received(path: &std::path::Path) -> std::path::PathBuf {
+        let moved = with_activity(|env, a| {
+            let arg = env.new_string(path.to_string_lossy())?;
+            let obj = env.call_method(a, "saveToDownloads", "(Ljava/lang/String;)Ljava/lang/String;", &[JValue::Object(&arg)])?.l()?;
+            Ok(jstr(env, &JString::from(obj)))
+        })
+        .unwrap_or_default();
+        if moved.is_empty() { path.to_owned() } else { moved.into() }
+    }
+
+    pub fn copy_text(text: &str) {
+        call_string("copyText", text);
+    }
+
+    pub fn paste_text() -> String {
+        with_activity(|env, a| {
+            let obj = env.call_method(a, "pasteText", "()Ljava/lang/String;", &[])?.l()?;
+            Ok(jstr(env, &JString::from(obj)))
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn open_url(url: &str) {
+        call_string("openUrl", url);
+    }
+
+    /// Ask the Activity to show a system picker; `kind` is "file" or "media". The chosen files are
+    /// copied into app storage and arrive through [`set_file_handler`].
+    pub fn pick_files(kind: &str) {
+        call_string("pickFiles", kind);
+    }
+
+    /// `(path of the base APK, label, detail)` for every launchable app.
+    pub fn list_apps() -> Vec<(String, String, String)> {
+        let json = with_activity(|env, a| {
+            let obj = env.call_method(a, "listApps", "()Ljava/lang/String;", &[])?.l()?;
+            Ok(jstr(env, &JString::from(obj)))
+        })
+        .unwrap_or_default();
+        serde_json::from_str::<Vec<(String, String, String)>>(&json).unwrap_or_default()
+    }
+
+    type FileHandler = Box<dyn Fn(String, String) + Send + Sync>;
+    static FILE_HANDLER: OnceLock<FileHandler> = OnceLock::new();
+
+    /// Called with `(kind, path)` for each file the user picked.
+    pub fn set_file_handler(handler: impl Fn(String, String) + Send + Sync + 'static) {
+        let _ = FILE_HANDLER.set(Box::new(handler));
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeFilePicked(
+        mut env: JNIEnv,
+        _: JClass,
+        kind: JString,
+        path: JString,
+    ) {
+        let (kind, path) = (jstr(&mut env, &kind), jstr(&mut env, &path));
+        if let Some(handler) = FILE_HANDLER.get() {
+            handler(kind, path);
+        }
+    }
+
     pub fn start_qr_scan() {
         call_void("startQrScan");
     }
@@ -151,3 +215,43 @@ mod android {
 pub fn ensure_ble_permission() -> bool {
     true
 }
+
+/// A downloaded file is complete. On Android it is moved into the public Downloads folder; the
+/// returned path is where it ended up.
+#[cfg(not(target_os = "android"))]
+pub fn file_received(path: &std::path::Path) -> std::path::PathBuf {
+    path.to_owned()
+}
+
+#[cfg(not(target_os = "android"))]
+mod desktop {
+    use std::sync::Mutex;
+
+    // The clipboard must outlive the copy on Linux, or the text disappears with it.
+    static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+
+    fn with_clipboard<R>(f: impl FnOnce(&mut arboard::Clipboard) -> Option<R>) -> Option<R> {
+        let mut guard = CLIPBOARD.lock().ok()?;
+        if guard.is_none() {
+            *guard = arboard::Clipboard::new().map_err(|e| tracing::warn!("no clipboard: {e}")).ok();
+        }
+        f(guard.as_mut()?)
+    }
+
+    pub fn copy_text(text: &str) {
+        with_clipboard(|c| c.set_text(text.to_owned()).ok());
+    }
+
+    pub fn paste_text() -> String {
+        with_clipboard(|c| c.get_text().ok()).unwrap_or_default()
+    }
+
+    pub fn open_url(url: &str) {
+        if let Err(err) = open::that_detached(url) {
+            tracing::warn!("could not open {url}: {err}");
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+pub use desktop::*;

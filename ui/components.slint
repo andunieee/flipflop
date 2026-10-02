@@ -1,0 +1,793 @@
+import { Palette, ScrollView as StdScrollView } from "std-widgets.slint";
+
+// Everything the Rust side feeds the UI, and every action the UI asks of it.
+
+export struct PeerRow {
+    id: string,
+    /// Alias if set, else the peer's own name.
+    title: string,
+    /// The peer's own name, shown dimmed when an alias hides it.
+    subtitle: string,
+    alias: string,
+    short: string,
+    initials: string,
+    lan: bool,
+    ble: bool,
+    connected: bool,
+    saved: bool,
+}
+
+export struct GroupRow {
+    id: string,
+    title: string,
+    /// The haiku, shown dimmed when an alias replaces it as the title.
+    subtitle: string,
+    summary: string,
+    online: bool,
+}
+
+export struct InviteRow {
+    inviter-id: string,
+    group-id: string,
+    inviter-name: string,
+    group-title: string,
+}
+
+export struct MemberRow {
+    id: string,
+    name: string,
+    initials: string,
+    status: string,
+    /// "ok" | "active" | "warn" | "error" | "muted"
+    tone: string,
+    online: bool,
+    me: bool,
+}
+
+export struct CandidateRow {
+    id: string,
+    name: string,
+}
+
+export struct FileRow {
+    id: string,
+    name: string,
+    size: string,
+    /// "Alice's phone · 14:02"
+    meta: string,
+    /// 0 file, 1 photo / video, 2 app
+    kind: int,
+    mine: bool,
+    have: bool,
+    stopped: bool,
+    can-download: bool,
+    downloading: bool,
+    progress: float,
+    progress-label: string,
+    /// "2 of 3 have it"
+    audience: string,
+    saved-to: string,
+    error: string,
+}
+
+export struct TextRow {
+    id: string,
+    name: string,
+    text: string,
+    time: string,
+    mine: bool,
+    is-link: bool,
+}
+
+export struct AppRow {
+    path: string,
+    name: string,
+    detail: string,
+}
+
+export global State {
+    /// "groups" | "group" | "peers" | "add" | "settings"
+    in-out property <string> page: "groups";
+    /// Phone layout: single pane, bottom navigation.
+    in-out property <bool> touch: false;
+    in-out property <string> my-name;
+    in-out property <bool> node-ready: false;
+    in property <string> status;
+    in property <string> ble-status;
+    in property <string> download-dir;
+
+    in property <[PeerRow]> peers;
+    in property <[GroupRow]> groups;
+    in property <[InviteRow]> invites;
+
+    // the open group
+    in-out property <string> open-group;
+    in property <string> group-title;
+    in property <string> group-haiku;
+    in property <string> group-alias;
+    /// "files" | "texts" | "pad" | "apps" | "info"
+    in-out property <string> group-tab: "files";
+    in property <[MemberRow]> members;
+    in property <[CandidateRow]> candidates;
+    in property <[FileRow]> files;
+    in property <[TextRow]> texts;
+    in-out property <string> pad-text;
+    // The scratchpad's cursor (byte offsets), reported by the editor, and requests to move it.
+    in-out property <int> pad-cursor;
+    in-out property <int> pad-anchor;
+    in-out property <bool> pad-focused;
+    in-out property <int> pad-set-cursor: -1;
+    in-out property <int> pad-anchor-to: -1;
+    in-out property <bool> auto-download: true;
+    in-out property <bool> auto-stop: false;
+    in-out property <bool> app-picker-open: false;
+    in property <[AppRow]> apps;
+
+    // add by QR
+    in property <image> qr;
+    in property <string> ticket;
+    in property <image> camera-frame;
+    in-out property <bool> scanning: false;
+    in property <bool> live-camera;
+
+    // rename / delete dialog: kind is "peer" or "group", "" = closed
+    in-out property <string> edit-kind;
+    in-out property <string> edit-id;
+    in-out property <string> edit-original;
+    in-out property <string> edit-text;
+}
+
+export global Logic {
+    callback rename(string);
+    callback connect(string);
+    callback connect-ticket(string);
+    callback scan();
+    callback cancel-scan();
+    callback new-group();
+    callback open-group(string);
+    callback close-group();
+    callback add-to-group(string, string);
+    callback accept-invite(string, string);
+    callback reject-invite(string, string);
+    callback save-edit(string, string, string);
+    callback delete-edit(string, string);
+    callback send-text(string);
+    callback copy-text(string);
+    callback paste() -> string;
+    callback paste-pad();
+    callback open-link(string);
+    callback delete-text(string);
+    callback pad-edited(string);
+    /// "file" | "media" | "app"
+    callback pick(string);
+    callback share-app(string);
+    callback stop-file(string);
+    callback download-file(string);
+    callback set-auto-download(bool);
+    callback set-auto-stop(bool);
+}
+
+// The fluent style's ScrollView only scrolls by wheel; a finger drag would never move it.
+export component ScrollView inherits StdScrollView {
+    mouse-drag-pan-enabled: State.touch;
+}
+
+// App-wide palette and metrics: sky blue, white cards, deep navy text. Light and dark values,
+// picked by `dark`.
+export global Theme {
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark
+        || (Palette.color-scheme == ColorScheme.unknown && Palette.background == #1c1c1c);
+
+    out property <color> window-bg: dark ? #0e1824 : #f4faff;
+    out property <color> sidebar-bg: dark ? #0a131c : #e6f3fd;
+    out property <color> card-bg: dark ? #15222f : #ffffff;
+    out property <color> inset-bg: dark ? #111c28 : #f2f8fd;
+    out property <color> border: dark ? #223446 : #d6e7f5;
+    out property <color> border-strong: dark ? #2e4660 : #b8d4ec;
+    out property <color> shadow: dark ? #00000080 : #1e5a8a40;
+
+    out property <color> text-strong: dark ? #e8f2fb : #10304a;
+    out property <color> text: dark ? #c2d3e2 : #2c4a63;
+    out property <color> text-muted: dark ? #8aa1b6 : #66819a;
+    out property <color> text-faint: dark ? #5d7489 : #95acc0;
+
+    out property <color> accent: #1e8cf0;
+    out property <color> accent-hover: #3a9ff5;
+    out property <color> accent-press: #1774cc;
+    out property <color> accent-soft: dark ? #12324f : #dbeeff;
+    out property <color> accent-text: dark ? #6db8ff : #1366b8;
+
+    out property <color> online: dark ? #2fcb68 : #22b55a;
+    out property <color> offline: dark ? #3a4d60 : #c2d2df;
+    out property <color> warn: dark ? #f0a32a : #e08a00;
+    out property <color> warn-soft: dark ? #3a2b0e : #fff1d6;
+    out property <color> info: dark ? #3fb2f0 : #0b8fd6;
+    out property <color> info-soft: dark ? #0f3047 : #dcf2fd;
+    out property <color> error: dark ? #f2676b : #e5484d;
+    out property <color> error-soft: dark ? #3b1a1e : #ffe5e5;
+    out property <color> error-soft-press: dark ? #4d2026 : #ffd0d1;
+    out property <color> success: dark ? #3acb70 : #179c4a;
+    out property <color> success-soft: dark ? #123423 : #dcf6e5;
+
+    out property <color> chip-bg: dark ? #1c2b3b : #e8f2fb;
+    out property <color> chip-bg-hover: dark ? #243649 : #d9e9f7;
+    out property <color> chip-bg-press: dark ? #2c4157 : #c9dff2;
+
+    out property <length> radius-sm: 6px;
+    out property <length> radius: 10px;
+    out property <length> radius-lg: 14px;
+
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-5: 24px;
+
+    out property <length> font-xs: State.touch ? 12px : 11px;
+    out property <length> font-sm: State.touch ? 13px : 12px;
+    out property <length> font-md: State.touch ? 15px : 13px;
+    out property <length> font-lg: State.touch ? 17px : 15px;
+    out property <length> font-xl: State.touch ? 20px : 22px;
+
+    out property <length> control-height: State.touch ? 44px : 32px;
+    out property <length> page-padding: State.touch ? 16px : 28px;
+    out property <length> card-padding: State.touch ? 14px : 16px;
+}
+
+// Line icons (24px grid, 2px stroke), tinted with `Icon.tint`.
+export global Icons {
+    out property <image> logo: @image-url("icons/logo.svg");
+    out property <image> peers: @image-url("icons/peers.svg");
+    out property <image> groups: @image-url("icons/groups.svg");
+    out property <image> add-peer: @image-url("icons/add-peer.svg");
+    out property <image> settings: @image-url("icons/settings.svg");
+    out property <image> arrow-up: @image-url("icons/arrow-up.svg");
+    out property <image> arrow-down: @image-url("icons/arrow-down.svg");
+    out property <image> arrow-left: @image-url("icons/arrow-left.svg");
+    out property <image> close: @image-url("icons/close.svg");
+    out property <image> copy: @image-url("icons/copy.svg");
+    out property <image> edit: @image-url("icons/edit.svg");
+    out property <image> trash: @image-url("icons/trash.svg");
+    out property <image> send: @image-url("icons/send.svg");
+    out property <image> folder: @image-url("icons/folder.svg");
+    out property <image> link: @image-url("icons/link.svg");
+    out property <image> open: @image-url("icons/open.svg");
+    out property <image> qr: @image-url("icons/qr.svg");
+    out property <image> device: @image-url("icons/device.svg");
+    out property <image> chevron-right: @image-url("icons/chevron-right.svg");
+    out property <image> file: @image-url("icons/file.svg");
+    out property <image> text: @image-url("icons/text.svg");
+    out property <image> image: @image-url("icons/image.svg");
+    out property <image> apps: @image-url("icons/apps.svg");
+    out property <image> clipboard: @image-url("icons/clipboard.svg");
+    out property <image> share: @image-url("icons/share.svg");
+}
+
+export component Icon inherits Image {
+    in property <length> size: 18px;
+    in property <color> tint: Theme.text;
+    width: root.size;
+    height: root.size;
+    colorize: root.tint;
+    image-fit: contain;
+}
+
+export component LogoMark inherits Image {
+    in property <length> size: 32px;
+    width: root.size;
+    height: root.size;
+    source: Icons.logo;
+    image-fit: contain;
+}
+
+export component PageTitle inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: Theme.space-1;
+
+    Text {
+        text: root.title;
+        font-size: Theme.font-xl;
+        font-weight: 700;
+        color: Theme.text-strong;
+        overflow: elide;
+    }
+
+    if root.subtitle != "": Text {
+        text: root.subtitle;
+        font-size: Theme.font-sm;
+        color: Theme.text-muted;
+        wrap: word-wrap;
+    }
+}
+
+// Small all-caps label above a list.
+export component Overline inherits Text {
+    in property <string> label;
+    font-size: Theme.font-xs;
+    font-weight: 650;
+    letter-spacing: 0.6px;
+    color: Theme.text-faint;
+    text: root.label;
+}
+
+export component Card inherits Rectangle {
+    vertical-stretch: 0;
+    border-radius: Theme.radius-lg;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border;
+}
+
+export component HintText inherits Text {
+    in property <string> label;
+    color: Theme.text-muted;
+    font-size: Theme.font-sm;
+    text: root.label;
+    wrap: word-wrap;
+}
+
+export component ProgressBar inherits Rectangle {
+    in property <float> value;
+    in property <color> tint: Theme.accent;
+    height: 6px;
+    border-radius: 3px;
+    background: Theme.inset-bg;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        height: parent.height;
+        width: parent.width * clamp(root.value, 0.0, 1.0);
+        border-radius: parent.border-radius;
+        background: root.tint;
+        animate width {
+            duration: 150ms;
+            easing: ease-out;
+        }
+    }
+}
+
+export component Dot inherits Rectangle {
+    in property <bool> online;
+    in property <length> size: 8px;
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    background: root.online ? Theme.online : Theme.offline;
+}
+
+// Round initials avatar with an optional presence dot.
+export component Avatar inherits Rectangle {
+    in property <string> initials;
+    in property <length> size: 32px;
+    in property <bool> show-presence: false;
+    in property <bool> online;
+    in property <image> icon;
+    in property <color> tint: Theme.accent-soft;
+    in property <color> ink: Theme.accent-text;
+
+    width: root.size;
+    height: root.size;
+
+    Rectangle {
+        border-radius: root.size / 2;
+        background: root.tint;
+    }
+
+    if root.icon.width > 0: Icon {
+        source: root.icon;
+        size: root.size * 0.55;
+        tint: root.ink;
+    }
+    if root.icon.width == 0: Text {
+        text: root.initials == "" ? "?" : root.initials;
+        color: root.ink;
+        font-size: root.size * 0.38;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.show-presence: Rectangle {
+        x: root.size - self.width + 1px;
+        y: root.size - self.height + 1px;
+        width: max(10px, root.size * 0.3);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Theme.window-bg;
+
+        Dot {
+            size: parent.width - 4px;
+            online: root.online;
+        }
+    }
+}
+
+// Pill with a tinted background. tone: "ok" | "error" | "warn" | "muted" | "active"
+export component Badge inherits Rectangle {
+    in property <string> label;
+    in property <string> tone: "muted";
+
+    border-radius: self.height / 2;
+    background: root.tone == "ok" ? Theme.success-soft
+        : root.tone == "error" ? Theme.error-soft
+        : root.tone == "warn" ? Theme.warn-soft
+        : root.tone == "active" ? Theme.info-soft
+        : Theme.chip-bg;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 2px;
+        padding-bottom: 2px;
+
+        Text {
+            text: root.label;
+            font-size: Theme.font-xs;
+            font-weight: 600;
+            color: root.tone == "ok" ? Theme.success
+                : root.tone == "error" ? Theme.error
+                : root.tone == "warn" ? Theme.warn
+                : root.tone == "active" ? Theme.info
+                : Theme.text-muted;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Round tile with an icon (file kinds, section headers).
+export component IconTile inherits Rectangle {
+    in property <image> icon;
+    in property <length> size: 40px;
+    in property <color> tint: Theme.accent-soft;
+    in property <color> ink: Theme.accent-text;
+    width: root.size;
+    height: root.size;
+    border-radius: root.size * 0.3;
+    background: root.tint;
+    Icon {
+        source: root.icon;
+        size: root.size * 0.5;
+        tint: root.ink;
+    }
+}
+
+component ButtonBase inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> enabled: true;
+    in property <color> fill;
+    in property <color> fill-hover;
+    in property <color> fill-press;
+    in property <color> ink;
+    callback clicked;
+
+    min-height: Theme.control-height;
+    min-width: Theme.control-height;
+    border-radius: Theme.radius-sm + 2px;
+    background: !root.enabled ? root.fill
+        : touch.pressed ? root.fill-press
+        : touch.has-hover ? root.fill-hover
+        : root.fill;
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background { duration: 90ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: root.enabled ? pointer : default;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: root.label == "" ? 0 : Theme.space-3 + 2px;
+        padding-right: root.label == "" ? 0 : Theme.space-3 + 2px;
+        spacing: Theme.space-2;
+
+        if root.icon.width > 0: VerticalLayout {
+            alignment: center;
+            Icon {
+                source: root.icon;
+                size: 18px;
+                tint: root.ink;
+            }
+        }
+        if root.label != "": Text {
+            text: root.label;
+            color: root.ink;
+            font-size: Theme.font-md;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+export component PrimaryButton inherits ButtonBase {
+    fill: Theme.accent;
+    fill-hover: Theme.accent-hover;
+    fill-press: Theme.accent-press;
+    ink: white;
+}
+
+export component SecondaryButton inherits ButtonBase {
+    fill: Theme.chip-bg;
+    fill-hover: Theme.chip-bg-hover;
+    fill-press: Theme.chip-bg-press;
+    ink: Theme.text-strong;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+}
+
+export component GhostButton inherits ButtonBase {
+    fill: transparent;
+    fill-hover: Theme.chip-bg;
+    fill-press: Theme.chip-bg-hover;
+    ink: Theme.text;
+}
+
+export component DangerButton inherits ButtonBase {
+    fill: transparent;
+    fill-hover: Theme.error-soft;
+    fill-press: Theme.error-soft-press;
+    ink: Theme.error;
+}
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> tint: Theme.text-muted;
+    in property <bool> danger: false;
+    callback clicked;
+
+    width: Theme.control-height;
+    height: Theme.control-height;
+    border-radius: self.height / 2;
+    background: touch.pressed ? (root.danger ? Theme.error-soft-press : Theme.chip-bg-hover)
+        : touch.has-hover ? (root.danger ? Theme.error-soft : Theme.chip-bg)
+        : transparent;
+    animate background { duration: 90ms; }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    Icon {
+        source: root.icon;
+        size: State.touch ? 20px : 17px;
+        tint: root.danger ? Theme.error : root.tint;
+    }
+}
+
+// On/off switch with a label and an explanation under it.
+export component ToggleRow inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    min-height: max(Theme.control-height, content.preferred-height + 8px);
+    touch := TouchArea {
+        clicked => { root.toggled(!root.checked); }
+        mouse-cursor: pointer;
+    }
+    content := HorizontalLayout {
+        padding-top: 4px;
+        padding-bottom: 4px;
+        spacing: Theme.space-3;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.label;
+                font-size: Theme.font-md;
+                font-weight: 600;
+                color: Theme.text-strong;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.hint;
+                font-size: Theme.font-sm;
+                color: Theme.text-muted;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 42px;
+                height: 24px;
+                border-radius: 12px;
+                background: root.checked ? Theme.accent : Theme.offline;
+                animate background { duration: 120ms; }
+                Rectangle {
+                    x: root.checked ? parent.width - self.width - 3px : 3px;
+                    y: 3px;
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: white;
+                    animate x { duration: 120ms; easing: ease-out; }
+                }
+            }
+        }
+    }
+}
+
+// Segmented tab strip.
+export component TabStrip inherits Rectangle {
+    in property <[string]> labels;
+    in property <[string]> keys;
+    in property <string> current;
+    callback picked(string);
+
+    height: Theme.control-height + 8px;
+    border-radius: Theme.radius;
+    background: Theme.chip-bg;
+
+    HorizontalLayout {
+        padding: 4px;
+        spacing: 4px;
+        for label[i] in root.labels: Rectangle {
+            border-radius: Theme.radius-sm + 2px;
+            background: root.current == root.keys[i] ? Theme.card-bg : transparent;
+            border-width: root.current == root.keys[i] ? 1px : 0px;
+            border-color: Theme.border;
+            animate background { duration: 90ms; }
+            Text {
+                text: label;
+                font-size: Theme.font-md;
+                font-weight: root.current == root.keys[i] ? 700 : 500;
+                color: root.current == root.keys[i] ? Theme.accent-text : Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            TouchArea {
+                clicked => { root.picked(root.keys[i]); }
+                mouse-cursor: pointer;
+            }
+        }
+    }
+}
+
+// A text field styled like the cards, single line.
+export component Field inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> read-only: false;
+    callback accepted(string);
+    callback edited(string);
+
+    min-height: Theme.control-height;
+    border-radius: Theme.radius-sm + 2px;
+    background: Theme.inset-bg;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border-strong;
+
+    HorizontalLayout {
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-3;
+        input := TextInput {
+            text <=> root.text;
+            read-only: root.read-only;
+            single-line: true;
+            font-size: Theme.font-md;
+            color: Theme.text-strong;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent.with-alpha(0.35);
+            accepted => { root.accepted(self.text); }
+            edited => { root.edited(self.text); }
+        }
+    }
+    if root.text == "" && !input.has-focus: Text {
+        x: Theme.space-3;
+        text: root.placeholder;
+        font-size: Theme.font-md;
+        color: Theme.text-faint;
+        vertical-alignment: center;
+        height: parent.height;
+    }
+}
+
+// A multi-line text field (snippets).
+export component Area inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+
+    min-height: State.touch ? 96px : 72px;
+    border-radius: Theme.radius-sm + 2px;
+    background: Theme.inset-bg;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border-strong;
+
+    ScrollView {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        content-height: max(self.visible-height, input.preferred-height + 16px);
+        input := TextInput {
+            x: Theme.space-3;
+            y: 8px;
+            width: parent.visible-width - Theme.space-3 * 2;
+            height: max(parent.visible-height - 16px, self.preferred-height);
+            text <=> root.text;
+            wrap: word-wrap;
+            single-line: false;
+            font-size: Theme.font-md;
+            color: Theme.text-strong;
+            selection-background-color: Theme.accent.with-alpha(0.35);
+        }
+    }
+    if root.text == "" && !input.has-focus: Text {
+        x: Theme.space-3;
+        y: 8px;
+        text: root.placeholder;
+        font-size: Theme.font-md;
+        color: Theme.text-faint;
+    }
+}
+
+// The scratchpad: a big plain-text editor. Rust replaces `text` when someone else edits and
+// puts the cursor back where it belongs.
+export component PadEditor inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    out property <int> cursor: input.cursor-position-byte-offset;
+    out property <int> anchor: input.anchor-position-byte-offset;
+    out property <bool> focused: input.has-focus;
+    callback edited(string);
+
+    public function select(anchor: int, focus: int) {
+        input.set-selection-offsets(anchor, focus);
+    }
+
+    border-radius: Theme.radius-lg;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border;
+
+    sv := ScrollView {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        content-height: max(self.visible-height, input.preferred-height + 2 * Theme.card-padding);
+        input := TextInput {
+            x: Theme.card-padding;
+            y: Theme.card-padding;
+            width: sv.visible-width - 2 * Theme.card-padding;
+            height: max(sv.visible-height - 2 * Theme.card-padding, self.preferred-height);
+            wrap: word-wrap;
+            single-line: false;
+            font-size: Theme.font-md;
+            color: Theme.text-strong;
+            selection-background-color: Theme.accent.with-alpha(0.35);
+            page-height: sv.visible-height;
+            edited => { root.edited(self.text); }
+            cursor-position-changed(pos) => {
+                if (pos.y + sv.content-y < 0px) {
+                    sv.content-y = min(0px, -pos.y);
+                } else if (pos.y + sv.content-y > sv.visible-height - 2 * Theme.card-padding - 20px) {
+                    sv.content-y = min(0px, sv.visible-height - 2 * Theme.card-padding - 20px - pos.y);
+                }
+            }
+        }
+    }
+    if input.text == "" && !input.has-focus: Text {
+        x: Theme.card-padding;
+        y: Theme.card-padding;
+        text: "A plain-text page everyone in the group can edit. Notes, a shopping list, a draft…";
+        overflow: elide;
+        font-size: Theme.font-md;
+        color: Theme.text-faint;
+        width: parent.width - 2 * Theme.card-padding;
+        wrap: word-wrap;
+    }
+}
