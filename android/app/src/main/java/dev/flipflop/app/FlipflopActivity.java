@@ -41,7 +41,11 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.os.ParcelUuid;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 import android.util.Log;
 
 import com.google.zxing.integration.android.IntentIntegrator;
@@ -88,7 +92,8 @@ public class FlipflopActivity extends NativeActivity {
 
     // implemented in src/platform.rs
     private static native void nativeQrScanned(String text);
-    private static native void nativeFilePicked(String kind, String path);
+    /** `path`: a file path, or a content:// URI kept in place (then `name` is its display name). */
+    private static native void nativeFilePicked(String kind, String path, String name);
     private static native void nativeBlePeer(String address, String json);
     private static native void nativeBleLost(String address);
     private static native void nativeBleStatus(String text);
@@ -177,7 +182,12 @@ public class FlipflopActivity extends NativeActivity {
         });
     }
 
-    /** Copy what the user picked into app storage (the offerer serves it from there) and tell Rust. */
+    /**
+     * What the user picked. A plain local file is shared where it is: we keep the permission to read
+     * its URI, and Rust opens it when needed ({@link #openContentFd}). Anything else (a cloud
+     * provider, a stream, no persistable permission) is copied into app storage, and the offerer
+     * serves the copy.
+     */
     private void stagePicked(Intent data, String kind) {
         List<Uri> uris = new ArrayList<>();
         if (data.getClipData() != null) {
@@ -189,6 +199,10 @@ public class FlipflopActivity extends NativeActivity {
             for (Uri uri : uris) {
                 try {
                     String name = displayName(uri);
+                    if (keepInPlace(uri)) {
+                        nativeFilePicked(kind, uri.toString(), name);
+                        continue;
+                    }
                     File dir = new File(getFilesDir(), "staged/" + System.nanoTime());
                     if (!dir.mkdirs()) continue;
                     File out = new File(dir, name);
@@ -196,12 +210,44 @@ public class FlipflopActivity extends NativeActivity {
                          OutputStream os = new FileOutputStream(out)) {
                         copy(in, os);
                     }
-                    nativeFilePicked(kind, out.getAbsolutePath());
+                    nativeFilePicked(kind, out.getAbsolutePath(), "");
                 } catch (Exception e) {
                     Log.w(TAG, "could not read " + uri, e);
                 }
             }
         }, "flipflop-stage").start();
+    }
+
+    /** Is this a regular, seekable file we may keep reading later? Takes the permission if so. */
+    private boolean keepInPlace(Uri uri) {
+        try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
+            if (pfd == null) return false;
+            StructStat st = Os.fstat(pfd.getFileDescriptor());
+            if (!OsConstants.S_ISREG(st.st_mode)) return false;
+            Os.lseek(pfd.getFileDescriptor(), 0, OsConstants.SEEK_SET);
+            getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            return true;
+        } catch (Exception e) {
+            return false; // no persistable permission, not seekable, ...: copy instead
+        }
+    }
+
+    /** Called from Rust: a new descriptor (the caller owns it) for a picked file, or -1. */
+    public int openContentFd(String uri) {
+        try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(Uri.parse(uri), "r")) {
+            return pfd == null ? -1 : pfd.detachFd();
+        } catch (Exception e) {
+            Log.w(TAG, "could not open " + uri, e);
+            return -1;
+        }
+    }
+
+    /** Called from Rust: we no longer share this file. */
+    public void releaseContentUri(String uri) {
+        try {
+            getContentResolver().releasePersistableUriPermission(Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception ignored) {
+        }
     }
 
     private String displayName(Uri uri) {

@@ -112,8 +112,8 @@ mod android {
         call_string("openUrl", url);
     }
 
-    /// Ask the Activity to show a system picker; `kind` is "file" or "media". The chosen files are
-    /// copied into app storage and arrive through [`set_file_handler`].
+    /// Ask the Activity to show a system picker; `kind` is "file" or "media". The chosen files arrive
+    /// through [`set_file_handler`].
     pub fn pick_files(kind: &str) {
         call_string("pickFiles", kind);
     }
@@ -128,11 +128,12 @@ mod android {
         serde_json::from_str::<Vec<(String, String, String)>>(&json).unwrap_or_default()
     }
 
-    type FileHandler = Box<dyn Fn(String, String) + Send + Sync>;
+    type FileHandler = Box<dyn Fn(String, String, String) + Send + Sync>;
     static FILE_HANDLER: OnceLock<FileHandler> = OnceLock::new();
 
-    /// Called with `(kind, path)` for each file the user picked.
-    pub fn set_file_handler(handler: impl Fn(String, String) + Send + Sync + 'static) {
+    /// Called with `(kind, path, name)` for each file the user picked. `path` is a `content://` URI
+    /// (shared where it is; `name` is its display name) or an app-storage copy (`name` empty).
+    pub fn set_file_handler(handler: impl Fn(String, String, String) + Send + Sync + 'static) {
         let _ = FILE_HANDLER.set(Box::new(handler));
     }
 
@@ -142,11 +143,27 @@ mod android {
         _: JClass,
         kind: JString,
         path: JString,
+        name: JString,
     ) {
-        let (kind, path) = (jstr(&mut env, &kind), jstr(&mut env, &path));
+        let (kind, path, name) = (jstr(&mut env, &kind), jstr(&mut env, &path), jstr(&mut env, &name));
         if let Some(handler) = FILE_HANDLER.get() {
-            handler(kind, path);
+            handler(kind, path, name);
         }
+    }
+
+    /// A new read-only descriptor for a picked `content://` file (the caller owns it).
+    pub fn open_content_fd(uri: &str) -> Option<std::os::fd::OwnedFd> {
+        use std::os::fd::FromRawFd;
+        let fd = with_activity(|env, a| {
+            let arg = env.new_string(uri)?;
+            env.call_method(a, "openContentFd", "(Ljava/lang/String;)I", &[JValue::Object(&arg)])?.i()
+        })?;
+        (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// We stopped sharing this `content://` file: give its read permission back.
+    pub fn release_content_uri(uri: &str) {
+        call_string("releaseContentUri", uri);
     }
 
     pub fn start_qr_scan() {

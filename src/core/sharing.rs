@@ -235,9 +235,7 @@ impl Core {
             st.shares = keep;
             gone
         });
-        for s in gone.into_iter().filter(|s| s.staged) {
-            let _ = std::fs::remove_file(s.path);
-        }
+        self.release_sources(gone);
     }
 
     /// Everyone entitled to this group's documents: those who accepted our invite, and the members
@@ -528,7 +526,7 @@ impl Core {
         };
         let hashing = path.clone();
         let (hash, size) = tokio::task::spawn_blocking(move || -> Result<(String, u64)> {
-            let mut file = std::fs::File::open(&hashing).with_context(|| format!("cannot read {}", hashing.display()))?;
+            let mut file = open_source(&hashing).with_context(|| format!("cannot read {}", hashing.display()))?;
             if !file.metadata()?.is_file() {
                 bail!("{} is not a file", hashing.display());
             }
@@ -557,9 +555,7 @@ impl Core {
             st.shares = keep;
             gone
         });
-        for s in gone.into_iter().filter(|s| s.staged) {
-            let _ = std::fs::remove_file(s.path);
-        }
+        self.release_sources(gone);
         self.doc_changed(gid, false);
         Ok(())
     }
@@ -729,7 +725,7 @@ impl Core {
             .find(|s| s.group == request.group && s.file == request.file)
             .map(|s| s.path.clone())
             .context("not shared here")?;
-        let mut file = tokio::fs::File::open(&path).await?;
+        let mut file = tokio::fs::File::from_std(tokio::task::spawn_blocking(move || open_source(&path)).await??);
         let len = file.metadata().await?.len();
         if len != offer.size {
             bail!("file changed since it was offered");
@@ -792,6 +788,35 @@ impl Core {
 
 /// Does the peer on this connection answer? A connection to a peer that restarted looks alive
 /// until QUIC's idle timeout, so ask.
+/// Open what a share points at: a file path, or on Android a `content://` URI the user picked.
+fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(target_os = "android")]
+    if path.to_str().is_some_and(|p| p.starts_with("content://")) {
+        let fd = crate::platform::open_content_fd(&path.to_string_lossy()).ok_or_else(|| std::io::Error::other("the picked file is no longer readable"))?;
+        return Ok(std::fs::File::from(fd));
+    }
+    std::fs::File::open(path)
+}
+
+impl Core {
+    /// Shares that ended: delete our own copies, give back the permission to read picked files.
+    pub(super) fn release_sources(&self, gone: Vec<Share>) {
+        for s in gone {
+            if s.staged {
+                let _ = std::fs::remove_file(&s.path);
+                continue;
+            }
+            #[cfg(target_os = "android")]
+            if let Some(uri) = s.path.to_str().filter(|p| p.starts_with("content://")) {
+                let still_used = self.0.store.lock().unwrap().state.shares.iter().any(|o| o.path == s.path);
+                if !still_used {
+                    crate::platform::release_content_uri(uri);
+                }
+            }
+        }
+    }
+}
+
 async fn probe(conn: &Connection) -> bool {
     let ask = async {
         let (mut tx, mut rx) = conn.open_bi().await.ok()?;
