@@ -11,7 +11,7 @@ Rust + Slint peer-to-peer app (desktop and Android). Peers connect with [iroh](h
 ## Contacts and groups
 
 - **Contacts**: every peer you connect to (or that connects to you) is saved with its public key and name. Saved contacts reconnect automatically, with backoff, and immediately when they show up on the LAN or over BLE. You can rename them locally (the peer's own name stays visible, dimmed) or remove them. A removed contact that keeps dialing you is still accepted but is not saved again; connecting to them yourself saves them again.
-- **Groups**: create a group, then invite contacts. Each gets an invite and must accept. If they are offline, the invite is sent when they next connect. Declining is remembered per `(inviter, group)`: repeat invites for that pair are not shown, invites from other peers or to other groups still are. Group names are haikus generated from the group's random id; you can set a local alias.
+- **Groups**: create a group, then invite contacts. Each gets an invite and must accept. If they are offline, the invite is sent when they next connect. Declining is remembered per `(inviter, group)`: repeat invites for that pair are not shown, invites from other peers or to other groups still are. Default group names are two-word verses (e.g. "pale moon") generated from the group's random id; you can set a local alias.
 - Members learn about each other through the group's document and connect directly, so a group works even if two members were never introduced.
 
 ## What a group does

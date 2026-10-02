@@ -78,9 +78,11 @@ pub fn lines(id: &[u8; 16]) -> [String; 3] {
     [line(&mut rng, L5), line(&mut rng, L7), line(&mut rng, L5)]
 }
 
-/// The haiku on one line, lines separated by ` / `.
+/// The default group name: one verse of two words, e.g. `pale moon`.
 pub fn name(id: &[u8; 16]) -> String {
-    lines(id).join(" / ")
+    let mut rng = Rng::new(id);
+    let nouns: Vec<&Word> = NOUN.iter().filter(|w| !w.0.contains(' ')).collect();
+    format!("{} {}", ADJ[rng.below(ADJ.len())].0, nouns[rng.below(nouns.len())].0)
 }
 
 #[cfg(test)]
@@ -106,6 +108,7 @@ mod tests {
         for i in 0..200u8 {
             assert_eq!(name(&[i; 16]), name(&[i; 16]));
             assert_eq!(lines(&[i; 16]).len(), 3);
+            assert_eq!(name(&[i; 16]).split(' ').count(), 2);
         }
         assert_ne!(name(&[1; 16]), name(&[2; 16]));
     }
