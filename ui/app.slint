@@ -450,7 +450,7 @@ export component AppWindow inherits Window {
                     TabButton {
                         label: "Groups";
                         icon: Icons.groups;
-                        active: State.page == "groups" || State.page == "group";
+                        active: State.page == "groups" || (State.page == "group" && !State.group-implied);
                         clicked => {
                             if State.page == "group" { Logic.close-group(); }
                             State.page = "groups";
@@ -459,7 +459,7 @@ export component AppWindow inherits Window {
                     TabButton {
                         label: "Peers";
                         icon: Icons.peers;
-                        active: State.page == "peers";
+                        active: State.page == "peers" || (State.page == "group" && State.group-implied);
                         clicked => { State.page = "peers"; }
                     }
                     TabButton {
