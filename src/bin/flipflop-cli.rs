@@ -140,7 +140,7 @@ enum PadCmd {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).init();
     let cli = Cli::parse();
-    let dir = cli.dir.clone().unwrap_or_else(|| dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("flipflop-cli"));
+    let dir = cli.dir.clone().unwrap_or_else(|| dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("flipflop"));
     let printing = matches!(cli.command, Command::Serve { .. });
     let core = Core::start(&dir, false, move |event| {
         if printing {
