@@ -15,6 +15,11 @@ export struct PeerRow {
     ble: bool,
     connected: bool,
     saved: bool,
+    /// We paired with them / they paired with us.
+    paired: bool,
+    paired-us: bool,
+    /// Both paired: the id of the implied group (the peer's page), else "".
+    group-id: string,
 }
 
 export struct GroupRow {
@@ -24,6 +29,16 @@ export struct GroupRow {
     subtitle: string,
     summary: string,
     online: bool,
+}
+
+/// What is new in one group since it was last looked at.
+export struct HomeRow {
+    group-id: string,
+    title: string,
+    /// One line per kind of news, separated by newlines.
+    lines: string,
+    /// An implied group (a paired peer).
+    paired: bool,
 }
 
 export struct InviteRow {
@@ -86,8 +101,8 @@ export struct AppRow {
 }
 
 export global State {
-    /// "groups" | "group" | "peers" | "add" | "settings"
-    in-out property <string> page: "groups";
+    /// "home" | "groups" | "group" | "peers" | "add" | "settings"
+    in-out property <string> page: "home";
     /// Phone layout: single pane, bottom navigation.
     in-out property <bool> touch: false;
     in-out property <string> my-name;
@@ -99,12 +114,19 @@ export global State {
     in property <[PeerRow]> peers;
     in property <[GroupRow]> groups;
     in property <[InviteRow]> invites;
+    in property <[HomeRow]> home;
 
     // the open group
     in-out property <string> open-group;
     in property <string> group-title;
     in property <string> group-haiku;
     in property <string> group-alias;
+    /// The open group is the implied group of a paired peer: its page is the peer's page.
+    in property <bool> group-implied;
+    in property <PeerRow> group-peer;
+    /// Titles of the groups the peer could be invited to, and the one picked.
+    in property <[string]> invitable;
+    in-out property <int> invite-choice: 0;
     /// "files" | "texts" | "pad" | "apps" | "info"
     in-out property <string> group-tab: "files";
     in property <[MemberRow]> members;
@@ -147,6 +169,13 @@ export global Logic {
     callback open-group(string);
     callback close-group();
     callback add-to-group(string, string);
+    callback pair-peer(string);
+    callback unpair-peer(string);
+    /// Invite the open peer to the group at this index of `invitable`.
+    callback invite-peer-to(int);
+    callback mark-all-seen();
+    /// The page changed (so the Rust side knows when a group is being looked at).
+    callback page-changed(string);
     callback accept-invite(string, string);
     callback reject-invite(string, string);
     callback save-edit(string, string, string);
@@ -239,6 +268,7 @@ export global Icons {
     out property <image> logo: @image-url("icons/logo.svg");
     out property <image> peers: @image-url("icons/peers.svg");
     out property <image> groups: @image-url("icons/groups.svg");
+    out property <image> inbox: @image-url("icons/inbox.svg");
     out property <image> add-peer: @image-url("icons/add-peer.svg");
     out property <image> settings: @image-url("icons/settings.svg");
     out property <image> arrow-up: @image-url("icons/arrow-up.svg");

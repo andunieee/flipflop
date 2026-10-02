@@ -1,6 +1,6 @@
 import {
     State, Logic, Theme, Icons, Icon, IconTile, Card, Badge, Avatar, Overline, HintText, PageTitle,
-    PrimaryButton, SecondaryButton, GhostButton, IconButton, Field, ScrollView, PeerRow, GroupRow, InviteRow,
+    PrimaryButton, SecondaryButton, GhostButton, IconButton, Field, ScrollView, PeerRow, GroupRow, InviteRow, HomeRow,
 } from "components.slint";
 
 component InviteCard inherits Card {
@@ -32,6 +32,88 @@ component InviteCard inherits Card {
             SecondaryButton {
                 label: "Decline";
                 clicked => { Logic.reject-invite(root.invite.inviter-id, root.invite.group-id); }
+            }
+        }
+    }
+}
+
+component HomeCard inherits Card {
+    in property <HomeRow> item;
+    background: ta.pressed ? Theme.chip-bg : ta.has-hover ? Theme.inset-bg : Theme.card-bg;
+    animate background { duration: 90ms; }
+    ta := TouchArea {
+        clicked => { Logic.open-group(root.item.group-id); }
+        mouse-cursor: pointer;
+    }
+    HorizontalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                icon: root.item.paired ? Icons.device : Icons.groups;
+                size: 40px;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.item.title;
+                font-size: Theme.font-lg;
+                font-weight: 650;
+                color: Theme.text-strong;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.item.lines;
+                font-size: Theme.font-sm;
+                color: Theme.text;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                source: Icons.chevron-right;
+                tint: Theme.text-faint;
+            }
+        }
+    }
+}
+
+export component HomePage inherits VerticalLayout {
+    padding: Theme.page-padding;
+    padding-bottom: Theme.space-3;
+    spacing: Theme.space-3;
+
+    HorizontalLayout {
+        spacing: Theme.space-3;
+        PageTitle {
+            horizontal-stretch: 1;
+            title: "Home";
+            subtitle: "What happened in your groups since you last looked.";
+        }
+        VerticalLayout {
+            alignment: start;
+            if State.home.length > 0: SecondaryButton {
+                label: "Mark all as seen";
+                clicked => { Logic.mark-all-seen(); }
+            }
+        }
+    }
+
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            spacing: Theme.space-3;
+            for invite in State.invites: InviteCard { invite: invite; }
+            for item in State.home: HomeCard { item: item; }
+            if State.home.length == 0 && State.invites.length == 0: HintText {
+                label: "All caught up. New files, texts and members of your groups show up here.";
+                horizontal-alignment: center;
             }
         }
     }
@@ -130,6 +212,12 @@ export component GroupsPage inherits VerticalLayout {
 
 component PeerCard inherits Card {
     in property <PeerRow> peer;
+    background: root.peer.group-id == "" ? Theme.card-bg : ta.pressed ? Theme.chip-bg : ta.has-hover ? Theme.inset-bg : Theme.card-bg;
+    ta := TouchArea {
+        enabled: root.peer.group-id != "";
+        clicked => { Logic.open-group(root.peer.group-id); }
+        mouse-cursor: root.peer.group-id != "" ? pointer : default;
+    }
     HorizontalLayout {
         padding: Theme.card-padding;
         spacing: Theme.space-3;
@@ -162,6 +250,9 @@ component PeerCard inherits Card {
             HorizontalLayout {
                 spacing: 4px;
                 alignment: start;
+                if root.peer.group-id != "": Badge { label: "paired"; tone: "ok"; }
+                if root.peer.group-id == "" && root.peer.paired-us && !root.peer.paired: Badge { label: "wants to pair"; tone: "warn"; }
+                if root.peer.group-id == "" && root.peer.paired && !root.peer.paired-us: Badge { label: "waiting for them"; tone: "muted"; }
                 if root.peer.connected: Badge { label: "connected"; tone: "ok"; }
                 if root.peer.saved && !root.peer.connected: Badge { label: "offline"; tone: "muted"; }
                 if root.peer.lan: Badge { label: "LAN"; tone: "active"; }
@@ -171,6 +262,15 @@ component PeerCard inherits Card {
         VerticalLayout {
             alignment: center;
             spacing: Theme.space-2;
+            if !root.peer.paired: PrimaryButton {
+                label: "Pair";
+                icon: Icons.add-peer;
+                clicked => { Logic.pair-peer(root.peer.id); }
+            }
+            if root.peer.paired && root.peer.group-id == "": GhostButton {
+                label: "Unpair";
+                clicked => { Logic.unpair-peer(root.peer.id); }
+            }
             if !root.peer.connected: SecondaryButton {
                 label: "Connect";
                 clicked => { Logic.connect(root.peer.id); }
@@ -196,7 +296,7 @@ export component PeersPage inherits VerticalLayout {
 
     PageTitle {
         title: "Peers";
-        subtitle: "Devices nearby and the ones you saved. Saved peers reconnect on their own.";
+        subtitle: "Devices nearby and the ones you saved. Pair with a peer, and when it pairs back you get a page of your own with it.";
     }
 
     ScrollView {

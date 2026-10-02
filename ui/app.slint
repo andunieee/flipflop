@@ -4,7 +4,7 @@ import {
     PrimaryButton, SecondaryButton, DangerButton, GhostButton, Field, Card, ScrollView, AppRow, GroupRow,
 } from "components.slint";
 import { GroupPage } from "group.slint";
-import { GroupsPage, PeersPage, AddPage, SettingsPage } from "pages.slint";
+import { HomePage, GroupsPage, PeersPage, AddPage, SettingsPage } from "pages.slint";
 
 export {
     State,
@@ -208,6 +208,8 @@ export component AppWindow inherits Window {
     // Some devices report their navigation bar here, so only a tall inset counts as a keyboard.
     property <bool> keyboard-up: root.virtual-keyboard-size.height > 120px;
     property <bool> in-group: State.page == "group";
+    property <string> page: State.page;
+    changed page => { Logic.page-changed(self.page); }
 
     // Toast: the latest status line, for a few seconds.
     property <bool> toast-visible: false;
@@ -244,8 +246,8 @@ export component AppWindow inherits Window {
                 Logic.cancel-scan();
             } else if State.page == "group" {
                 Logic.close-group();
-            } else if State.page != "groups" {
-                State.page = "groups";
+            } else if State.page != "home" {
+                State.page = "home";
             } else {
                 return reject;
             }
@@ -318,6 +320,14 @@ export component AppWindow inherits Window {
 
                         Rectangle { height: Theme.space-3; }
 
+                        SideButton {
+                            label: "Home";
+                            icon: Icons.inbox;
+                            active: State.page == "home";
+                            badge: State.home.length + State.invites.length;
+                            clicked => { State.page = "home"; }
+                        }
+
                         HorizontalLayout {
                             padding-left: Theme.space-3;
                             Overline {
@@ -343,7 +353,7 @@ export component AppWindow inherits Window {
                                     icon: Icons.groups;
                                     active: false;
                                     badge: 1;
-                                    clicked => { State.page = "groups"; }
+                                    clicked => { State.page = "home"; }
                                 }
                                 for group in State.groups: GroupButton { group: group; }
                                 if State.groups.length == 0 && State.invites.length == 0: Text {
@@ -357,13 +367,6 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        SideButton {
-                            label: "All groups";
-                            icon: Icons.groups;
-                            active: State.page == "groups";
-                            badge: State.invites.length;
-                            clicked => { State.page = "groups"; }
-                        }
                         SideButton {
                             label: "Peers";
                             icon: Icons.peers;
@@ -413,6 +416,7 @@ export component AppWindow inherits Window {
                             clicked => { Logic.cancel-scan(); }
                         }
                     }
+                    if !(State.scanning && State.live-camera) && State.page == "home": HomePage { }
                     if !(State.scanning && State.live-camera) && State.page == "groups": GroupsPage { }
                     if !(State.scanning && State.live-camera) && State.page == "group": GroupPage { }
                     if !(State.scanning && State.live-camera) && State.page == "peers": PeersPage { }
@@ -434,9 +438,18 @@ export component AppWindow inherits Window {
                     padding-left: root.safe-area-insets.left;
                     padding-right: root.safe-area-insets.right;
                     TabButton {
+                        label: "Home";
+                        icon: Icons.inbox;
+                        badge: State.home.length + State.invites.length;
+                        active: State.page == "home";
+                        clicked => {
+                            if State.page == "group" { Logic.close-group(); }
+                            State.page = "home";
+                        }
+                    }
+                    TabButton {
                         label: "Groups";
                         icon: Icons.groups;
-                        badge: State.invites.length;
                         active: State.page == "groups" || State.page == "group";
                         clicked => {
                             if State.page == "group" { Logic.close-group(); }

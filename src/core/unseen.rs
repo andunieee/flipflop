@@ -103,6 +103,17 @@ impl Core {
             .collect()
     }
 
+    /// Send the news to the UI if they differ from what it last got. Caller holds the publish lock.
+    pub(super) fn emit_home(&self) {
+        let news = self.unseen();
+        let mut shown = self.0.sharing.home.lock().unwrap();
+        if *shown != news {
+            *shown = news.clone();
+            drop(shown);
+            self.emit(super::Event::Home(news));
+        }
+    }
+
     /// The user looked at this group: everything in it is now seen.
     pub fn mark_seen(&self, gid: &str) {
         let Some(view) = self.group_view(gid) else { return };

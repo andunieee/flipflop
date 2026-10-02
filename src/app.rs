@@ -12,7 +12,7 @@ use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffe
 use tokio::runtime::Handle;
 
 use crate::{
-    core::{Core, Event, GroupInfo, GroupView, GroupsView, MemberState, Peer},
+    core::{Core, Event, GroupInfo, GroupView, GroupsView, MemberState, Peer, Unseen},
     format, groupdoc,
 };
 
@@ -25,6 +25,12 @@ struct Shared {
     groups: GroupsView,
     views: HashMap<String, GroupView>,
     open_group: Option<String>,
+    /// What is new in each group (the Home page).
+    home: Vec<Unseen>,
+    /// The page the UI shows. A group counts as looked at while its page is the one.
+    page: String,
+    /// The group whose page is showing.
+    viewed: Option<String>,
 }
 
 type Mirror = Arc<Mutex<Shared>>;
@@ -58,8 +64,8 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
             let want_ble = tokio::task::spawn_blocking(crate::platform::ensure_ble_permission)
                 .await
                 .unwrap_or(false);
-            let events = (weak.clone(), mirror);
-            let core = match Core::start(&data_dir, want_ble, move |event| on_event(&events.0, &events.1, event)).await {
+            let events = (weak.clone(), mirror, slot.clone());
+            let core = match Core::start(&data_dir, want_ble, move |event| on_event(&events.0, &events.1, &events.2, event)).await {
                 Ok(core) => core,
                 Err(err) => return set_status(&weak, format!("failed to start: {err:#}")),
             };
@@ -154,18 +160,18 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         move || {
             let Some(core) = slot.get() else { return };
             let id = core.create_group();
-            open_group(&weak, &mirror, Some(id));
+            open_group(&weak, &mirror, &slot, Some(id));
         }
     });
 
     logic.on_open_group({
-        let (weak, mirror) = (ui.as_weak(), mirror.clone());
-        move |id| open_group(&weak, &mirror, Some(id.to_string()))
+        let (weak, mirror, slot) = (ui.as_weak(), mirror.clone(), slot.clone());
+        move |id| open_group(&weak, &mirror, &slot, Some(id.to_string()))
     });
 
     logic.on_close_group({
-        let (weak, mirror) = (ui.as_weak(), mirror.clone());
-        move || open_group(&weak, &mirror, None)
+        let (weak, mirror, slot) = (ui.as_weak(), mirror.clone(), slot.clone());
+        move || open_group(&weak, &mirror, &slot, None)
     });
 
     logic.on_add_to_group({
@@ -174,6 +180,61 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
             if let (Some(core), Ok(peer)) = (slot.get(), peer.parse::<EndpointId>()) {
                 core.add_to_group(&group, peer);
             }
+        }
+    });
+
+    logic.on_pair_peer({
+        let slot = slot.clone();
+        move |id| {
+            if let (Some(core), Ok(id)) = (slot.get(), id.parse::<EndpointId>()) {
+                core.pair(id);
+            }
+        }
+    });
+
+    logic.on_unpair_peer({
+        let slot = slot.clone();
+        move |id| {
+            if let (Some(core), Ok(id)) = (slot.get(), id.parse::<EndpointId>()) {
+                core.unpair(id);
+            }
+        }
+    });
+
+    logic.on_invite_peer_to({
+        let (slot, weak, mirror) = (slot.clone(), ui.as_weak(), mirror.clone());
+        move |index| {
+            let Some(core) = slot.get() else { return };
+            let picked = {
+                let shared = mirror.lock().unwrap();
+                let peer = shared.open_group.as_ref().and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id)).and_then(|g| g.with);
+                let group = usize::try_from(index).ok().and_then(|i| invitable_groups(&shared).get(i).map(|g| (g.id.clone(), group_title(g))));
+                peer.zip(group)
+            };
+            let Some((peer, (group, title))) = picked else { return };
+            core.add_to_group(&group, peer);
+            set_status(&weak, format!("Invited to {title}"));
+        }
+    });
+
+    logic.on_mark_all_seen({
+        let slot = slot.clone();
+        move || {
+            if let Some(core) = slot.get() {
+                core.mark_all_seen();
+            }
+        }
+    });
+
+    logic.on_page_changed({
+        let (slot, mirror) = (slot.clone(), mirror.clone());
+        move |page| {
+            let open = {
+                let mut shared = mirror.lock().unwrap();
+                shared.page = page.to_string();
+                shared.open_group.clone().filter(|_| page == "group")
+            };
+            looking_at(&mirror, &slot, open);
         }
     });
 
@@ -223,7 +284,7 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
                     }
                 }
                 "group" => {
-                    open_group(&weak, &mirror, None);
+                    open_group(&weak, &mirror, &slot, None);
                     core.delete_group(&id);
                 }
                 _ => {}
@@ -480,24 +541,48 @@ fn set_status(weak: &slint::Weak<AppWindow>, text: impl Into<String>) {
 }
 
 /// Open a group's page, or go back to the list (`None`).
-fn open_group(weak: &slint::Weak<AppWindow>, mirror: &Mirror, id: Option<String>) {
+fn open_group(weak: &slint::Weak<AppWindow>, mirror: &Mirror, slot: &Slot, id: Option<String>) {
     let Some(ui) = weak.upgrade() else { return };
-    let mut shared = mirror.lock().unwrap();
-    shared.open_group = id.clone();
     let state = ui.global::<State>();
-    state.set_open_group(id.clone().unwrap_or_default().into());
-    match id {
-        Some(_) => {
-            state.set_page("group".into());
-            state.set_group_tab("files".into());
-            show_group(&ui, &shared, true);
+    let page = {
+        let mut shared = mirror.lock().unwrap();
+        shared.open_group = id.clone();
+        state.set_open_group(id.clone().unwrap_or_default().into());
+        match &id {
+            Some(id) => {
+                let implied = shared.groups.groups.iter().any(|g| g.id == *id && g.with.is_some());
+                // A peer's page starts with the peer; a group's with its files.
+                state.set_group_tab(if implied { "info" } else { "files" }.into());
+                state.set_invite_choice(0);
+                show_group(&ui, &shared, true);
+                "group"
+            }
+            None => list_page(&state),
         }
-        None => state.set_page("groups".into()),
+    };
+    state.set_page(page.into());
+    // Going from one group straight to another does not change the page.
+    looking_at(mirror, slot, id);
+}
+
+/// The group the user is looking at changed (`None`: none): the one they left is caught up, so is the
+/// new one.
+fn looking_at(mirror: &Mirror, slot: &Slot, now: Option<String>) {
+    let left = std::mem::replace(&mut mirror.lock().unwrap().viewed, now.clone());
+    if let Some(core) = slot.get() {
+        for gid in left.into_iter().chain(now) {
+            core.mark_seen(&gid);
+        }
     }
 }
 
+/// Where leaving a group goes: the groups list on phones, Home on the desktop (which has no list page).
+fn list_page(state: &State) -> &'static str {
+    if state.get_touch() { "groups" } else { "home" }
+}
+
 /// Called from tokio threads.
-fn on_event(weak: &slint::Weak<AppWindow>, mirror: &Mirror, event: Event) {
+fn on_event(weak: &slint::Weak<AppWindow>, mirror: &Mirror, slot: &Slot, event: Event) {
     match event {
         Event::Name(name) => {
             let _ = weak.upgrade_in_event_loop(move |ui| ui.global::<State>().set_my_name(name.into()));
@@ -517,25 +602,11 @@ fn on_event(weak: &slint::Weak<AppWindow>, mirror: &Mirror, event: Event) {
         Event::Peers(peers) => {
             let mirror = mirror.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                let rows: Vec<PeerRow> = peers
-                    .iter()
-                    .map(|p| PeerRow {
-                        id: p.id.to_string().into(),
-                        title: p.alias.clone().unwrap_or_else(|| p.name.clone()).into(),
-                        subtitle: if p.alias.is_some() { p.name.clone().into() } else { SharedString::default() },
-                        alias: p.alias.clone().unwrap_or_default().into(),
-                        short: p.id.fmt_short().to_string().into(),
-                        initials: format::initials(p.alias.as_ref().unwrap_or(&p.name)).into(),
-                        lan: p.lan,
-                        ble: p.ble,
-                        connected: p.connected,
-                        saved: p.saved,
-                    })
-                    .collect();
-                ui.global::<State>().set_peers(model(rows));
+                ui.global::<State>().set_peers(model(peers.iter().map(peer_row).collect()));
                 let mut shared = mirror.lock().unwrap();
                 shared.peers = peers;
                 show_groups(&ui, &shared);
+                show_group(&ui, &shared, false);
             });
         }
         Event::Groups(view) => {
@@ -547,33 +618,69 @@ fn on_event(weak: &slint::Weak<AppWindow>, mirror: &Mirror, event: Event) {
                 shared.views.retain(|id, _| ids.contains(id));
                 if shared.open_group.as_ref().is_some_and(|id| !ids.contains(id)) {
                     shared.open_group = None;
-                    ui.global::<State>().set_open_group(SharedString::default());
-                    ui.global::<State>().set_page("groups".into());
+                    let state = ui.global::<State>();
+                    state.set_open_group(SharedString::default());
+                    state.set_page(list_page(&state).into());
                 }
                 show_groups(&ui, &shared);
                 show_group(&ui, &shared, false);
             });
         }
         Event::Group(view) => {
-            let mirror = mirror.clone();
+            let (mirror, slot) = (mirror.clone(), slot.clone());
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 let mut shared = mirror.lock().unwrap();
                 let opened = shared.open_group.as_deref() == Some(view.id.as_str());
-                let local = view.scratch_local;
+                // Our own scratchpad edits are not news; they are caught up when the page is left.
+                let looking = opened && shared.viewed.as_deref() == Some(view.id.as_str()) && !view.scratch_local;
+                let gid = view.id.clone();
                 shared.views.insert(view.id.clone(), view);
                 show_groups(&ui, &shared);
                 if opened {
                     show_group(&ui, &shared, false);
-                    let _ = local;
                 }
+                drop(shared);
+                if let (true, Some(core)) = (looking, slot.get()) {
+                    core.mark_seen(&gid);
+                }
+            });
+        }
+        Event::Home(news) => {
+            let mirror = mirror.clone();
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                let mut shared = mirror.lock().unwrap();
+                shared.home = news;
+                show_groups(&ui, &shared);
             });
         }
         Event::Message { .. } => {}
     }
 }
 
+fn peer_row(p: &Peer) -> PeerRow {
+    PeerRow {
+        id: p.id.to_string().into(),
+        title: p.alias.clone().unwrap_or_else(|| p.name.clone()).into(),
+        subtitle: if p.alias.is_some() { p.name.clone().into() } else { SharedString::default() },
+        alias: p.alias.clone().unwrap_or_default().into(),
+        short: p.id.fmt_short().to_string().into(),
+        initials: format::initials(p.alias.as_ref().unwrap_or(&p.name)).into(),
+        lan: p.lan,
+        ble: p.ble,
+        connected: p.connected,
+        saved: p.saved,
+        paired: p.paired,
+        paired_us: p.paired_us,
+        group_id: p.pair_group.clone().unwrap_or_default().into(),
+    }
+}
+
+/// An implied group is named after the other device.
 fn group_title(g: &GroupInfo) -> String {
-    g.alias.clone().unwrap_or_else(|| g.haiku.clone())
+    match g.with.and_then(|w| g.members.iter().find(|m| m.id == w)) {
+        Some(m) => m.name.clone(),
+        None => g.alias.clone().unwrap_or_else(|| g.haiku.clone()),
+    }
 }
 
 /// The groups list and the invites.
@@ -582,6 +689,7 @@ fn show_groups(ui: &AppWindow, shared: &Shared) {
         .groups
         .groups
         .iter()
+        .filter(|g| g.with.is_none())
         .map(|g| {
             let view = shared.views.get(&g.id);
             let joined = view.map_or(1, |v| v.members.len().max(1));
@@ -620,6 +728,35 @@ fn show_groups(ui: &AppWindow, shared: &Shared) {
     let state = ui.global::<State>();
     state.set_groups(model(rows));
     state.set_invites(model(invites));
+    state.set_home(model(
+        shared
+            .home
+            .iter()
+            .map(|n| HomeRow {
+                group_id: n.group.clone().into(),
+                title: n.title.clone().into(),
+                lines: n.lines().join("\n").into(),
+                paired: n.with.is_some(),
+            })
+            .collect(),
+    ));
+}
+
+/// The groups the open peer page offers to invite the peer to, in the order of the dropdown: the
+/// listed groups the peer is not part of (a declined invite can be sent again).
+fn invitable_groups(shared: &Shared) -> Vec<&GroupInfo> {
+    let Some(peer) = shared.open_group.as_ref().and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id)).and_then(|g| g.with) else {
+        return Vec::new();
+    };
+    let key = peer.to_string();
+    shared
+        .groups
+        .groups
+        .iter()
+        .filter(|g| g.with.is_none())
+        .filter(|g| !g.members.iter().any(|m| m.id == peer && m.state != MemberState::Declined))
+        .filter(|g| !shared.views.get(&g.id).is_some_and(|v| v.members.iter().any(|m| m.id == key)))
+        .collect()
 }
 
 /// Fill the open group's page. `fresh`: the group was just opened, so the scratchpad is loaded
@@ -632,6 +769,11 @@ fn show_group(ui: &AppWindow, shared: &Shared, fresh: bool) {
     state.set_group_title(group_title(info).into());
     state.set_group_haiku(info.haiku.clone().into());
     state.set_group_alias(info.alias.clone().unwrap_or_default().into());
+    state.set_group_implied(info.with.is_some());
+    let peer = info.with.and_then(|w| shared.peers.iter().find(|p| p.id == w));
+    if let Some(p) = peer {
+        state.set_group_peer(peer_row(p));
+    }
     state.set_auto_download(info.auto_download);
     state.set_auto_stop(info.auto_stop);
     let view = shared.views.get(&info.id);
@@ -674,6 +816,7 @@ fn show_group(ui: &AppWindow, shared: &Shared, fresh: bool) {
         });
     }
     // Members the document lists (e.g. everyone but the inviter, after accepting) are not candidates.
+    state.set_invitable(model(invitable_groups(shared).iter().map(|g| SharedString::from(group_title(g))).collect()));
     state.set_candidates(model(
         info.candidates
             .iter()

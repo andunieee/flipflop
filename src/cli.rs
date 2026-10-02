@@ -54,6 +54,16 @@ pub enum Command {
     Rename { peer: String, alias: String },
     /// Remove a contact.
     Forget { peer: String },
+    /// Pair with a peer. Once both of you have, you share a private implied group (see `peers`).
+    Pair { peer: String },
+    /// Stop pairing with a peer; the implied group goes away.
+    Unpair { peer: String },
+    /// What is new in each group since you last looked.
+    Home {
+        /// Mark everything as seen afterwards.
+        #[arg(long)]
+        seen: bool,
+    },
     /// Groups: create, invite, accept, settings.
     #[command(subcommand)]
     Group(GroupCmd),
@@ -216,6 +226,38 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
             let id = resolve_peer(core, peer, wait).await?;
             core.forget_contact(id);
         }
+        Command::Pair { peer } => {
+            let id = resolve_peer(core, peer, wait).await?;
+            core.pair(id);
+            sleep(Duration::from_secs(2)).await;
+            say!(cx, "{}", pair_status(core, id));
+        }
+        Command::Unpair { peer } => {
+            let id = resolve_peer(core, peer, wait).await?;
+            core.unpair(id);
+            sleep(Duration::from_secs(1)).await;
+            say!(cx, "{}", pair_status(core, id));
+        }
+        Command::Home { seen } => {
+            sleep(wait.min(Duration::from_secs(2))).await;
+            let invites = core.groups().invites;
+            let news = core.unseen();
+            for i in &invites {
+                say!(cx, "invite  {}  from {}  (flipflop-cli group accept {})", i.haiku, i.inviter_name, &i.group[..8]);
+            }
+            for n in &news {
+                say!(cx, "{}  {}{}", &n.group[..8], n.title, if n.with.is_some() { "  (paired)" } else { "" });
+                for line in n.lines() {
+                    say!(cx, "    {line}");
+                }
+            }
+            if invites.is_empty() && news.is_empty() {
+                say!(cx, "all caught up");
+            }
+            if *seen {
+                core.mark_all_seen();
+            }
+        }
         Command::Group(cmd) => group(core, cx, cmd, wait).await?,
         Command::File(cmd) => file(core, cx, cmd, wait).await?,
         Command::Text(cmd) => text(core, cx, cmd, wait).await?,
@@ -247,13 +289,13 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             // Invites that were waiting for us arrive when the inviter connects.
             sleep(wait.min(Duration::from_secs(4))).await;
             let view = core.groups();
-            for g in &view.groups {
+            for g in view.groups.iter().filter(|g| g.with.is_none()) {
                 say!(cx, "{}  {}  {}", &g.id[..8], title(g), summary(g));
             }
             for i in &view.invites {
                 say!(cx, "invite  {}  from {}  (flipflop-cli group accept {})", i.haiku, i.inviter_name, &i.group[..8]);
             }
-            if view.groups.is_empty() && view.invites.is_empty() {
+            if view.groups.iter().all(|g| g.with.is_some()) && view.invites.is_empty() {
                 say!(cx, "no groups");
             }
         }
@@ -266,6 +308,7 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             let info = find_group(core, group)?;
             settle(core, &info.id, wait).await;
             let v = core.group_view(&info.id).context("group vanished")?;
+            core.mark_seen(&info.id);
             say!(cx, "{}", title(&info));
             say!(cx, "id            {}", info.id);
             say!(cx, "haiku         {}", info.haiku);
@@ -342,6 +385,7 @@ async fn file(core: &Core, cx: &Ctx, cmd: &FileCmd, wait: Duration) -> Result<()
             let gid = find_group(core, group)?.id;
             settle(core, &gid, wait).await;
             let v = core.group_view(&gid).context("group vanished")?;
+            core.mark_seen(&gid);
             if v.files.is_empty() {
                 say!(cx, "no files");
             }
@@ -400,6 +444,7 @@ async fn text(core: &Core, cx: &Ctx, cmd: &TextCmd, wait: Duration) -> Result<()
             let gid = find_group(core, group)?.id;
             settle(core, &gid, wait).await;
             let v = core.group_view(&gid).context("group vanished")?;
+            core.mark_seen(&gid);
             if v.texts.is_empty() {
                 say!(cx, "no texts");
             }
@@ -436,6 +481,7 @@ async fn pad(core: &Core, cx: &Ctx, cmd: &PadCmd, wait: Duration) -> Result<()> 
         PadCmd::Show { group } => {
             let gid = find_group(core, group)?.id;
             settle(core, &gid, wait).await;
+            core.mark_seen(&gid);
             say!(cx, "{}", core.scratch(&gid).unwrap_or_default());
         }
         PadCmd::Set { group, text } => {
@@ -482,7 +528,10 @@ async fn settle(core: &Core, gid: &str, limit: Duration) {
 }
 
 fn title(g: &GroupInfo) -> String {
-    g.alias.clone().unwrap_or_else(|| g.haiku.clone())
+    match g.with.and_then(|w| g.members.iter().find(|m| m.id == w)) {
+        Some(m) => format!("{} (paired)", m.name),
+        None => g.alias.clone().unwrap_or_else(|| g.haiku.clone()),
+    }
 }
 
 fn summary(g: &GroupInfo) -> String {
@@ -504,11 +553,28 @@ fn peer_line(p: &Peer) -> String {
     if p.ble {
         tags.push("ble");
     }
+    if p.pair_group.is_some() {
+        tags.push("paired");
+    } else if p.paired {
+        tags.push("pairing: waiting for them");
+    } else if p.paired_us {
+        tags.push("wants to pair");
+    }
     let name = match &p.alias {
         Some(a) => format!("{a} ({})", p.name),
         None => p.name.clone(),
     };
-    format!("{}  {}  [{}]", p.id.fmt_short(), name, tags.join(" "))
+    let group = p.pair_group.as_ref().map(|g| format!("  group {}", &g[..8])).unwrap_or_default();
+    format!("{}  {}  [{}]{group}", p.id.fmt_short(), name, tags.join(" "))
+}
+
+fn pair_status(core: &Core, id: EndpointId) -> String {
+    match core.peers().iter().find(|p| p.id == id) {
+        Some(p) if p.pair_group.is_some() => "paired: you share an implied group".into(),
+        Some(p) if p.paired => "paired on your side; waiting for them to pair back".into(),
+        Some(p) if p.paired_us => "not paired (they have paired with you)".into(),
+        _ => "not paired".into(),
+    }
 }
 
 fn file_line(f: &crate::core::FileView) -> String {
@@ -537,7 +603,10 @@ fn find_group(core: &Core, query: &str) -> Result<GroupInfo> {
     } else {
         groups
             .iter()
-            .filter(|g| g.id.starts_with(&q) || g.haiku.to_lowercase().contains(&q) || g.alias.as_deref().is_some_and(|a| a.to_lowercase().contains(&q)))
+            .filter(|g| {
+                let with_peer = g.with.is_some_and(|w| g.members.iter().any(|m| m.id == w && (m.id.to_string().starts_with(&q) || m.name.to_lowercase().contains(&q))));
+                g.id.starts_with(&q) || with_peer || (g.with.is_none() && (g.haiku.to_lowercase().contains(&q) || g.alias.as_deref().is_some_and(|a| a.to_lowercase().contains(&q))))
+            })
             .collect()
     };
     match hits.as_slice() {

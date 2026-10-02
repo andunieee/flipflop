@@ -1,7 +1,8 @@
+import { ComboBox } from "std-widgets.slint";
 import {
     State, Logic, Theme, Icons, Icon, IconTile, Card, Badge, Avatar, Dot, Overline, HintText, ProgressBar,
     PrimaryButton, SecondaryButton, GhostButton, DangerButton, IconButton, ToggleRow, TabStrip, Area,
-    PadEditor, ScrollView, FileRow, TextRow, MemberRow, CandidateRow,
+    PadEditor, ScrollView, FileRow, TextRow, MemberRow, CandidateRow, PeerRow,
 } from "components.slint";
 
 component FileCard inherits Card {
@@ -380,41 +381,134 @@ component InfoTab inherits ScrollView {
         alignment: start;
         spacing: Theme.space-3;
 
-        Overline { label: "MEMBERS"; }
-        Card {
+        if State.group-implied: Overline { label: "PEER"; }
+        if State.group-implied: Card {
             VerticalLayout {
                 padding: Theme.card-padding;
-                for m in State.members: MemberLine { m: m; }
-                if State.members.length == 0: HintText { label: "Nobody yet."; }
+                spacing: Theme.space-3;
+                HorizontalLayout {
+                    spacing: Theme.space-3;
+                    VerticalLayout {
+                        alignment: center;
+                        Avatar {
+                            initials: State.group-peer.initials;
+                            size: 40px;
+                            show-presence: true;
+                            online: State.group-peer.connected;
+                        }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 3px;
+                        Text {
+                            text: State.group-peer.title;
+                            font-size: Theme.font-lg;
+                            font-weight: 650;
+                            color: Theme.text-strong;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: (State.group-peer.subtitle != "" ? State.group-peer.subtitle + " · " : "") + State.group-peer.short;
+                            font-size: Theme.font-xs;
+                            color: Theme.text-faint;
+                            overflow: elide;
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: start;
+                            Badge { label: "paired"; tone: "ok"; }
+                            if State.group-peer.connected: Badge { label: "connected"; tone: "ok"; }
+                            if !State.group-peer.connected: Badge { label: "offline"; tone: "muted"; }
+                            if State.group-peer.lan: Badge { label: "LAN"; tone: "active"; }
+                            if State.group-peer.ble: Badge { label: "Bluetooth"; tone: "warn"; }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    alignment: start;
+                    SecondaryButton {
+                        label: "Rename";
+                        icon: Icons.edit;
+                        clicked => {
+                            State.edit-kind = "peer";
+                            State.edit-id = State.group-peer.id;
+                            State.edit-original = State.group-peer.subtitle != "" ? State.group-peer.subtitle : State.group-peer.title;
+                            State.edit-text = State.group-peer.alias;
+                        }
+                    }
+                    GhostButton {
+                        label: "Unpair";
+                        clicked => { Logic.unpair-peer(State.group-peer.id); }
+                    }
+                }
             }
         }
 
-        if State.candidates.length > 0: Overline { label: "INVITE FROM YOUR PEERS"; }
-        if State.candidates.length > 0: Card {
+        if State.group-implied: Overline { label: "INVITE TO A GROUP"; }
+        if State.group-implied: Card {
             VerticalLayout {
                 padding: Theme.card-padding;
-                for c in State.candidates: Rectangle {
-                    height: Theme.control-height + 12px;
-                    HorizontalLayout {
-                        spacing: Theme.space-3;
-                        Text {
-                            text: c.name;
-                            font-size: Theme.font-md;
-                            color: Theme.text-strong;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            horizontal-stretch: 1;
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            SecondaryButton {
-                                label: "Invite";
-                                clicked => { Logic.add-to-group(State.open-group, c.id); }
+                spacing: Theme.space-2;
+                if State.invitable.length > 0: HintText { label: "They choose whether to join."; }
+                if State.invitable.length > 0: ComboBox {
+                    model: State.invitable;
+                    current-index <=> State.invite-choice;
+                }
+                if State.invitable.length > 0: HorizontalLayout {
+                    alignment: start;
+                    PrimaryButton {
+                        label: "Invite";
+                        icon: Icons.add-peer;
+                        clicked => { Logic.invite-peer-to(State.invite-choice); }
+                    }
+                }
+                if State.invitable.length == 0: HintText {
+                    label: "No group to invite them to: create a group first, or they are in all of yours already.";
+                }
+            }
+        }
+
+        if !State.group-implied: VerticalLayout {
+            spacing: Theme.space-3;
+            Overline { label: "MEMBERS"; }
+            Card {
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    for m in State.members: MemberLine { m: m; }
+                    if State.members.length == 0: HintText { label: "Nobody yet."; }
+                }
+            }
+
+            if State.candidates.length > 0: Overline { label: "INVITE FROM YOUR PEERS"; }
+            if State.candidates.length > 0: Card {
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    for c in State.candidates: Rectangle {
+                        height: Theme.control-height + 12px;
+                        HorizontalLayout {
+                            spacing: Theme.space-3;
+                            Text {
+                                text: c.name;
+                                font-size: Theme.font-md;
+                                color: Theme.text-strong;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                SecondaryButton {
+                                    label: "Invite";
+                                    clicked => { Logic.add-to-group(State.open-group, c.id); }
+                                }
                             }
                         }
                     }
                 }
             }
+
         }
 
         Overline { label: "ON THIS DEVICE"; }
@@ -441,7 +535,7 @@ component InfoTab inherits ScrollView {
             }
         }
 
-        HorizontalLayout {
+        if !State.group-implied: HorizontalLayout {
             spacing: Theme.space-2;
             SecondaryButton {
                 label: "Rename";
