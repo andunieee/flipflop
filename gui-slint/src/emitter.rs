@@ -76,6 +76,7 @@ pub fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
 
     match name {
         "transfer-started" | "receive-started" => {
+            tracing::info!(event = name, "transfer: data phase signalled");
             if name == "transfer-started" {
                 state.set_send_status("Transferring…".into());
             } else {
@@ -83,11 +84,13 @@ pub fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
             }
         }
         "share-peer-connected" => {
+            tracing::info!("send: receiver connected to share endpoint");
             state.set_send_peers(state.get_send_peers() + 1);
             state.set_send_status("Receiver connected — transferring…".into());
         }
         "transfer-progress" => {
             if let Some((bytes, total, _speed)) = payload.and_then(parse_progress) {
+                tracing::debug!(bytes, total, "transfer-progress");
                 if total > 0 {
                     let frac = (bytes as f32 / total as f32).min(1.0);
                     state.set_send_progress(frac);
@@ -97,6 +100,7 @@ pub fn handle_event(weak: &Weak<AppWindow>, name: &str, payload: Option<&str>) {
         }
         "receive-progress" => {
             if let Some((bytes, total, speed)) = payload.and_then(parse_progress) {
+                tracing::debug!(bytes, total, "receive-progress");
                 if total > 0 {
                     let frac = (bytes as f32 / total as f32).min(1.0);
                     state.set_receive_progress(frac);
