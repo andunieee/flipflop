@@ -27,15 +27,28 @@ mod android {
     struct ActivityRef(jni::objects::GlobalRef);
     static ACTIVITY: OnceLock<ActivityRef> = OnceLock::new();
 
-    /// Remember the Activity (`AndroidApp::activity_as_ptr`); `ndk_context` only has the Application.
-    pub fn init(activity: *mut std::ffi::c_void) {
-        let ctx = ndk_context::android_context();
-        let Ok(vm) = (unsafe { JavaVM::from_raw(ctx.vm().cast()) }) else { return };
-        let Ok(env) = vm.attach_current_thread() else { return };
-        let activity = unsafe { JObject::from_raw(activity.cast()) };
-        if let Ok(global) = env.new_global_ref(&activity) {
-            let _ = ACTIVITY.set(ActivityRef(global));
-        }
+    /// Called by the Activity before anything else: hand the JVM and the Activity to `ndk_context`
+    /// (blew and friends read it) and to us, and set up logging.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeInit(env: JNIEnv, _: JClass, activity: JObject) {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // Quiet by default; `adb shell setprop debug.flipflop.log "warn,iroh_ble_transport=debug"` turns up
+            // individual crates (takes effect on the next launch).
+            let filter = system_property("debug.flipflop.log").unwrap_or_else(|| "warn".into());
+            android_logger::init_once(
+                android_logger::Config::default()
+                    .with_max_level(log::LevelFilter::Trace)
+                    .with_filter(android_logger::FilterBuilder::new().parse(&filter).build())
+                    .with_tag("flipflop"),
+            );
+            let (Ok(vm), Ok(app)) = (env.get_java_vm(), env.new_global_ref(&activity)) else { return };
+            let _ = ACTIVITY.set(ActivityRef(app.clone()));
+            // `ndk_context` wants a Context that lives forever: the Activity's global reference is leaked on purpose.
+            let context = app.as_obj().as_raw();
+            std::mem::forget(app);
+            unsafe { ndk_context::initialize_android_context(vm.get_java_vm_pointer().cast(), context.cast()) };
+        });
     }
 
     /// Run `f` with an attached JNIEnv and the Activity object.

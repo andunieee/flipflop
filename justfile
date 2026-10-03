@@ -7,11 +7,11 @@ default:
 
 # --- Desktop ---
 
-# run desktop app
-desktop *cargs:
-    cargo run --bin=flipflop -- {{cargs}}
+# run the desktop app (Compose UI over the Rust core; builds the Rust library first)
+desktop:
+    cd kmp && ./gradlew :desktopApp:run
 
-# build desktop (debug)
+# build the Rust library (debug)
 build:
     cargo build
 
@@ -24,11 +24,11 @@ cli *cargs:
     cargo run --bin flipflop-cli -- {{cargs}}
 
 # --- Android ---
-# wraps ./android/build.sh (cargo-ndk + gradle). Needs NDK 27, Android SDK, gradle.
+# gradle builds the Rust library with cargo-ndk (see kmp/build-native.sh). Needs NDK 27, Android SDK 35.
 
 # build APK: just android [debug|release] [abi...] (default: debug arm64-v8a)
 android profile='debug' *abis:
-    ./android/build.sh {{profile}} {{abis}}
+    cd kmp && ./gradlew :androidApp:assemble{{ if profile == "release" { "Release" } else { "Debug" } }} -Pprofile={{profile}} {{ if abis != "" { "-Pabis=" + replace(abis, " ", ",") } else { "" } }}
 
 # install APK on connected device (build first). `just install android` = debug, default ABIs.
 install *args:
@@ -48,11 +48,12 @@ install *args:
             *) abis=("${args[@]}") ;;
         esac
     fi
-    ./android/build.sh "$profile" "${abis[@]}"
-    adb install -r "android/app/build/outputs/apk/$profile/app-$profile.apk"
+    task=Debug; [ "$profile" = release ] && task=Release
+    (cd kmp && ./gradlew ":androidApp:assemble$task" -Pprofile="$profile" ${abis[@]:+-Pabis="$(IFS=,; echo "${abis[*]}")"})
+    adb install -r "kmp/androidApp/build/outputs/apk/$profile/androidApp-$profile.apk"
 
 # install + launch app on connected device
-run profile='debug' package='dev.flipflop.app' activity='.FlipflopActivity':
+run profile='debug' package='dev.flipflop.app' activity='.MainActivity':
     just install {{profile}}
     adb shell am start -n {{package}}/{{activity}}
 
