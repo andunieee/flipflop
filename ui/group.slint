@@ -1,8 +1,32 @@
 import { ComboBox } from "std-widgets.slint";
 import {
-    State, Logic, Theme, Icons, Icon, IconTile, Card, Badge, Avatar, Dot, Overline, HintText, ProgressBar,
-    PrimaryButton, SecondaryButton, GhostButton, DangerButton, IconButton, ToggleRow, TabStrip, Area,
-    PadEditor, ScrollView, FileRow, TextRow, MemberRow, CandidateRow, PeerRow,
+    State,
+    Logic,
+    Theme,
+    Icons,
+    Icon,
+    IconTile,
+    Card,
+    Badge,
+    Dot,
+    Overline,
+    HintText,
+    ProgressBar,
+    PrimaryButton,
+    SecondaryButton,
+    GhostButton,
+    DangerButton,
+    IconButton,
+    ToggleRow,
+    TabStrip,
+    Area,
+    PadEditor,
+    ScrollView,
+    FileRow,
+    TextRow,
+    MemberRow,
+    CandidateRow,
+    PeerRow,
 } from "components.slint";
 
 component FileCard inherits Card {
@@ -23,6 +47,7 @@ component FileCard inherits Card {
                     ink: root.f.stopped ? Theme.text-faint : Theme.accent-text;
                 }
             }
+
             VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: 2px;
@@ -33,12 +58,14 @@ component FileCard inherits Card {
                     color: root.f.stopped ? Theme.text-muted : Theme.text-strong;
                     wrap: word-wrap;
                 }
+
                 Text {
                     text: root.f.size + " · " + root.f.meta;
                     font-size: Theme.font-sm;
                     color: Theme.text-muted;
                     wrap: word-wrap;
                 }
+
                 if root.f.audience != "": Text {
                     text: root.f.audience;
                     font-size: Theme.font-sm;
@@ -50,7 +77,10 @@ component FileCard inherits Card {
 
         if root.f.downloading: VerticalLayout {
             spacing: 4px;
-            ProgressBar { value: root.f.progress; }
+            ProgressBar {
+                value: root.f.progress;
+            }
+
             Text {
                 text: root.f.progress-label;
                 font-size: Theme.font-xs;
@@ -79,7 +109,7 @@ component FileCard inherits Card {
                 VerticalLayout {
                     alignment: center;
                     if root.f.stopped: Badge {
-                        label: "Not shared any more";
+                        label: "Not shared anymore";
                         tone: "muted";
                     }
                     if !root.f.stopped && root.f.mine: Badge {
@@ -100,12 +130,18 @@ component FileCard inherits Card {
                     }
                 }
             }
+
             HorizontalLayout {
                 spacing: Theme.space-2;
                 if root.f.can-download: PrimaryButton {
                     label: root.f.error != "" ? "Retry" : "Download";
                     icon: Icons.arrow-down;
                     clicked => { Logic.download-file(root.f.id); }
+                }
+                if root.f.saved-to != "": SecondaryButton {
+                    label: "Open";
+                    icon: Icons.open;
+                    clicked => { Logic.open-file(root.f.saved-to); }
                 }
                 if root.f.mine && !root.f.stopped: DangerButton {
                     label: "Stop sharing";
@@ -127,7 +163,10 @@ component FilesTab inherits ScrollView {
                 spacing: Theme.space-3;
                 HorizontalLayout {
                     spacing: Theme.space-3;
-                    IconTile { icon: Icons.share; }
+                    IconTile {
+                        icon: Icons.share;
+                    }
+
                     VerticalLayout {
                         alignment: center;
                         horizontal-stretch: 1;
@@ -138,6 +177,7 @@ component FilesTab inherits ScrollView {
                             color: Theme.text-strong;
                             wrap: word-wrap;
                         }
+
                         Text {
                             text: "Members accept it, or get it automatically.";
                             font-size: Theme.font-sm;
@@ -146,6 +186,7 @@ component FilesTab inherits ScrollView {
                         }
                     }
                 }
+
                 HorizontalLayout {
                     spacing: Theme.space-2;
                     PrimaryButton {
@@ -154,12 +195,14 @@ component FilesTab inherits ScrollView {
                         horizontal-stretch: 1;
                         clicked => { Logic.pick("file"); }
                     }
+
                     SecondaryButton {
                         label: "Photos & videos";
                         icon: Icons.image;
                         horizontal-stretch: 1;
                         clicked => { Logic.pick("media"); }
                     }
+
                     if State.touch: SecondaryButton {
                         label: "App";
                         icon: Icons.apps;
@@ -170,7 +213,9 @@ component FilesTab inherits ScrollView {
             }
         }
 
-        for f in State.files: FileCard { f: f; }
+        for f in State.files: FileCard {
+            f: f;
+        }
 
         if State.files.length == 0: HintText {
             label: "Nothing offered yet. Files you offer stay on your device until a member downloads them.";
@@ -195,6 +240,7 @@ component TextCard inherits Card {
                 overflow: elide;
                 horizontal-stretch: 1;
             }
+
             Text {
                 text: root.t.time;
                 font-size: Theme.font-xs;
@@ -202,12 +248,14 @@ component TextCard inherits Card {
                 vertical-alignment: center;
             }
         }
+
         Text {
             text: root.t.text;
             font-size: Theme.font-md;
             color: Theme.text-strong;
             wrap: word-wrap;
         }
+
         HorizontalLayout {
             spacing: Theme.space-2;
             alignment: end;
@@ -242,6 +290,7 @@ component TextsTab inherits ScrollView {
                 composer := Area {
                     placeholder: "A link, a code, anything to paste on the other devices…";
                 }
+
                 HorizontalLayout {
                     spacing: Theme.space-2;
                     alignment: end;
@@ -250,6 +299,7 @@ component TextsTab inherits ScrollView {
                         icon: Icons.clipboard;
                         clicked => { composer.text = composer.text + Logic.paste(); }
                     }
+
                     PrimaryButton {
                         label: "Send";
                         icon: Icons.send;
@@ -263,7 +313,9 @@ component TextsTab inherits ScrollView {
             }
         }
 
-        for t in State.texts: TextCard { t: t; }
+        for t in State.texts: TextCard {
+            t: t;
+        }
 
         if State.texts.length == 0: HintText {
             label: "Nothing here yet. What you send shows up on every member's device, labelled with yours.";
@@ -294,6 +346,7 @@ component PadTab inherits VerticalLayout {
         text <=> State.pad-text;
         edited(t) => { Logic.pad-edited(t); }
     }
+
     HorizontalLayout {
         spacing: Theme.space-2;
         alignment: end;
@@ -302,6 +355,7 @@ component PadTab inherits VerticalLayout {
             icon: Icons.copy;
             clicked => { Logic.copy-text(State.pad-text); }
         }
+
         SecondaryButton {
             label: "Paste";
             icon: Icons.clipboard;
@@ -325,6 +379,7 @@ component AppsTab inherits ScrollView {
                         size: 56px;
                     }
                 }
+
                 Text {
                     text: "Apps are coming";
                     font-size: Theme.font-lg;
@@ -332,6 +387,7 @@ component AppsTab inherits ScrollView {
                     color: Theme.text-strong;
                     horizontal-alignment: center;
                 }
+
                 Text {
                     text: "Soon the group will be able to share small WebAssembly apps, run them on every device and show their hypereffect.dev interface right here.";
                     font-size: Theme.font-md;
@@ -348,16 +404,12 @@ component MemberLine inherits Rectangle {
     in property <MemberRow> m;
     height: Theme.control-height + 12px;
     HorizontalLayout {
-        spacing: Theme.space-3;
+        spacing: Theme.space-2;
         VerticalLayout {
             alignment: center;
-            Avatar {
-                initials: root.m.initials;
-                size: 32px;
-                show-presence: true;
-                online: root.m.online || root.m.me;
-            }
+            Dot { online: root.m.online || root.m.me; }
         }
+
         Text {
             text: root.m.me ? root.m.name + " (you)" : root.m.name;
             font-size: Theme.font-md;
@@ -366,6 +418,7 @@ component MemberLine inherits Rectangle {
             overflow: elide;
             horizontal-stretch: 1;
         }
+
         VerticalLayout {
             alignment: center;
             Badge {
@@ -383,22 +436,16 @@ component InfoTab inherits ScrollView {
         alignment: start;
         spacing: Theme.space-3;
 
-        if State.group-implied: Overline { label: "PEER"; }
+        if State.group-implied: Overline {
+            label: "PEER";
+        }
         if State.group-implied: Card {
             VerticalLayout {
                 padding: Theme.card-padding;
                 spacing: Theme.space-3;
                 HorizontalLayout {
                     spacing: Theme.space-3;
-                    VerticalLayout {
-                        alignment: center;
-                        Avatar {
-                            initials: State.group-peer.initials;
-                            size: 40px;
-                            show-presence: true;
-                            online: State.group-peer.connected;
-                        }
-                    }
+
                     VerticalLayout {
                         horizontal-stretch: 1;
                         alignment: center;
@@ -410,23 +457,46 @@ component InfoTab inherits ScrollView {
                             color: Theme.text-strong;
                             overflow: elide;
                         }
+
                         Text {
                             text: (State.group-peer.subtitle != "" ? State.group-peer.subtitle + " · " : "") + State.group-peer.short;
                             font-size: Theme.font-xs;
                             color: Theme.text-faint;
                             overflow: elide;
                         }
+
                         HorizontalLayout {
                             spacing: 4px;
                             alignment: start;
-                            Badge { label: "paired"; tone: "ok"; }
-                            if State.group-peer.connected: Badge { label: "connected"; tone: "ok"; }
-                            if !State.group-peer.connected: Badge { label: "offline"; tone: "muted"; }
-                            if State.group-peer.lan: Badge { label: "LAN"; tone: "active"; }
-                            if State.group-peer.ble: Badge { label: "Bluetooth"; tone: "warn"; }
+                            Badge {
+                                label: "paired";
+                                tone: "ok";
+                            }
+
+                            if State.group-peer.connected: Badge {
+                                label: "connected";
+                                tone: "ok";
+                            }
+                            if !State.group-peer.connected: Badge {
+                                label: "offline";
+                                tone: "muted";
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: start;
+                            if State.group-peer.lan: Badge {
+                                label: "LAN";
+                                tone: "active";
+                            }
+                            if State.group-peer.ble: Badge {
+                                label: "Bluetooth";
+                                tone: "warn";
+                            }
                         }
                     }
                 }
+
                 HorizontalLayout {
                     spacing: Theme.space-2;
                     alignment: start;
@@ -440,6 +510,7 @@ component InfoTab inherits ScrollView {
                             State.edit-text = State.group-peer.alias;
                         }
                     }
+
                     GhostButton {
                         label: "Unpair";
                         clicked => { Logic.unpair-peer(State.group-peer.id); }
@@ -448,12 +519,16 @@ component InfoTab inherits ScrollView {
             }
         }
 
-        if State.group-implied: Overline { label: "INVITE TO A GROUP"; }
+        if State.group-implied: Overline {
+            label: "INVITE TO A GROUP";
+        }
         if State.group-implied: Card {
             VerticalLayout {
                 padding: Theme.card-padding;
                 spacing: Theme.space-2;
-                if State.invitable.length > 0: HintText { label: "They choose whether to join."; }
+                if State.invitable.length > 0: HintText {
+                    label: "They choose whether to join.";
+                }
                 if State.invitable.length > 0: ComboBox {
                     model: State.invitable;
                     current-index <=> State.invite-choice;
@@ -474,16 +549,25 @@ component InfoTab inherits ScrollView {
 
         if !State.group-implied: VerticalLayout {
             spacing: Theme.space-3;
-            Overline { label: "MEMBERS"; }
+            Overline {
+                label: "MEMBERS";
+            }
+
             Card {
                 VerticalLayout {
                     padding: Theme.card-padding;
-                    for m in State.members: MemberLine { m: m; }
-                    if State.members.length == 0: HintText { label: "Nobody yet."; }
+                    for m in State.members: MemberLine {
+                        m: m;
+                    }
+                    if State.members.length == 0: HintText {
+                        label: "Nobody yet.";
+                    }
                 }
             }
 
-            if State.candidates.length > 0: Overline { label: "INVITE FROM YOUR PEERS"; }
+            if State.candidates.length > 0: Overline {
+                label: "INVITE FROM YOUR PEERS";
+            }
             if State.candidates.length > 0: Card {
                 VerticalLayout {
                     padding: Theme.card-padding;
@@ -499,6 +583,7 @@ component InfoTab inherits ScrollView {
                                 overflow: elide;
                                 horizontal-stretch: 1;
                             }
+
                             VerticalLayout {
                                 alignment: center;
                                 SecondaryButton {
@@ -510,10 +595,12 @@ component InfoTab inherits ScrollView {
                     }
                 }
             }
-
         }
 
-        Overline { label: "ON THIS DEVICE"; }
+        Overline {
+            label: "ON THIS DEVICE";
+        }
+
         Card {
             VerticalLayout {
                 padding: Theme.card-padding;
@@ -524,10 +611,12 @@ component InfoTab inherits ScrollView {
                     checked: State.auto-download;
                     toggled(v) => { Logic.set-auto-download(v); }
                 }
+
                 Rectangle {
                     height: 1px;
                     background: Theme.border;
                 }
+
                 ToggleRow {
                     label: "Stop sharing a file once everybody has it";
                     hint: "Applies to the files you offer. You can always stop one by hand.";
@@ -549,6 +638,7 @@ component InfoTab inherits ScrollView {
                     State.edit-text = State.group-alias;
                 }
             }
+
             DangerButton {
                 label: root.confirm-leave ? "Confirm leave" : "Leave group";
                 icon: Icons.trash;
@@ -592,6 +682,7 @@ export component GroupPage inherits VerticalLayout {
                 color: Theme.text-strong;
                 overflow: elide;
             }
+
             if State.group-alias != "": Text {
                 text: State.group-haiku;
                 font-size: Theme.font-sm;
@@ -599,6 +690,7 @@ export component GroupPage inherits VerticalLayout {
                 overflow: elide;
             }
         }
+
         IconButton {
             icon: Icons.settings;
             tint: State.group-tab == "info" ? Theme.accent-text : Theme.text-muted;
@@ -613,9 +705,19 @@ export component GroupPage inherits VerticalLayout {
         picked(k) => { State.group-tab = k; }
     }
 
-    if State.group-tab == "files": FilesTab { vertical-stretch: 1; }
-    if State.group-tab == "texts": TextsTab { vertical-stretch: 1; }
-    if State.group-tab == "pad": PadTab { vertical-stretch: 1; }
-    if State.group-tab == "apps": AppsTab { vertical-stretch: 1; }
-    if State.group-tab == "info": InfoTab { vertical-stretch: 1; }
+    if State.group-tab == "files": FilesTab {
+        vertical-stretch: 1;
+    }
+    if State.group-tab == "texts": TextsTab {
+        vertical-stretch: 1;
+    }
+    if State.group-tab == "pad": PadTab {
+        vertical-stretch: 1;
+    }
+    if State.group-tab == "apps": AppsTab {
+        vertical-stretch: 1;
+    }
+    if State.group-tab == "info": InfoTab {
+        vertical-stretch: 1;
+    }
 }

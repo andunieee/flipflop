@@ -39,6 +39,14 @@ export struct HomeRow {
     lines: string,
     /// An implied group (a paired peer).
     paired: bool,
+    /// The group tab showing the first kind of news.
+    tab: string,
+}
+
+/// A paired peer or a group with someone online now; opens `group-id`.
+export struct OnlineRow {
+    group-id: string,
+    title: string,
 }
 
 export struct InviteRow {
@@ -105,6 +113,8 @@ export global State {
     in-out property <string> page: "home";
     /// Phone layout: single pane, bottom navigation.
     in-out property <bool> touch: false;
+    /// The window's width, kept up to date by the window so widgets can tighten up when narrow.
+    in-out property <length> window-width: 960px;
     in-out property <string> my-name;
     in-out property <bool> node-ready: false;
     in property <string> status;
@@ -115,6 +125,7 @@ export global State {
     in property <[GroupRow]> groups;
     in property <[InviteRow]> invites;
     in property <[HomeRow]> home;
+    in property <[OnlineRow]> online;
 
     // the open group
     in-out property <string> open-group;
@@ -185,6 +196,8 @@ export global Logic {
     callback paste() -> string;
     callback paste-pad();
     callback open-link(string);
+    /// Open a downloaded file (by its path) with the system's default app.
+    callback open-file(string);
     callback delete-text(string);
     callback pad-edited(string);
     /// "file" | "media" | "app"
@@ -261,6 +274,8 @@ export global Theme {
     out property <length> control-height: State.touch ? 44px : 32px;
     out property <length> page-padding: State.touch ? 16px : 28px;
     out property <length> card-padding: State.touch ? 14px : 16px;
+    /// Side padding of a labelled button; tighter on narrow windows.
+    out property <length> button-padding: State.window-width < 420px ? space-2 : space-3 + 2px;
 }
 
 // Line icons (24px grid, 2px stroke), tinted with `Icon.tint`.
@@ -392,52 +407,6 @@ export component Dot inherits Rectangle {
     background: root.online ? Theme.online : Theme.offline;
 }
 
-// Round initials avatar with an optional presence dot.
-export component Avatar inherits Rectangle {
-    in property <string> initials;
-    in property <length> size: 32px;
-    in property <bool> show-presence: false;
-    in property <bool> online;
-    in property <image> icon;
-    in property <color> tint: Theme.accent-soft;
-    in property <color> ink: Theme.accent-text;
-
-    width: root.size;
-    height: root.size;
-
-    Rectangle {
-        border-radius: root.size / 2;
-        background: root.tint;
-    }
-
-    if root.icon.width > 0: Icon {
-        source: root.icon;
-        size: root.size * 0.55;
-        tint: root.ink;
-    }
-    if root.icon.width == 0: Text {
-        text: root.initials == "" ? "?" : root.initials;
-        color: root.ink;
-        font-size: root.size * 0.38;
-        font-weight: 700;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-    if root.show-presence: Rectangle {
-        x: root.size - self.width + 1px;
-        y: root.size - self.height + 1px;
-        width: max(10px, root.size * 0.3);
-        height: self.width;
-        border-radius: self.width / 2;
-        background: Theme.window-bg;
-
-        Dot {
-            size: parent.width - 4px;
-            online: root.online;
-        }
-    }
-}
-
 // Pill with a tinted background. tone: "ok" | "error" | "warn" | "muted" | "active"
 export component Badge inherits Rectangle {
     in property <string> label;
@@ -515,9 +484,9 @@ component ButtonBase inherits Rectangle {
 
     HorizontalLayout {
         alignment: center;
-        padding-left: root.label == "" ? 0 : Theme.space-3 + 2px;
-        padding-right: root.label == "" ? 0 : Theme.space-3 + 2px;
-        spacing: Theme.space-2;
+        padding-left: root.label == "" ? 0 : Theme.button-padding;
+        padding-right: root.label == "" ? 0 : Theme.button-padding;
+        spacing: State.window-width < 420px ? Theme.space-1 + 2px : Theme.space-2;
 
         if root.icon.width > 0: VerticalLayout {
             alignment: center;
