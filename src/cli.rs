@@ -583,10 +583,10 @@ fn file_line(f: &crate::core::FileView) -> String {
     } else if f.mine {
         format!("sharing, {} of {} have it", f.downloaded_by.len(), f.audience)
     } else if f.have {
-        format!("downloaded{}", f.saved_to.as_ref().map(|p| format!(" to {}", p.display())).unwrap_or_default())
+        format!("downloaded{}{}", f.saved_to.as_ref().map(|p| format!(" to {}", p.display())).unwrap_or_default(), if f.hosting { ", hosting" } else { "" })
     } else if let Some((done, total)) = f.progress {
         format!("downloading {}/{}", format::size(done), format::size(total))
-    } else if f.offerer_online {
+    } else if f.source_online {
         "available".to_string()
     } else {
         "sender offline".to_string()

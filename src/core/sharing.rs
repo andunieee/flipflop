@@ -64,6 +64,12 @@ pub struct FileView {
     pub progress: Option<(u64, u64)>,
     pub error: Option<String>,
     pub offerer_online: bool,
+    /// Names of the members (not the offerer) that also serve it.
+    pub hosts: Vec<String>,
+    /// We serve it too.
+    pub hosting: bool,
+    /// Someone who has it is online: the offerer or a host (we ourselves excluded).
+    pub source_online: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,6 +338,9 @@ impl Core {
                     progress: t.filter(|t| t.active).map(|t| (t.done, t.total)),
                     error: t.and_then(|t| t.error.clone()),
                     offerer_online: online.contains(&f.from),
+                    hosts: f.hosts.iter().filter(|id| **id != f.from).map(|id| name_of(id)).collect(),
+                    hosting: f.hosts.contains(&me),
+                    source_online: online.contains(&f.from) || f.hosts.iter().any(|h| *h != me && online.contains(h)),
                 }
             })
             .collect();
@@ -560,6 +569,51 @@ impl Core {
         Ok(())
     }
 
+    /// Serve a file we downloaded to the rest of the group too, so it stays available when the
+    /// offerer is offline. Hosting ends when the offerer stops sharing, or with [`Core::unhost_file`].
+    pub fn host_file(&self, gid: &str, fid: &str) -> Result<()> {
+        self.require_group(gid)?;
+        let me = self.me();
+        let offer = self.with_doc(gid, |d| d.file(fid)).context("no such file")?;
+        if offer.from == me {
+            bail!("that is your own file");
+        }
+        if offer.stopped {
+            bail!("the sender stopped sharing it");
+        }
+        let path = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .received
+            .iter()
+            .find(|r| r.group == gid && r.file == fid && r.path.exists())
+            .map(|r| r.path.clone())
+            .context("download it first")?;
+        self.with_state(|st| {
+            if !st.shares.iter().any(|s| s.group == gid && s.file == fid) {
+                st.shares.push(Share { group: gid.to_owned(), file: fid.to_owned(), path, staged: false });
+            }
+        });
+        self.with_doc(gid, |d| d.set_hosting(fid, &me, true));
+        self.doc_changed(gid, false);
+        Ok(())
+    }
+
+    pub fn unhost_file(&self, gid: &str, fid: &str) -> Result<()> {
+        self.require_group(gid)?;
+        let me = self.me();
+        if self.with_doc(gid, |d| d.file(fid)).is_some_and(|f| f.from == me) {
+            bail!("that is your own file");
+        }
+        self.with_state(|st| st.shares.retain(|s| !(s.group == gid && s.file == fid)));
+        self.with_doc(gid, |d| d.set_hosting(fid, &me, false));
+        self.doc_changed(gid, false);
+        Ok(())
+    }
+
     fn begin_transfer(&self, gid: &str, fid: &str, total: u64, manual: bool) -> bool {
         let mut transfers = self.0.sharing.transfers.lock().unwrap();
         let key = (gid.to_owned(), fid.to_owned());
@@ -631,8 +685,12 @@ impl Core {
     }
 
     async fn fetch(&self, gid: &str, fid: &str, offer: &crate::groupdoc::FileOffer) -> Result<PathBuf> {
-        let from: EndpointId = offer.from.parse().map_err(|_| anyhow!("bad sender"))?;
-        let conn = self.connection(from).context("the sender is offline")?;
+        let me = self.me();
+        let conn = std::iter::once(&offer.from)
+            .chain(offer.hosts.iter().filter(|h| **h != offer.from && **h != me))
+            .filter_map(|id| id.parse::<EndpointId>().ok())
+            .find_map(|id| self.connection(id))
+            .context("nobody who has it is online")?;
         let dir = self.download_dir();
         tokio::fs::create_dir_all(&dir).await.with_context(|| format!("cannot create {}", dir.display()))?;
 
@@ -712,7 +770,7 @@ impl Core {
         let me = self.me();
         let offer = self
             .with_doc(&request.group, |d| d.file(&request.file))
-            .filter(|f| f.from == me && !f.stopped)
+            .filter(|f| (f.from == me || f.hosts.contains(&me)) && !f.stopped)
             .context("not on offer")?;
         let path = self
             .0
@@ -773,7 +831,7 @@ impl Core {
                     let _ = self.stop_file(gid, &f.id);
                 }
             } else if auto_download && !f.downloaded.contains_key(&me) {
-                let online = f.from.parse().ok().and_then(|id| self.connection(id)).is_some();
+                let online = std::iter::once(&f.from).chain(&f.hosts).filter(|id| **id != me).any(|id| id.parse().ok().and_then(|id| self.connection(id)).is_some());
                 if online {
                     let (this, gid, fid) = (self.clone(), gid.to_owned(), f.id.clone());
                     tokio::spawn(async move {

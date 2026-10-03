@@ -54,6 +54,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
                     Txt(f.name, d.fontMd, if (f.stopped) c.textMuted else c.textStrong, 650)
                     Txt(f.size + " · " + f.meta, d.fontSm, c.textMuted)
                     if (f.audience.isNotEmpty()) Txt(f.audience, d.fontSm, c.textMuted)
+                    if (f.hosts.isNotEmpty()) Txt(f.hosts, d.fontSm, c.textMuted)
                 }
             }
             if (f.downloading) {
@@ -69,6 +70,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
                     when {
                         f.stopped -> Badge("Not shared anymore", "muted")
                         f.mine -> Badge("Sharing", "active")
+                        f.hosting -> Badge("Downloaded · hosting", "active")
                         f.have -> Badge("Downloaded", "ok")
                         f.downloading -> Badge("Downloading", "active")
                         !f.canDownload -> Badge("Sender offline", "warn")
@@ -76,6 +78,8 @@ private fun FileCard(f: FileRow, nav: Nav) {
                 }
                 if (f.canDownload) PrimaryButton(if (f.error.isNotEmpty()) "Retry" else "Download", icon = Icons.arrowDown) { app.downloadFile(f.id) }
                 if (f.savedTo.isNotEmpty()) SecondaryButton("Open", icon = Icons.open) { app.openFile(f.savedTo) }
+                if (f.canHost) SecondaryButton("Host it too", icon = Icons.share) { app.hostFile(f.id, true) }
+                if (f.hosting) SecondaryButton("Stop hosting") { app.hostFile(f.id, false) }
                 if (f.mine && !f.stopped) DangerButton("Stop sharing") { app.stopFile(f.id) }
             }
         }
