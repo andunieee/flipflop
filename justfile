@@ -8,7 +8,7 @@ default:
 # --- Desktop ---
 
 # run the desktop app (Compose UI over the Rust core; builds the Rust library first)
-desktop:
+desktop: build
     cd kmp && ./gradlew :desktopApp:run
 
 # build the Rust library (debug)
@@ -26,12 +26,8 @@ cli *cargs:
 # --- Android ---
 # gradle builds the Rust library with cargo-ndk (see kmp/build-native.sh). Needs NDK 27, Android SDK 35.
 
-# build APK: just android [debug|release] [abi...] (default: debug arm64-v8a)
-android profile='debug' *abis:
-    cd kmp && ./gradlew :androidApp:assemble{{ if profile == "release" { "Release" } else { "Debug" } }} -Pprofile={{profile}} {{ if abis != "" { "-Pabis=" + replace(abis, " ", ",") } else { "" } }}
-
 # install APK on connected device (build first). `just install android` = debug, default ABIs.
-install *args:
+android *args:
     #!/usr/bin/env bash
     set -euo pipefail
     args=("$@")
@@ -50,16 +46,9 @@ install *args:
     fi
     task=Debug; [ "$profile" = release ] && task=Release
     (cd kmp && ./gradlew ":androidApp:assemble$task" -Pprofile="$profile" ${abis[@]:+-Pabis="$(IFS=,; echo "${abis[*]}")"})
-    adb install -r "kmp/androidApp/build/outputs/apk/$profile/androidApp-$profile.apk"
-
-# install + launch app on connected device
-run profile='debug' package='dev.flipflop.app' activity='.MainActivity':
-    just install {{profile}}
-    adb shell am start -n {{package}}/{{activity}}
-
-# list connected devices
-devices:
-    adb devices -l
+    for serial in $(adb devices | awk 'NR>1 && $2 == "device" {print $1}'); do
+        adb -s "$serial" install -r "kmp/androidApp/build/outputs/apk/$profile/androidApp-$profile.apk"
+    done
 
 # follow logcat for the app
 logs:
