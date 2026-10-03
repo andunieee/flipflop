@@ -1,11 +1,12 @@
-import { Button, ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 import { State, Logic, HistoryRow } from "globals.slint";
-import { ProgressBar, HintText, StatusText } from "components.slint";
+import {
+    Theme, Dot, Card, ProgressBar, HintText, StatusText,
+    PrimaryButton, GhostButton, DangerButton, SectionTitle,
+} from "components.slint";
 
-component HistoryItem inherits Rectangle {
+component HistoryItem inherits Card {
     in property <HistoryRow> entry;
-    border-radius: 6px;
-    background: #232330;
     min-height: State.touch ? 76px : 64px;
 
     VerticalLayout {
@@ -14,16 +15,21 @@ component HistoryItem inherits Rectangle {
 
         HorizontalLayout {
             spacing: 8px;
-            Text {
-                text: root.entry.direction == "send" ? "↑" : "↓";
-                color: root.entry.direction == "send" ? #d0a040 : #40a0d0;
-                font-weight: 700;
-                font-size: State.touch ? 15px : 13px;
-                vertical-alignment: center;
+            Rectangle {
+                width: 18px;
+                border-radius: Theme.radius-sm;
+                label := Text {
+                    text: root.entry.direction == "send" ? "↑" : "↓";
+                    color: root.entry.direction == "send" ? Theme.warn : Theme.info;
+                    font-weight: 800;
+                    font-size: State.touch ? 15px : 13px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
             }
             Text {
                 text: root.entry.title;
-                color: white;
+                color: Theme.text-strong;
                 font-weight: 600;
                 vertical-alignment: center;
                 overflow: elide;
@@ -31,8 +37,9 @@ component HistoryItem inherits Rectangle {
             }
             Text {
                 text: root.entry.status;
-                color: root.entry.failed ? #ff8a98 : #8fd08f;
+                color: root.entry.failed ? Theme.error : Theme.success;
                 font-size: State.touch ? 13px : 11px;
+                font-weight: 500;
                 vertical-alignment: center;
             }
         }
@@ -40,7 +47,7 @@ component HistoryItem inherits Rectangle {
             spacing: State.touch ? 8px : 12px;
             Text {
                 text: root.entry.detail;
-                color: #9a9aac;
+                color: Theme.text-muted;
                 font-size: State.touch ? 13px : 11px;
                 vertical-alignment: center;
                 overflow: elide;
@@ -48,29 +55,33 @@ component HistoryItem inherits Rectangle {
             }
             Text {
                 text: root.entry.size;
-                color: #9a9aac;
+                color: Theme.text-muted;
                 font-size: State.touch ? 13px : 11px;
                 vertical-alignment: center;
             }
             if !State.touch: Text {
                 text: root.entry.date;
-                color: #8a8a9a;
+                color: Theme.text-faint;
                 font-size: 11px;
                 vertical-alignment: center;
             }
-            if root.entry.can-open && !State.touch: Button {
-                text: "Open";
+            if root.entry.can-open && !State.touch: GhostButton {
+                label: "Open";
                 clicked => { Logic.open-row(root.entry.id); }
             }
-            Button {
-                text: "✕";
+            if State.touch: GhostButton {
+                label: root.entry.can-open ? "Open" : "Delete";
+                clicked => { root.entry.can-open ? Logic.open-row(root.entry.id) : Logic.delete-row(root.entry.id); }
+            }
+            if !State.touch: DangerButton {
+                label: "✕";
                 clicked => { Logic.delete-row(root.entry.id); }
             }
         }
     }
 }
 
-component TransferPanel inherits Rectangle {
+component TransferPanel inherits Card {
     in property <bool> sending: true;
     in property <float> progress: 0.0;
     in property <string> progress-label: "";
@@ -79,9 +90,7 @@ component TransferPanel inherits Rectangle {
     in property <bool> can-cancel: false;
     callback cancel();
 
-    border-radius: 6px;
-    background: #232330;
-    min-height: State.touch ? 88px : 72px;
+    min-height: State.touch ? 88px : 76px;
 
     VerticalLayout {
         padding: State.touch ? 12px : 10px;
@@ -91,13 +100,13 @@ component TransferPanel inherits Rectangle {
             spacing: 8px;
             Text {
                 text: root.sending ? "↑ Sending" : "↓ Receiving";
-                color: white;
+                color: Theme.text-strong;
                 font-weight: 700;
                 vertical-alignment: center;
             }
             Rectangle { horizontal-stretch: 1; }
-            if root.can-cancel: Button {
-                text: "Stop";
+            if root.can-cancel: GhostButton {
+                label: "Stop";
                 clicked => { root.cancel(); }
             }
         }
@@ -106,7 +115,7 @@ component TransferPanel inherits Rectangle {
 
         Text {
             text: root.status;
-            color: #9a9aac;
+            color: Theme.text-muted;
             font-size: State.touch ? 13px : 11px;
             overflow: elide;
             wrap: State.touch ? word-wrap : no-wrap;
@@ -122,17 +131,19 @@ component PeerChip inherits Rectangle {
     in property <string> label;
     in property <bool> online;
 
-    border-radius: 8px;
-    background: State.selected-id == root.endpoint-id ? #4a5fd0 : #232330;
+    border-radius: Theme.radius;
+    background: State.selected-id == root.endpoint-id ? Theme.accent-soft
+        : ta.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     min-height: State.touch ? 48px : 40px;
 
-    touch := TouchArea {
+    ta := TouchArea {
         clicked => {
             Logic.select-peer(root.endpoint-id);
             State.show-peer-picker = false;
         }
         mouse-cursor: pointer;
     }
+    animate background { duration: 90ms; }
 
     HorizontalLayout {
         padding-left: 14px;
@@ -140,16 +151,10 @@ component PeerChip inherits Rectangle {
         spacing: 8px;
         alignment: start;
 
-        Rectangle {
-            y: (parent.height - self.height) / 2;
-            width: 8px;
-            height: 8px;
-            border-radius: 4px;
-            background: root.online ? #7bd88f : #4a4a58;
-        }
+        Dot { online: root.online; }
         Text {
             text: root.label;
-            color: State.selected-id == root.endpoint-id ? white : #c8c8d0;
+            color: State.selected-id == root.endpoint-id ? Theme.text-strong : Theme.text;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -160,7 +165,7 @@ export component PeerPage inherits Rectangle {
     background: transparent;
 
     VerticalLayout {
-        padding: State.touch ? 12px : 16px;
+        padding: State.touch ? 12px : 18px;
         spacing: State.touch ? 10px : 14px;
         alignment: start;
 
@@ -171,25 +176,19 @@ export component PeerPage inherits Rectangle {
                 spacing: 2px;
                 Text {
                     text: State.selected-name == "" ? "No peer selected" : State.selected-name;
-                    color: white;
-                    font-size: State.touch ? 19px : 22px;
-                    font-weight: 700;
+                    color: Theme.text-strong;
+                    font-size: State.touch ? 19px : 24px;
+                    font-weight: 800;
                     vertical-stretch: 0;
                     overflow: elide;
                 }
                 HorizontalLayout {
                     spacing: 6px;
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 4px;
-                        background: State.selected-online ? #7bd88f : #4a4a58;
-                    }
+                    alignment: start;
+                    Dot { online: State.selected-online; }
                     Text {
-                        text: State.selected-detail == ""
-                            ? "Select a peer, or add one."
-                            : State.selected-detail;
-                        color: State.selected-detail == "" ? #9a9aac : #8a8a9a;
+                        text: State.selected-detail == "" ? "Select a peer, or add one." : State.selected-detail;
+                        color: State.selected-detail == "" ? Theme.text-muted : Theme.text-faint;
                         font-size: State.touch ? 13px : 12px;
                         vertical-alignment: center;
                         overflow: elide;
@@ -197,20 +196,17 @@ export component PeerPage inherits Rectangle {
                 }
             }
             Rectangle { horizontal-stretch: 1; }
-            if State.selected-name != "" && !State.rename-mode: Button {
-                text: "Rename";
-                clicked => { Logic.rename-peer(); }
-            }
-            if State.selected-name != "" && !State.rename-mode: Button {
-                text: "Forget";
-                clicked => { Logic.remove-peer(); }
+            if State.selected-name != "" && State.rename-mode == false: HorizontalLayout {
+                spacing: 6px;
+                GhostButton { label: "Rename"; clicked => { Logic.rename-peer(); } }
+                DangerButton { label: "Forget"; clicked => { Logic.remove-peer(); } }
             }
         }
 
         // Compact layout has no sidebar: pick the peer here.
         if State.compact && State.peers.length > 0: Rectangle {
-            border-radius: 8px;
-            background: #232330;
+            border-radius: Theme.radius;
+            background: Theme.card-bg;
             min-height: 48px;
 
             chip-touch := TouchArea {
@@ -223,23 +219,17 @@ export component PeerPage inherits Rectangle {
                 padding-right: 14px;
                 spacing: 8px;
 
-                Rectangle {
-                    y: (parent.height - self.height) / 2;
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 4px;
-                    background: State.selected-online ? #7bd88f : #4a4a58;
-                }
+                Dot { online: State.selected-online; }
                 Text {
                     text: State.selected-name == "" ? "Choose a peer" : State.selected-name;
-                    color: white;
+                    color: Theme.text-strong;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
                 Text {
                     text: State.show-peer-picker ? "▲" : "▼";
-                    color: #9a9aac;
+                    color: Theme.text-muted;
                     vertical-alignment: center;
                 }
             }
@@ -260,7 +250,7 @@ export component PeerPage inherits Rectangle {
 
         // Inline rename
         if State.rename-mode: HorizontalLayout {
-            spacing: 10px;
+            spacing: 8px;
             alignment: start;
             LineEdit {
                 text <=> State.rename-input;
@@ -268,15 +258,8 @@ export component PeerPage inherits Rectangle {
                 horizontal-stretch: 1;
                 accepted => { Logic.rename-peer-confirm(); }
             }
-            Button {
-                text: "Save";
-                primary: true;
-                clicked => { Logic.rename-peer-confirm(); }
-            }
-            Button {
-                text: "Cancel";
-                clicked => { Logic.rename-peer-cancel(); }
-            }
+            PrimaryButton { label: "Save"; clicked => { Logic.rename-peer-confirm(); } }
+            GhostButton { label: "Cancel"; clicked => { Logic.rename-peer-cancel(); } }
         }
 
         // Active transfers
@@ -306,26 +289,10 @@ export component PeerPage inherits Rectangle {
 
         // Send button (no transfer in flight for this peer)
         if State.selected-name != "" && State.send-active-id != State.selected-id:
-        Rectangle {
-            min-height: State.touch ? 48px : 0px;
-            border-radius: 6px;
-            background: #4a5fd0;
-
-            send-touch := TouchArea {
-                clicked => { Logic.send-to-peer(); }
-                mouse-cursor: pointer;
-            }
-
-            HorizontalLayout {
-                alignment: center;
-                Text {
-                    text: "Send files…";
-                    color: white;
-                    font-size: State.touch ? 16px : 13px;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                }
-            }
+        PrimaryButton {
+            label: "Send files…";
+            min-height: State.touch ? 46px : 36px;
+            clicked => { Logic.send-to-peer(); }
         }
 
         // Content shared into the app via the system share sheet.
@@ -333,18 +300,13 @@ export component PeerPage inherits Rectangle {
             HintText { label: State.outbox-count + " file(s) staged from the share sheet — pick a peer and send."; }
 
         // History for this peer
-        Rectangle { min-height: 4px; }
+        Rectangle { min-height: 6px; }
 
         HorizontalLayout {
-            Text {
-                text: "Transfers";
-                font-size: 15px;
-                font-weight: 700;
-                color: white;
-                vertical-alignment: center;
-            }
+            spacing: 8px;
+            SectionTitle { label: "Transfers"; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
-            Button { text: "Refresh"; clicked => { Logic.refresh-history(); } }
+            GhostButton { label: "Refresh"; clicked => { Logic.refresh-history(); } }
         }
 
         if State.selected-name == "":
