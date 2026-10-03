@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Alternative Slint-based GUI for TunnelManager, using the engine crate directly (desktop + Android)"
-rust-version = "1.91"
+rust-version = "1.92"
 
 # The crate is a lib (cdylib) so it can be loaded as an Android native
 # activity; the desktop build is a thin bin calling into the same code.

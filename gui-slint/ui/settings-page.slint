@@ -58,6 +58,7 @@ export component SettingsPage inherits Rectangle {
                             horizontal-stretch: 1;
                         }
                     }
+                    HintText { label: "Received files go into a “tunnelmanager” subfolder, one folder per peer."; }
                 }
             }
             if State.touch: HintText {
@@ -107,11 +108,11 @@ export component SettingsPage inherits Rectangle {
                     }
                     if State.relay-test-status != "": StatusText {
                         label: State.relay-test-status;
-                        error: false;
+                        error: State.relay-test-failed;
                     }
                     if State.relay-status != "": StatusText {
                         label: State.relay-status;
-                        error: false;
+                        error: State.relay-status-failed;
                     }
                 }
             }
@@ -152,7 +153,7 @@ export component SettingsPage inherits Rectangle {
                     }
                     if State.discovery-test-status != "": StatusText {
                         label: State.discovery-test-status;
-                        error: false;
+                        error: State.discovery-test-failed;
                     }
                 }
             }
@@ -173,7 +174,6 @@ export component SettingsPage inherits Rectangle {
                     CheckBox {
                         text: "Record transfer history";
                         checked <=> State.history-enabled;
-                        toggled => { }
                     }
                 }
             }
@@ -188,7 +188,7 @@ export component SettingsPage inherits Rectangle {
                 }
                 if State.settings-status != "": StatusText {
                     label: State.settings-status;
-                    error: false;
+                    error: State.settings-failed;
                     vertical-alignment: center;
                 }
             }

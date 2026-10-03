@@ -4,8 +4,7 @@ use crate::format;
 use crate::recorder::{Ctx, Recorder};
 use crate::settings::Settings;
 use crate::{AppWindow, HistoryRow, Logic, PeerRow, State};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
-use std::collections::HashMap;
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -13,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use engine::{
     get_relay_status, is_reclaimable_partial, reclaim_partial, resolve_relay_mode_with_fallback,
     sanitize_folder_name, start_share_items, verify_discovery, verify_relays, AddrInfoOptions,
-    AppHandle, DiscoveryConfigArg, DiscoveryModeOption, EventEmitter, NodeService, PairedDeviceInfo,
-    ReceiveOptions, RelayConfigArg, SendOptions, TransferDirection, TransferHistoryStore,
+    AppHandle, DiscoveryModeOption, EventEmitter, NodeService, PairedDeviceInfo, ReceiveOptions,
+    SendOptions, TransferDirection, TransferHistoryStore,
     TransferPeer, TransferRecord, TransferStatus,
 };
 
@@ -24,8 +23,6 @@ use engine::{
 const WINDOW_TOUCH: bool = true;
 #[cfg(not(target_os = "android"))]
 const WINDOW_TOUCH: bool = false;
-
-type PeerMetaMap = HashMap<String, (String, String, bool)>;
 
 /// All state that is shared across threads. Cloned freely into async tasks.
 #[derive(Clone)]
@@ -37,7 +34,6 @@ struct Sync {
     settings: Arc<Mutex<Settings>>,
     settings_path: PathBuf,
     node: Arc<Mutex<Option<Arc<NodeService>>>>,
-    peer_meta: Arc<Mutex<PeerMetaMap>>,
     pair_requests: Arc<Mutex<Vec<(String, String)>>>,
     recv_cancels: ReceiveCancels,
     queue: MainQueue,
@@ -104,9 +100,31 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
     })
 }
 
+#[cfg(target_os = "android")]
 fn toast(_ui: &AppWindow, msg: &str, error: bool) {
     // Native toast/snackbar; the UI itself stays untouched.
     android::show_toast(msg, error);
+}
+
+#[cfg(not(target_os = "android"))]
+fn toast(ui: &AppWindow, msg: &str, error: bool) {
+    thread_local! {
+        // Restarted by every toast, so the latest message gets the full time.
+        static HIDE_TIMER: slint::Timer = slint::Timer::default();
+    }
+
+    let state = ui.global::<State>();
+    state.set_toast_text(msg.into());
+    state.set_toast_error(error);
+    let weak = ui.as_weak();
+    let visible_for = std::time::Duration::from_secs(if error { 6 } else { 3 });
+    HIDE_TIMER.with(|timer| {
+        timer.start(slint::TimerMode::SingleShot, visible_for, move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.global::<State>().set_toast_text("".into());
+            }
+        });
+    });
 }
 
 /// Files/folders the user wants to send. Empty = cancelled.
@@ -299,15 +317,14 @@ fn paired_row(d: &PairedDeviceInfo) -> PeerRow {
     } else {
         d.display_name.clone()
     };
-    let mut detail = d.device_type.clone();
-    if !d.os.trim().is_empty() {
-        detail.push_str(" · ");
-        detail.push_str(&d.os);
-    }
-    detail.push_str(" · ");
-    detail.push_str(&short_id(&d.endpoint_id));
+    let detail = [d.device_type.trim(), d.os.trim(), &short_id(&d.endpoint_id)]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
     PeerRow {
-        endpoint_id: d.endpoint_id.clone().into(),
+        // Lowercased like every other id the UI compares against.
+        endpoint_id: d.endpoint_id.to_lowercase().into(),
         name: name.into(),
         detail: detail.into(),
         online: d.online,
@@ -353,31 +370,21 @@ fn nearby_row(n: &engine::NearbyDevice) -> PeerRow {
 
 // -------------------------------------------------------- ui refreshers
 
-fn sync_meta(devices: &[PairedDeviceInfo], meta: &Arc<Mutex<PeerMetaMap>>) {
-    let mut guard = meta.lock().unwrap();
-    guard.clear();
-    for d in devices {
-        let id = d.endpoint_id.to_lowercase();
-        let name = if d.display_name.trim().is_empty() {
-            short_id(&d.endpoint_id)
-        } else {
-            d.display_name.clone()
-        };
-        let detail = format!(
-            "{} · {} · {}",
-            if d.device_type.is_empty() {
-                "device".to_string()
-            } else {
-                d.device_type.clone()
-            },
-            if d.os.trim().is_empty() {
-                "unknown os".to_string()
-            } else {
-                d.os.clone()
-            },
-            short_id(&d.endpoint_id),
-        );
-        guard.insert(id, (name, detail, d.online));
+/// Mirror a peer row into the selected-peer header fields (or clear them).
+fn show_selected(state: &State<'_>, row: Option<&PeerRow>) {
+    match row {
+        Some(row) => {
+            state.set_selected_id(row.endpoint_id.clone());
+            state.set_selected_name(row.name.clone());
+            state.set_selected_detail(row.detail.clone());
+            state.set_selected_online(row.online);
+        }
+        None => {
+            state.set_selected_id("".into());
+            state.set_selected_name("".into());
+            state.set_selected_detail("".into());
+            state.set_selected_online(false);
+        }
     }
 }
 
@@ -386,7 +393,6 @@ fn refresh_peers(sync: &Sync) {
         return;
     };
     let devices = node.list_paired().unwrap_or_default();
-    sync_meta(&devices, &sync.peer_meta);
 
     let weak = sync.weak.clone();
     let sync = sync.clone();
@@ -397,6 +403,15 @@ fn refresh_peers(sync: &Sync) {
         let state = ui.global::<State>();
         let rows: Vec<PeerRow> = devices.iter().map(paired_row).collect();
         let online_count = devices.iter().filter(|d| d.online).count();
+        // Keep the selection (re-reading its name/presence, which may have
+        // changed); fall back to the first peer when nothing is selected or
+        // the selected peer is gone.
+        let selected = state.get_selected_id();
+        let current = rows
+            .iter()
+            .find(|r| r.endpoint_id == selected)
+            .or(rows.first());
+        show_selected(&state, current);
         state.set_peers(ModelRc::from(Rc::new(VecModel::from(rows))));
         state.set_presence_label(format!("{}/{} peers online", online_count, devices.len()).into());
         let info = node.device_info();
@@ -405,11 +420,6 @@ fn refresh_peers(sync: &Sync) {
         match node.pairing_ticket() {
             Ok(ticket) => state.set_my_ticket(ticket.into()),
             Err(e) => tracing::debug!("pairing_ticket unavailable: {e}"),
-        }
-        if state.get_selected_id().is_empty() {
-            if let Some(first) = devices.first() {
-                state.set_selected_id(first.endpoint_id.clone().into());
-            }
         }
         drop(state);
         if ui.global::<State>().get_page() == "peer" {
@@ -551,55 +561,77 @@ async fn resolve_network(
     Ok((relay_mode, discovery_mode))
 }
 
-/// Build a `RelayConfigArg` from the current settings-page fields.
-fn relay_arg_from_state(ui: &AppWindow) -> RelayConfigArg {
-    let state = ui.global::<State>();
-    let arg = RelayConfigArg {
-        mode: match state.get_relay_mode() {
-            1 => "disabled".to_string(),
-            2 => "custom".to_string(),
-            _ => "default".to_string(),
-        },
-        urls: state
+/// Read the settings-page fields back into a `Settings` value.
+fn settings_from_state(state: &State<'_>) -> Settings {
+    let non_empty = |value: SharedString| (!value.trim().is_empty()).then(|| value.to_string());
+    Settings {
+        downloads_dir: non_empty(state.get_downloads_dir()),
+        relay_mode: match state.get_relay_mode() {
+            1 => "disabled",
+            2 => "custom",
+            _ => "default",
+        }
+        .to_string(),
+        relay_urls: state
             .get_relay_urls()
-            .to_string()
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .map(str::to_string)
             .collect(),
-        auth_token: {
-            let token = state.get_relay_token().to_string();
-            (!token.trim().is_empty()).then_some(token)
-        },
-        fallback: Some(match state.get_relay_fallback() {
-            1 => "public".to_string(),
-            _ => "strict".to_string(),
-        }),
-    };
-    drop(state);
-    arg
+        relay_token: non_empty(state.get_relay_token()),
+        relay_fallback: match state.get_relay_fallback() {
+            1 => "public",
+            _ => "strict",
+        }
+        .to_string(),
+        discovery_mode: match state.get_discovery_mode() {
+            1 => "custom",
+            _ => "default",
+        }
+        .to_string(),
+        discovery_pkarr_relay_url: non_empty(state.get_discovery_pkarr_url()),
+        discovery_dns_origin: non_empty(state.get_discovery_dns_origin()),
+        history_enabled: state.get_history_enabled(),
+        discoverability: match state.get_discoverability() {
+            1 => "paired-only",
+            2 => "off",
+            _ => "everyone",
+        }
+        .to_string(),
+    }
 }
 
-/// Build a `DiscoveryConfigArg` from the current settings-page fields.
-fn discovery_arg_from_state(ui: &AppWindow) -> DiscoveryConfigArg {
-    let state = ui.global::<State>();
-    let arg = DiscoveryConfigArg {
-        mode: match state.get_discovery_mode() {
-            1 => "custom".to_string(),
-            _ => "default".to_string(),
-        },
-        pkarr_relay_url: {
-            let url = state.get_discovery_pkarr_url().to_string();
-            (!url.trim().is_empty()).then_some(url)
-        },
-        dns_origin: {
-            let origin = state.get_discovery_dns_origin().to_string();
-            (!origin.trim().is_empty()).then_some(origin)
-        },
-    };
-    drop(state);
-    arg
+/// Fill the settings-page fields from `settings` (inverse of `settings_from_state`).
+fn settings_into_state(state: &State<'_>, s: &Settings) {
+    let downloads_dir = s
+        .downloads_base()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    state.set_downloads_dir(downloads_dir.into());
+    state.set_relay_mode(match s.relay_mode.as_str() {
+        "disabled" => 1,
+        "custom" => 2,
+        _ => 0,
+    });
+    state.set_relay_urls(s.relay_urls.join("\n").into());
+    state.set_relay_token(s.relay_token.clone().unwrap_or_default().into());
+    state.set_relay_fallback(match s.relay_fallback.as_str() {
+        "public" => 1,
+        _ => 0,
+    });
+    state.set_discovery_mode(match s.discovery_mode.as_str() {
+        "custom" => 1,
+        _ => 0,
+    });
+    state.set_discovery_pkarr_url(s.discovery_pkarr_relay_url.clone().unwrap_or_default().into());
+    state.set_discovery_dns_origin(s.discovery_dns_origin.clone().unwrap_or_default().into());
+    state.set_discoverability(match s.discoverability.as_str() {
+        "paired-only" => 1,
+        "off" => 2,
+        _ => 0,
+    });
+    state.set_history_enabled(s.history_enabled);
 }
 
 fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: String, paths: Vec<PathBuf>) {
@@ -645,6 +677,7 @@ fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: St
                 }),
                 save_path: None,
             },
+            sync_bg.settings.lock().unwrap().history_enabled,
         ));
         let emitter = Arc::new(TransferEmitter {
             weak: weak.clone(),
@@ -691,15 +724,14 @@ fn start_send(sync: Sync, node: Arc<NodeService>, peer_id: String, peer_name: St
         .await
         {
             Ok(Ok(share)) => share,
-            _ => {
-                recorder.finalize(
-                    TransferStatus::Failed,
-                    None,
-                    None,
-                    None,
-                    Some("share setup timed out".to_string()),
-                );
-                let msg = "Could not start share (timed out)".to_string();
+            failed => {
+                let error = match failed {
+                    Ok(Err(e)) => format!("{e:#}"),
+                    _ => "timed out".to_string(),
+                };
+                tracing::warn!(%peer_id, "send: share setup failed: {error}");
+                let msg = format!("Could not start share: {error}");
+                recorder.finalize(TransferStatus::Failed, None, None, None, Some(error));
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = weak.upgrade() {
                         let state = ui.global::<State>();
@@ -873,6 +905,7 @@ fn auto_accept_invite(sync: &Sync, payload: serde_json::Value) {
                 }),
                 ..Ctx::default()
             },
+            sync_bg.settings.lock().unwrap().history_enabled,
         ));
         let emitter = Arc::new(TransferEmitter {
             weak: sync_bg.weak.clone(),
@@ -1130,11 +1163,9 @@ fn register_node(sync: &Sync) {
     let queue = sync.queue.clone();
     let sync_bg = sync.clone();
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(150), move || {
+        // Timer callbacks already run on the UI thread.
         for (name, payload) in queue.drain() {
-            let sync = sync_bg.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                handle_main_event(&sync, &name, payload.as_deref());
-            });
+            handle_main_event(&sync_bg, &name, payload.as_deref());
         }
     });
     std::mem::forget(timer);
@@ -1204,18 +1235,17 @@ fn register_peers(sync: &Sync) {
     {
         let sync = sync.clone();
         logic.on_select_peer(move |id: SharedString| {
-            let id = id.to_string().to_lowercase();
-            if let Some((name, detail, online)) = sync.peer_meta.lock().unwrap().get(&id).cloned() {
-                if let Some(ui) = sync.weak.upgrade() {
-                    let state = ui.global::<State>();
-                    state.set_selected_id(id.into());
-                    state.set_selected_name(name.into());
-                    state.set_selected_detail(detail.into());
-                    state.set_selected_online(online);
-                    drop(state);
-                }
-                refresh_history(&sync);
-            }
+            let Some(ui) = sync.weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<State>();
+            let id = id.to_lowercase();
+            let Some(row) = state.get_peers().iter().find(|r| r.endpoint_id == id) else {
+                return;
+            };
+            state.set_rename_mode(false);
+            show_selected(&state, Some(&row));
+            refresh_history(&sync);
         });
     }
     {
@@ -1264,10 +1294,7 @@ fn register_peers(sync: &Sync) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = weak.upgrade() {
                         let state = ui.global::<State>();
-                        state.set_selected_id("".into());
-                        state.set_selected_name("".into());
-                        state.set_selected_detail("".into());
-                        state.set_selected_online(false);
+                        show_selected(&state, None);
                         state.set_history(ModelRc::from(Rc::new(
                             VecModel::from(Vec::<HistoryRow>::new()),
                         )));
@@ -1286,22 +1313,22 @@ fn register_peers(sync: &Sync) {
             let Some(node) = sync.node.lock().unwrap().clone() else {
                 return;
             };
-            let (peer_id, peer_name) = {
-                let Some(ui) = sync.weak.upgrade() else { return };
-                let state = ui.global::<State>();
-                let p = state.get_selected_id().to_string();
-                let n = state.get_selected_name().to_string();
-                drop(ui);
-                if p.is_empty() {
-                    return;
-                }
-                (p, n)
-            };
+            let Some(ui) = sync.weak.upgrade() else { return };
+            let state = ui.global::<State>();
+            let peer_id = state.get_selected_id().to_string();
+            let peer_name = state.get_selected_name().to_string();
+            let touch = state.get_touch();
+            if peer_id.is_empty() {
+                return;
+            }
+            // One share at a time: the send-* UI state tracks a single peer.
+            if !state.get_send_active_id().is_empty() {
+                toast(&ui, "Already sending to another peer — stop that send first.", true);
+                return;
+            }
+            drop(state);
+            drop(ui);
             let sync_bg = sync.clone();
-            let touch = {
-                let Some(ui) = sync.weak.upgrade() else { return };
-                ui.global::<State>().get_touch()
-            };
             let rt_here = sync.rt.clone();
             let weak_bg = sync.weak.clone();
             rt_here.spawn_blocking(move || {
@@ -1419,7 +1446,7 @@ fn register_add_peer(sync: &Sync) {
                 if let Some(ui) = sync.weak.upgrade() {
                     let s = ui.global::<State>();
                     s.set_pairing_busy(true);
-                    s.set_pairing_status("Connecting…".into());
+                    s.set_pairing_status("".into());
                     s.set_pairing_error(false);
                 }
                 (ticket, sync.weak.clone(), sync.clone())
@@ -1669,10 +1696,8 @@ fn register_settings(sync: &Sync) {
                         let sync_bg2 = sync_bg.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = weak2.upgrade() {
-                                ui.global::<State>()
-                                    .set_my_name(info.display_name.clone().into());
+                                ui.global::<State>().set_my_name(info.display_name.into());
                                 toast(&ui, "Device name saved", false);
-                                let _ = &info;
                             }
                         });
                         refresh_peers(&sync_bg2);
@@ -1696,54 +1721,7 @@ fn register_settings(sync: &Sync) {
             let new_settings = {
                 let Some(ui) = sync.weak.upgrade() else { return };
                 let state = ui.global::<State>();
-                let s = Settings {
-                    downloads_dir: {
-                        let dir = state.get_downloads_dir().to_string();
-                        (!dir.trim().is_empty()).then_some(dir)
-                    },
-                    relay_mode: match state.get_relay_mode() {
-                        1 => "disabled".to_string(),
-                        2 => "custom".to_string(),
-                        _ => "default".to_string(),
-                    },
-                    relay_urls: state
-                        .get_relay_urls()
-                        .to_string()
-                        .lines()
-                        .map(str::trim)
-                        .filter(|line| !line.is_empty())
-                        .map(str::to_string)
-                        .collect(),
-                    relay_token: {
-                        let token = state.get_relay_token().to_string();
-                        (!token.trim().is_empty()).then_some(token)
-                    },
-                    relay_fallback: match state.get_relay_fallback() {
-                        1 => "public".to_string(),
-                        _ => "strict".to_string(),
-                    },
-                    discovery_mode: match state.get_discovery_mode() {
-                        1 => "custom".to_string(),
-                        _ => "default".to_string(),
-                    },
-                    discovery_pkarr_relay_url: {
-                        let url = state.get_discovery_pkarr_url().to_string();
-                        (!url.trim().is_empty()).then_some(url)
-                    },
-                    discovery_dns_origin: {
-                        let origin = state.get_discovery_dns_origin().to_string();
-                        (!origin.trim().is_empty()).then_some(origin)
-                    },
-                    history_enabled: state.get_history_enabled(),
-                    discoverability: match state.get_discoverability() {
-                        1 => "paired-only".to_string(),
-                        2 => "off".to_string(),
-                        _ => "everyone".to_string(),
-                    },
-                };
-                drop(state);
-                drop(ui);
-                s
+                settings_from_state(&state)
             };
 
             *sync.settings.lock().unwrap() = new_settings.clone();
@@ -1755,7 +1733,9 @@ fn register_settings(sync: &Sync) {
                     let weak = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
-                            ui.global::<State>().set_settings_status("Saved.".into());
+                            let state = ui.global::<State>();
+                            state.set_settings_status("Saved.".into());
+                            state.set_settings_failed(false);
                             toast(&ui, "Settings saved", false);
                         }
                     });
@@ -1780,7 +1760,9 @@ fn register_settings(sync: &Sync) {
                     let weak = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
-                            ui.global::<State>().set_settings_status(msg.clone().into());
+                            let state = ui.global::<State>();
+                            state.set_settings_status(msg.clone().into());
+                            state.set_settings_failed(true);
                             toast(&ui, &msg, true);
                         }
                     });
@@ -1795,7 +1777,7 @@ fn register_settings(sync: &Sync) {
             let Some(ui) = sync.weak.upgrade() else {
                 return;
             };
-            let arg = relay_arg_from_state(&ui);
+            let arg = settings_from_state(&ui.global::<State>()).relay_config_arg();
             let weak = sync.weak.clone();
             sync.rt.spawn(async move {
                 let _ = slint::invoke_from_event_loop({
@@ -1805,6 +1787,7 @@ fn register_settings(sync: &Sync) {
                             let s = ui.global::<State>();
                             s.set_relay_testing(true);
                             s.set_relay_test_status("Testing…".into());
+                            s.set_relay_test_failed(false);
                         }
                     }
                 });
@@ -1815,6 +1798,7 @@ fn register_settings(sync: &Sync) {
                         if let Some(ui) = weak.upgrade() {
                             let s = ui.global::<State>();
                             s.set_relay_testing(false);
+                            s.set_relay_test_failed(result.is_err());
                             match result {
                                 Ok(resp) => {
                                     let msg = match resp.url {
@@ -1845,7 +1829,7 @@ fn register_settings(sync: &Sync) {
             let Some(ui) = sync.weak.upgrade() else {
                 return;
             };
-            let arg = relay_arg_from_state(&ui);
+            let arg = settings_from_state(&ui.global::<State>()).relay_config_arg();
             let weak = sync.weak.clone();
             sync.rt.spawn(async move {
                 match get_relay_status(Some(arg)).await {
@@ -1865,7 +1849,9 @@ fn register_settings(sync: &Sync) {
                         let fell_back = resp.fell_back_to_public;
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = weak.upgrade() {
-                                ui.global::<State>().set_relay_status(label.into());
+                                let state = ui.global::<State>();
+                                state.set_relay_status(label.into());
+                                state.set_relay_status_failed(false);
                                 if fell_back {
                                     toast(
                                         &ui,
@@ -1882,7 +1868,9 @@ fn register_settings(sync: &Sync) {
                             let weak = weak.clone();
                             move || {
                                 if let Some(ui) = weak.upgrade() {
-                                    ui.global::<State>().set_relay_status(msg.clone().into());
+                                    let state = ui.global::<State>();
+                                    state.set_relay_status(msg.clone().into());
+                                    state.set_relay_status_failed(true);
                                     toast(&ui, &msg, true);
                                 }
                             }
@@ -1899,7 +1887,7 @@ fn register_settings(sync: &Sync) {
             let Some(ui) = sync.weak.upgrade() else {
                 return;
             };
-            let arg = discovery_arg_from_state(&ui);
+            let arg = settings_from_state(&ui.global::<State>()).discovery_config_arg();
             let weak = sync.weak.clone();
             sync.rt.spawn(async move {
                 let _ = slint::invoke_from_event_loop({
@@ -1909,6 +1897,7 @@ fn register_settings(sync: &Sync) {
                             let s = ui.global::<State>();
                             s.set_discovery_testing(true);
                             s.set_discovery_test_status("Testing…".into());
+                            s.set_discovery_test_failed(false);
                         }
                     }
                 });
@@ -1919,6 +1908,7 @@ fn register_settings(sync: &Sync) {
                         if let Some(ui) = weak.upgrade() {
                             let s = ui.global::<State>();
                             s.set_discovery_testing(false);
+                            s.set_discovery_test_failed(result.is_err());
                             match result {
                                 Ok(resp) => {
                                     let msg = match resp.url {
@@ -1991,39 +1981,9 @@ pub fn run() {
     let ui = AppWindow::new().expect("failed to create AppWindow");
     let main_queue = MainQueue::default();
 
-    let initial_downloads_dir = settings
-        .lock()
-        .unwrap()
-        .downloads_path()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
     {
-        let s = settings.lock().unwrap();
         let state = ui.global::<State>();
-        state.set_downloads_dir(initial_downloads_dir.clone().into());
-        state.set_relay_mode(match s.relay_mode.as_str() {
-            "disabled" => 1,
-            "custom" => 2,
-            _ => 0,
-        });
-        state.set_relay_urls(s.relay_urls.join("\n").into());
-        state.set_relay_token(s.relay_token.clone().unwrap_or_default().into());
-        state.set_relay_fallback(match s.relay_fallback.as_str() {
-            "public" => 1,
-            _ => 0,
-        });
-        state.set_discovery_mode(match s.discovery_mode.as_str() {
-            "custom" => 1,
-            _ => 0,
-        });
-        state.set_discovery_pkarr_url(s.discovery_pkarr_relay_url.clone().unwrap_or_default().into());
-        state.set_discovery_dns_origin(s.discovery_dns_origin.clone().unwrap_or_default().into());
-        state.set_discoverability(match s.discoverability.as_str() {
-            "paired-only" => 1,
-            "off" => 2,
-            _ => 0,
-        });
-        state.set_history_enabled(s.history_enabled);
+        settings_into_state(&state, &settings.lock().unwrap());
         state.set_my_name("…".into());
     }
 
@@ -2045,9 +2005,8 @@ pub fn run() {
         share: Arc::new(tokio::sync::Mutex::new(None)),
         history,
         settings,
-        settings_path: settings_path.clone(),
+        settings_path,
         node: Arc::new(Mutex::new(None)),
-        peer_meta: Arc::new(Mutex::new(HashMap::new())),
         pair_requests: Arc::new(Mutex::new(Vec::new())),
         recv_cancels: ReceiveCancels::default(),
         queue: main_queue.clone(),
@@ -2074,9 +2033,6 @@ pub fn run() {
     register_add_peer(&sync);
     register_history(&sync);
     register_settings(&sync);
-
-    let _ = main_queue;
-    let _ = settings_path;
 
     ui.run().expect("UI error");
 }

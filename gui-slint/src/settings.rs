@@ -118,20 +118,23 @@ impl Settings {
         }
     }
 
-    /// Root received files are saved under. An explicitly chosen folder is
-    /// used as-is; otherwise the system Downloads dir. The app-owned
-    /// "tunnelmanager" subfolder is appended in both cases so received files
-    /// never mix with unrelated downloads; the per-peer subfolder is joined
-    /// by the receive flow on top of this.
-    pub fn downloads_path(&self) -> Option<std::path::PathBuf> {
-        let base = self
-            .downloads_dir
+    /// The folder the user picked (or the system Downloads dir). This is what
+    /// the settings page shows and saves back into `downloads_dir`.
+    pub fn downloads_base(&self) -> Option<std::path::PathBuf> {
+        self.downloads_dir
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from)
-            .or_else(default_downloads_dir)?;
-        Some(base.join("tunnelmanager"))
+            .or_else(default_downloads_dir)
+    }
+
+    /// Root received files are saved under: `downloads_base()` plus the
+    /// app-owned "tunnelmanager" subfolder, so received files never mix with
+    /// unrelated downloads; the per-peer subfolder is joined by the receive
+    /// flow on top of this.
+    pub fn downloads_path(&self) -> Option<std::path::PathBuf> {
+        Some(self.downloads_base()?.join("tunnelmanager"))
     }
 }
 

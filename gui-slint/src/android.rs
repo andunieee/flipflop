@@ -50,14 +50,6 @@ mod imp {
         data_dir().join("outbox")
     }
 
-    /// Number of files currently staged in the outbox (for the UI hint).
-    #[allow(dead_code)]
-    pub fn outbox_count() -> usize {
-        std::fs::read_dir(outbox_dir())
-            .map(|entries| entries.flatten().filter(|e| e.path().is_file()).count())
-            .unwrap_or(0)
-    }
-
     /// Remove staged outbox files after they have been shared.
     pub fn clear_outbox(paths: &[PathBuf]) {
         let dir = outbox_dir();
@@ -488,6 +480,7 @@ mod imp {
         let mut writer = std::io::BufWriter::new(file);
         let buf = env.new_byte_array(64 * 1024).map_err(|e| e.to_string())?;
         let buf_obj = buf.as_ref();
+        let mut chunk = vec![0i8; 64 * 1024];
         loop {
             let n = env
                 .call_method(input, "read", "([B)I", &[JValue::Object(buf_obj)])
@@ -497,8 +490,8 @@ mod imp {
             if n <= 0 {
                 break;
             }
-            let mut chunk = vec![0i8; n as usize];
-            env.get_byte_array_region(&buf, 0, &mut chunk)
+            let chunk = &mut chunk[..n as usize];
+            env.get_byte_array_region(&buf, 0, chunk)
                 .map_err(|e| e.to_string())?;
             // jbyte is i8; reinterpret as raw bytes for the file.
             let bytes: Vec<u8> = chunk.iter().map(|b| *b as u8).collect();
@@ -518,11 +511,6 @@ mod imp {
 
     /// No-op on desktop (the Android app handle is never set there).
     pub fn show_toast(_msg: &str, _error: bool) {}
-
-    /// Always empty on desktop.
-    pub fn outbox_count() -> usize {
-        0
-    }
 
     /// Unused on desktop.
     pub fn clear_outbox(_paths: &[PathBuf]) {}

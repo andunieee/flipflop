@@ -250,4 +250,33 @@ export component AppWindow inherits Window {
             }
         }
     }
+
+    // Desktop toast (Android shows native toasts instead). Click to dismiss;
+    // Rust clears it after a few seconds.
+    if State.toast-text != "": Rectangle {
+        width: min(toast-text.preferred-width + 32px, root.width - 32px);
+        height: toast-text.preferred-height + 20px;
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 20px;
+        border-radius: Theme.radius;
+        background: Theme.card-bg;
+        border-width: 1px;
+        border-color: State.toast-error ? Theme.error : Theme.accent-soft;
+        drop-shadow-color: #0006;
+        drop-shadow-blur: 12px;
+        drop-shadow-offset-y: 3px;
+
+        toast-text := Text {
+            x: 16px;
+            y: 10px;
+            width: parent.width - 32px;
+            text: State.toast-text;
+            color: State.toast-error ? Theme.error : Theme.text-strong;
+            wrap: word-wrap;
+        }
+        TouchArea {
+            clicked => { State.toast-text = ""; }
+            mouse-cursor: pointer;
+        }
+    }
 }

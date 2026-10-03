@@ -29,15 +29,24 @@ struct Row {
 pub struct Recorder {
     store: Arc<TransferHistoryStore>,
     direction: TransferDirection,
+    /// `false` when history recording is turned off in settings: no row is
+    /// ever opened, so every later `note`/`finalize` is a no-op.
+    enabled: bool,
     ctx: Mutex<Ctx>,
     row: Mutex<Row>,
 }
 
 impl Recorder {
-    pub fn new(store: Arc<TransferHistoryStore>, direction: TransferDirection, ctx: Ctx) -> Self {
+    pub fn new(
+        store: Arc<TransferHistoryStore>,
+        direction: TransferDirection,
+        ctx: Ctx,
+        enabled: bool,
+    ) -> Self {
         Self {
             store,
             direction,
+            enabled,
             ctx: Mutex::new(ctx),
             row: Mutex::new(Row::default()),
         }
@@ -146,6 +155,9 @@ impl Recorder {
     }
 
     fn open_row(&self) {
+        if !self.enabled {
+            return;
+        }
         let mut row = self.row.lock().unwrap_or_else(|p| p.into_inner());
         if row.id.is_some() {
             return;

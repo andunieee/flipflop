@@ -1,11 +1,5 @@
 // Shared state + logic hooks between the Rust backend and every page.
 
-export struct SendItem {
-    name: string,
-    size: string,
-    is-dir: bool,
-}
-
 export struct PeerRow {
     endpoint-id: string,
     name: string,
@@ -44,6 +38,9 @@ export global State {
     in-out property <bool> show-peer-picker: false;
     // Shared content staged from the system share sheet.
     in-out property <int> outbox-count: 0;
+    // Desktop in-app toast (Android uses native toasts); "" = hidden.
+    in-out property <string> toast-text: "";
+    in-out property <bool> toast-error: false;
 
     // sidebar
     in-out property <string> my-name: "";
@@ -93,16 +90,20 @@ export global State {
     in-out property <string> relay-token: "";
     in-out property <int> relay-fallback: 0; // 0 strict, 1 public
     in-out property <string> relay-test-status: "";
+    in-out property <bool> relay-test-failed: false;
     in-out property <bool> relay-testing: false;
     in-out property <string> relay-status: "";
+    in-out property <bool> relay-status-failed: false;
     in-out property <int> discovery-mode: 0; // 0 default, 1 custom
     in-out property <string> discovery-pkarr-url: "";
     in-out property <string> discovery-dns-origin: "";
     in-out property <string> discovery-test-status: "";
+    in-out property <bool> discovery-test-failed: false;
     in-out property <bool> discovery-testing: false;
     in-out property <int> discoverability: 0; // 0 everyone, 1 paired-only, 2 off
     in-out property <bool> history-enabled: true;
     in-out property <string> settings-status: "";
+    in-out property <bool> settings-failed: false;
 }
 
 export global Logic {
