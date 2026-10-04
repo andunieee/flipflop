@@ -1,11 +1,13 @@
 package dev.flipflop.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -170,10 +172,11 @@ private fun SideRow(active: Boolean, onClick: () -> Unit, height: androidx.compo
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val hovered by source.collectIsHoveredAsState()
-    val bg by animateColorAsState(if (active) c.accentSoft else if (pressed) c.chipBgHover else if (hovered) c.chipBg else Color.Transparent)
+    // Fade to/from the hover colour's own transparent: Color.Transparent is black, and lerping from it flashes dark.
+    val bg by animateColorAsState(if (active) c.accentSoft else if (pressed) c.chipBgHover else if (hovered) c.chipBg else c.chipBg.copy(alpha = 0f), tween(120))
     Row(
         Modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(Theme.d.radius)).background(bg)
-            .clickable(source, indication = null, onClick = onClick).padding(horizontal = Theme.d.space3),
+            .hoverable(source).clickable(source, indication = null, onClick = onClick).padding(horizontal = Theme.d.space3),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) { content() }
