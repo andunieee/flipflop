@@ -3,6 +3,8 @@
 export struct PeerRow {
     endpoint-id: string,
     name: string,
+    // one or two letters for the avatar
+    initials: string,
     detail: string,
     online: bool,
     // true: the peer asked to pair with us (Accept/Decline buttons)
@@ -10,6 +12,27 @@ export struct PeerRow {
     // true: discovered nearby, can be invited to pair ("Pair" button)
     is-suggestion: bool,
     trusted: bool,
+    // a send to / receive from this peer is in flight
+    sending: bool,
+    receiving: bool,
+}
+
+// One send or receive, shown on its peer's page until dismissed.
+export struct TransferRow {
+    // unique per transfer; passed back to stop/cancel/dismiss
+    key: string,
+    peer-id: string,
+    sending: bool,
+    // still running (Stop/Cancel) vs. finished (Dismiss)
+    active: bool,
+    title: string,
+    progress: float,
+    progress-label: string,
+    speed: string,
+    status: string,
+    // secondary line, e.g. "2 files renamed to avoid overwriting"
+    note: string,
+    error: string,
 }
 
 export struct HistoryRow {
@@ -17,12 +40,13 @@ export struct HistoryRow {
     title: string,
     direction: string,
     status: string,
+    // badge colour: "ok" | "error" | "warn" | "muted" | "active"
+    tone: string,
     detail: string,
     date: string,
     size: string,
     speed: string,
     can-open: bool,
-    failed: bool,
 }
 
 export global State {
@@ -60,30 +84,23 @@ export global State {
     // peer page
     in-out property <string> selected-id: "";
     in-out property <string> selected-name: "";
+    in-out property <string> selected-initials: "";
     in-out property <string> selected-detail: "";
     in-out property <bool> selected-online: false;
     in-out property <bool> rename-mode: false;
     in-out property <string> rename-input: "";
     in-out property <[HistoryRow]> history;
 
-    // active send (for the selected peer)
-    in-out property <string> send-active-id: "";
-    in-out property <bool> share-starting: false;
-    in-out property <int> send-peers: 0;
-    in-out property <string> send-status: "";
-    in-out property <string> send-error: "";
-    in-out property <float> send-progress: 0.0;
-    in-out property <string> send-progress-label: "";
-
-    // active receives (any peer); panels show only the selected match
-    in-out property <string> receive-active-id: "";
-    in-out property <float> receive-progress: 0.0;
-    in-out property <string> receive-progress-label: "";
-    in-out property <string> receive-speed: "";
-    in-out property <string> receive-status: "";
-    in-out property <string> receive-error: "";
+    // a send to the selected peer is in flight (hides "Send files…")
+    in-out property <bool> selected-sending: false;
+    // every send/receive; each peer page shows its own
+    in-out property <[TransferRow]> transfers;
+    // the selected peer's subset of `transfers` (kept in sync by Rust)
+    in-out property <[TransferRow]> visible-transfers;
 
     // settings page
+    // device-name field (kept apart from my-name so refreshes don't clobber typing)
+    in-out property <string> name-input: "";
     in-out property <string> downloads-dir: "";
     in-out property <int> relay-mode: 0; // 0 default, 1 disabled, 2 custom
     in-out property <string> relay-urls: "";
@@ -118,8 +135,9 @@ export global Logic {
     callback rename-peer-cancel();
     callback remove-peer();
     callback send-to-peer();
-    callback stop-share();
-    callback cancel-receive();
+    callback stop-share(string);
+    callback cancel-receive(string);
+    callback dismiss-transfer(string);
 
     // per-peer history
     callback refresh-history();

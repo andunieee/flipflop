@@ -8,7 +8,9 @@ pub mod android;
 pub mod app;
 pub mod emitter;
 pub mod format;
+pub mod platform;
 pub mod recorder;
 pub mod settings;
+pub mod transfers;
 
 slint::include_modules!();

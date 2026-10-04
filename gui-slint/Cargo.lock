@@ -8038,6 +8038,7 @@ dependencies = [
  "dirs 5.0.1",
  "engine",
  "iroh",
+ "iroh-blobs",
  "jni 0.21.1",
  "open",
  "rfd",

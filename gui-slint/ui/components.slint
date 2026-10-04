@@ -1,76 +1,130 @@
-import { Button, ScrollView } from "std-widgets.slint";
-import { State, Logic } from "globals.slint";
+import { State } from "globals.slint";
 
 // App-wide palette and metrics. Centralized so everything stays consistent.
 export global Theme {
     // surfaces: dark blue-grey ramp
-    out property <color> window-bg: #15151d;
-    out property <color> sidebar-bg: #1c1c26;
-    out property <color> card-bg: #22222e;
-    out property <color> card-bg-hover: #262635;
-    out property <color> inset-bg: #1a1a24;
+    out property <color> window-bg: #111318;
+    out property <color> sidebar-bg: #15171e;
+    out property <color> card-bg: #1b1e27;
+    out property <color> card-bg-hover: #212532;
+    out property <color> inset-bg: #13151b;
+    out property <color> border: #262a36;
+    out property <color> border-strong: #343949;
 
     // text
-    out property <color> text-strong: #f0f0f6;
-    out property <color> text: #c8c8d8;
-    out property <color> text-muted: #8f8fa5;
-    out property <color> text-faint: #67677d;
+    out property <color> text-strong: #f2f3f7;
+    out property <color> text: #c7cad5;
+    out property <color> text-muted: #8a8fa0;
+    out property <color> text-faint: #5e6374;
 
     // accents
-    out property <color> accent: #6c7bff;
-    out property <color> accent-hover: #7e8bff;
-    out property <color> accent-press: #5a66d8;
-    out property <color> accent-soft: #2b2f4a;
+    out property <color> accent: #6d7cff;
+    out property <color> accent-hover: #808dff;
+    out property <color> accent-press: #5866e0;
+    out property <color> accent-soft: #252a48;
+    out property <color> accent-text: #aeb6ff;
 
     // status
-    out property <color> online: #5fd89a;
-    out property <color> offline: #464654;
-    out property <color> warn: #e0b040;
-    out property <color> info: #4aa8e0;
-    out property <color> error: #ff7a8f;
-    out property <color> success: #7dcf8f;
+    out property <color> online: #4ade80;
+    out property <color> offline: #3d4150;
+    out property <color> warn: #f0b429;
+    out property <color> warn-soft: #362d14;
+    out property <color> info: #38bdf8;
+    out property <color> info-soft: #142e42;
+    out property <color> error: #f87171;
+    out property <color> error-soft: #3a1c21;
+    out property <color> success: #4ade80;
+    out property <color> success-soft: #15342a;
 
     // interactive neutrals
-    out property <color> chip-bg: #2b2b38;
-    out property <color> chip-bg-hover: #343444;
+    out property <color> chip-bg: #232734;
+    out property <color> chip-bg-hover: #2b3040;
+    out property <color> chip-bg-press: #333849;
 
     // radii
     out property <length> radius-sm: 6px;
     out property <length> radius: 10px;
     out property <length> radius-lg: 14px;
+
+    // spacing scale
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-5: 24px;
+
+    // type scale (touch devices get a notch bigger)
+    out property <length> font-xs: State.touch ? 12px : 11px;
+    out property <length> font-sm: State.touch ? 13px : 12px;
+    out property <length> font-md: State.touch ? 15px : 13px;
+    out property <length> font-lg: State.touch ? 17px : 15px;
+    out property <length> font-xl: State.touch ? 20px : 22px;
+
+    // metrics
+    out property <length> control-height: State.touch ? 44px : 32px;
+    out property <length> page-padding: State.touch ? 16px : 28px;
+    out property <length> card-padding: State.touch ? 14px : 16px;
 }
 
-export component PageTitle inherits Text {
-    in property <string> label;
-    font-size: 24px;
-    font-weight: 800;
-    color: Theme.text-strong;
-    text: root.label;
+export component PageTitle inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: Theme.space-1;
+
+    Text {
+        text: root.title;
+        font-size: Theme.font-xl;
+        font-weight: 700;
+        color: Theme.text-strong;
+    }
+    if root.subtitle != "": Text {
+        text: root.subtitle;
+        font-size: Theme.font-sm;
+        color: Theme.text-muted;
+        wrap: word-wrap;
+    }
 }
 
 export component SectionTitle inherits Text {
     in property <string> label;
-    font-size: 14px;
-    font-weight: 700;
+    font-size: Theme.font-md;
+    font-weight: 650;
     color: Theme.text-strong;
+    text: root.label;
+    vertical-alignment: center;
+}
+
+// Small all-caps label above a group (sidebar "PEERS", settings fields).
+export component Overline inherits Text {
+    in property <string> label;
+    font-size: Theme.font-xs;
+    font-weight: 650;
+    letter-spacing: 0.6px;
+    color: Theme.text-faint;
     text: root.label;
 }
 
 export component Card inherits Rectangle {
-    border-radius: Theme.radius;
+    // Cards hug their content; page-level spacers/lists take spare height.
+    vertical-stretch: 0;
+    border-radius: Theme.radius-lg;
     background: Theme.card-bg;
-    drop-shadow-color: #0003;
-    drop-shadow-blur: 8px;
-    drop-shadow-offset-y: 2px;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border;
 }
 
 export component ProgressBar inherits Rectangle {
     in property <float> value; // 0..1
-    in property <string> label;
+    in property <color> tint: Theme.accent;
 
-    border-radius: self.height / 2;
+    height: 6px;
+    border-radius: 3px;
     background: Theme.inset-bg;
-    min-height: 14px;
 
     Rectangle {
         x: 0;
@@ -78,24 +132,15 @@ export component ProgressBar inherits Rectangle {
         height: parent.height;
         width: parent.width * clamp(root.value, 0.0, 1.0);
         border-radius: parent.border-radius;
-        background: @linear-gradient(90deg, #5a6cff, #8a7bff);
-        animate width { duration: 120ms; }
-    }
-
-    if root.label != "": Text {
-        text: root.label;
-        color: white;
-        font-size: 10px;
-        font-weight: 600;
-        vertical-alignment: center;
-        horizontal-alignment: center;
+        background: root.tint;
+        animate width { duration: 150ms; easing: ease-out; }
     }
 }
 
 export component HintText inherits Text {
     in property <string> label;
     color: Theme.text-muted;
-    font-size: 12px;
+    font-size: Theme.font-sm;
     text: root.label;
     wrap: word-wrap;
 }
@@ -104,7 +149,7 @@ export component StatusText inherits Text {
     in property <string> label;
     in property <bool> error;
     color: root.error ? Theme.error : Theme.success;
-    font-size: 12px;
+    font-size: Theme.font-sm;
     font-weight: 500;
     text: root.label;
     wrap: word-wrap;
@@ -113,104 +158,186 @@ export component StatusText inherits Text {
 export component FieldLabel inherits Text {
     in property <string> label;
     color: Theme.text;
-    font-size: 12px;
+    font-size: Theme.font-sm;
     font-weight: 600;
     text: root.label;
 }
 
-// Status dot reused everywhere (online indicator, list marker).
+// Presence dot (online indicator, list marker).
 export component Dot inherits Rectangle {
     in property <bool> online;
-    width: 8px;
-    height: 8px;
-    border-radius: 4px;
+    in property <length> size: 8px;
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
     background: root.online ? Theme.online : Theme.offline;
 }
 
-// Solid accent button.
-export component PrimaryButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> enabled: true;
-    callback clicked;
+// Round initials avatar with an optional presence dot.
+export component Avatar inherits Rectangle {
+    in property <string> initials;
+    in property <length> size: 32px;
+    in property <bool> show-presence: false;
+    in property <bool> online;
+    in property <color> tint: Theme.accent-soft;
+    in property <color> ink: Theme.accent-text;
 
-    min-height: 32px;
-    border-radius: Theme.radius-sm;
-    background: !root.enabled ? Theme.accent-soft : touch.pressed ? Theme.accent-press : touch.has-hover ? Theme.accent-hover : Theme.accent;
-    touch := TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-        mouse-cursor: pointer;
+    width: root.size;
+    height: root.size;
+
+    Rectangle {
+        border-radius: root.size / 2;
+        background: root.tint;
     }
-    animate background { duration: 90ms; }
+    Text {
+        text: root.initials == "" ? "?" : root.initials;
+        color: root.ink;
+        font-size: root.size * 0.38;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.show-presence: Rectangle {
+        x: root.size - self.width + 1px;
+        y: root.size - self.height + 1px;
+        width: max(10px, root.size * 0.3);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Theme.window-bg;
+
+        Dot {
+            size: parent.width - 4px;
+            online: root.online;
+        }
+    }
+}
+
+// Pill with a tinted background. tone: "ok" | "error" | "warn" | "muted" | "active"
+export component Badge inherits Rectangle {
+    in property <string> label;
+    in property <string> tone: "muted";
+
+    border-radius: self.height / 2;
+    background: root.tone == "ok" ? Theme.success-soft
+        : root.tone == "error" ? Theme.error-soft
+        : root.tone == "warn" ? Theme.warn-soft
+        : root.tone == "active" ? Theme.info-soft
+        : Theme.chip-bg;
 
     HorizontalLayout {
-        alignment: center;
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 2px;
+        padding-bottom: 2px;
 
         Text {
             text: root.label;
-            color: root.enabled ? white : Theme.text-faint;
+            font-size: Theme.font-xs;
+            font-weight: 600;
+            color: root.tone == "ok" ? Theme.success
+                : root.tone == "error" ? Theme.error
+                : root.tone == "warn" ? Theme.warn
+                : root.tone == "active" ? Theme.info
+                : Theme.text-muted;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Circle with a direction arrow: up (sending) or down (receiving).
+export component DirectionIcon inherits Rectangle {
+    in property <bool> sending;
+    in property <length> size: 32px;
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    background: root.sending ? Theme.warn-soft : Theme.info-soft;
+
+    Text {
+        text: root.sending ? "↑" : "↓";
+        color: root.sending ? Theme.warn : Theme.info;
+        font-size: root.size * 0.5;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Buttons share one shape: fixed height, rounded, centered label.
+component ButtonBase inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <color> fill;
+    in property <color> fill-hover;
+    in property <color> fill-press;
+    in property <color> ink;
+    out property <bool> hovered: touch.has-hover;
+    callback clicked;
+
+    min-height: Theme.control-height;
+    min-width: Theme.control-height;
+    border-radius: Theme.radius-sm + 2px;
+    background: !root.enabled ? root.fill
+        : touch.pressed ? root.fill-press
+        : touch.has-hover ? root.fill-hover
+        : root.fill;
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background { duration: 90ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: root.enabled ? pointer : default;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: Theme.space-3 + 2px;
+        padding-right: Theme.space-3 + 2px;
+
+        Text {
+            text: root.label;
+            color: root.ink;
+            font-size: Theme.font-md;
             font-weight: 600;
             vertical-alignment: center;
+            horizontal-alignment: center;
         }
     }
 }
 
-// Subtle neutral button (secondary actions, dialogs).
-export component GhostButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> enabled: true;
-    callback clicked;
-
-    min-height: 32px;
-    border-radius: Theme.radius-sm;
-    touch := TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-        mouse-cursor: pointer;
-    }
-    background: touch.pressed ? Theme.chip-bg : touch.has-hover ? Theme.chip-bg-hover : transparent;
-    animate background { duration: 90ms; }
-
-    HorizontalLayout {
-        alignment: center;
-        padding-left: 12px;
-        padding-right: 12px;
-
-        Text {
-            text: root.label;
-            color: root.enabled ? Theme.text : Theme.text-faint;
-            font-weight: 500;
-            vertical-alignment: center;
-        }
-    }
+// Solid accent button (the main action of a view).
+export component PrimaryButton inherits ButtonBase {
+    fill: Theme.accent;
+    fill-hover: Theme.accent-hover;
+    fill-press: Theme.accent-press;
+    ink: white;
 }
 
-// Subtle destructive button (Forget, delete rows).
-export component DangerButton inherits Rectangle {
-    in property <string> label;
-    callback clicked;
+// Neutral filled button (secondary actions).
+export component SecondaryButton inherits ButtonBase {
+    fill: Theme.chip-bg;
+    fill-hover: Theme.chip-bg-hover;
+    fill-press: Theme.chip-bg-press;
+    ink: Theme.text-strong;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+}
 
-    min-height: 32px;
-    border-radius: Theme.radius-sm;
-    ty := TouchArea {
-        clicked => { root.clicked(); }
-        mouse-cursor: pointer;
-    }
-    background: ty.pressed ? #6a2430 : ty.has-hover ? #3a2430 : transparent;
-    animate background { duration: 90ms; }
+// Borderless button (tertiary actions: Refresh, Cancel, Rename).
+export component GhostButton inherits ButtonBase {
+    fill: transparent;
+    fill-hover: Theme.chip-bg;
+    fill-press: Theme.chip-bg-hover;
+    ink: Theme.text;
+}
 
-    HorizontalLayout {
-        alignment: center;
-        padding-left: 12px;
-        padding-right: 12px;
-
-        Text {
-            text: root.label;
-            color: Theme.error;
-            font-weight: 500;
-            vertical-alignment: center;
-        }
-    }
+// Destructive action (Forget, delete rows).
+export component DangerButton inherits ButtonBase {
+    in property <bool> solid: false;
+    fill: root.solid ? #c2414f : transparent;
+    fill-hover: root.solid ? #d24b5a : Theme.error-soft;
+    fill-press: root.solid ? #a93744 : #4a2229;
+    ink: root.solid ? white : Theme.error;
 }

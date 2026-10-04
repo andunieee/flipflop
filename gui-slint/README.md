@@ -16,10 +16,16 @@ Implemented:
   one of the suggested peers: LAN mDNS neighbours and inbound pair requests
   (`request_nearby_pair` / `accept_nearby_invite`, decline supported).
 - **Send** — pick files/folders, share them, deliver directly to the peer with
-  `invite_paired_device`; live progress, stop sharing.
+  `invite_paired_device`; live progress and speed, stop sharing. The share
+  closes by itself once the peer has everything.
 - **Receive** — automatic: paired peers' file invites are accepted and
   downloaded into `<downloads folder>/tunnelmanager/<peer-name>` without
-  prompts; progress + cancel; conflict renaming recorded.
+  prompts; progress + cancel; conflict renaming recorded. Cancelled/failed
+  receives keep their partial store for resume; deleting the history row
+  frees it.
+- **Transfers** — any number of sends and receives run at once (different
+  peers); each peer's page shows its own transfer cards, and the sidebar marks
+  peers with a transfer in flight (↑/↓).
 - **Settings** — downloads folder, own device name, relay mode (default /
   disabled / custom URLs + auth token), local discovery (everyone / paired
   only / off), history toggle; persisted to `settings.json`.
@@ -77,8 +83,8 @@ cd gui-slint
 cargo apk run -p tunnelmanager-slint
 ```
 
-Logs: `adb logcat -s slint RustStdoutStderr` (tracing output is not wired to
-logcat yet; `RustStdoutStderr` shows panics).
+Logs: `adb logcat -s tunnelmanager RustStdoutStderr` (`tracing` output goes
+to logcat under the `tunnelmanager` tag; `RustStdoutStderr` shows panics).
 
 The manifest (package `dev.tunnelmanager.slint`, min SDK 26, share-sheet
 intent filters, INTERNET permission) is generated from
@@ -99,11 +105,26 @@ carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
 - `src/lib.rs` — crate root: shared by the desktop bin and the Android
   `cdylib`.
 - `src/main.rs` — desktop entry point.
-- `src/app.rs` — UI wiring, share/receive flows, per-platform dialog/
-  clipboard/open hooks.
+- `src/app.rs` — startup, node events, peers/pairing/history/settings wiring.
+- `src/transfers.rs` — send and receive flows; one `TransferRow` per transfer.
+- `src/platform.rs` — per-platform clipboard, toasts, dialogs, "open", data
+  dir and logging.
 - `src/android.rs` — Android platform services (JNI clipboard + toast,
   share-sheet outbox, `android_main`).
 - `src/emitter.rs` — the node service's `EventEmitter` (an event queue the UI
-  drains on a timer) and the transfer-event → UI-state mapping.
+  drains on a timer) and `apply_transfer_event`, the engine event → transfer
+  row mapping.
 - `src/recorder.rs` — slim port of the Tauri shell's history recorder.
 - `src/settings.rs` — settings persistence.
+- `examples/screenshots.rs` — renders every page with sample data, headless.
+
+## Development
+
+```sh
+cargo test                       # pure logic: formatting, event mapping, recorder, settings
+cargo run --example screenshots -- /tmp/shots   # PPM renders of each page (desktop + phone)
+```
+
+The screenshot example uses Slint's software renderer, so it needs no display
+and starts no node — handy for checking layout changes. The std-widgets are
+pinned to the `fluent-dark` style in `build.rs`.

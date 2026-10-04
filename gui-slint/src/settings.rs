@@ -149,3 +149,82 @@ fn default_downloads_dir() -> Option<std::path::PathBuf> {
 fn default_downloads_dir() -> Option<std::path::PathBuf> {
     dirs::download_dir()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_or_corrupt_file_gives_defaults() {
+        let dir = std::env::temp_dir().join(format!("tm-slint-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        assert!(Settings::load(&path).history_enabled);
+        std::fs::write(&path, "{not json").unwrap();
+        assert_eq!(Settings::load(&path).relay_mode, "default");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = std::env::temp_dir().join(format!("tm-slint-settings-rt-{}", std::process::id()));
+        let path = dir.join("nested/settings.json");
+        let settings = Settings {
+            downloads_dir: Some("/data/in".into()),
+            relay_mode: "custom".into(),
+            relay_urls: vec!["https://relay.example".into()],
+            discoverability: "off".into(),
+            history_enabled: false,
+            ..Settings::default()
+        };
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.downloads_dir.as_deref(), Some("/data/in"));
+        assert_eq!(loaded.relay_urls, ["https://relay.example"]);
+        assert!(!loaded.history_enabled);
+        assert!(matches!(
+            loaded.discoverability(),
+            engine::Discoverability::Off
+        ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn partial_files_fill_in_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"relay_mode":"disabled"}"#).unwrap();
+        assert!(matches!(s.relay_mode(), engine::RelayModeOption::Disabled));
+        assert_eq!(s.relay_fallback, "strict");
+        assert!(s.history_enabled);
+    }
+
+    #[test]
+    fn custom_relays_skip_blank_and_invalid_urls() {
+        let s = Settings {
+            relay_mode: "custom".into(),
+            relay_urls: vec![
+                " ".into(),
+                "not a url".into(),
+                "https://relay.example".into(),
+            ],
+            relay_token: Some(String::new()),
+            ..Settings::default()
+        };
+        match s.relay_mode() {
+            engine::RelayModeOption::Custom { urls, auth_token } => {
+                assert_eq!(urls.len(), 1);
+                assert!(auth_token.is_none());
+            }
+            other => panic!("expected custom relays, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn downloads_path_appends_app_folder_once() {
+        let s = Settings {
+            downloads_dir: Some(" /data/in ".into()),
+            ..Settings::default()
+        };
+        assert_eq!(s.downloads_base(), Some("/data/in".into()));
+        assert_eq!(s.downloads_path(), Some("/data/in/tunnelmanager".into()));
+    }
+}

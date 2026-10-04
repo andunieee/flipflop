@@ -1,160 +1,185 @@
 import { ScrollView, LineEdit } from "std-widgets.slint";
 import { State, Logic, PeerRow } from "globals.slint";
 import {
-    Theme, Card, HintText, StatusText, SectionTitle,
-    PrimaryButton, GhostButton,
+    Theme, Card, HintText, StatusText, SectionTitle, PageTitle, Avatar,
+    PrimaryButton, SecondaryButton, GhostButton,
 } from "components.slint";
 
-component SuggestionRow inherits Card {
+component SuggestionRow inherits Rectangle {
     in property <PeerRow> entry;
-    min-height: State.touch ? 60px : 48px;
+
+    border-radius: Theme.radius;
+    background: root.entry.is-request ? Theme.accent-soft : Theme.inset-bg;
+    border-width: 1px;
+    border-color: root.entry.is-request ? #3a4170 : Theme.border;
 
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 10px;
+        padding: Theme.space-2 + 2px;
+        padding-left: Theme.space-3;
+        spacing: Theme.space-3;
 
-        Rectangle {
-            y: (parent.height - self.height) / 2;
-            width: 8px;
-            height: 8px;
-            border-radius: 4px;
-            background: Theme.info;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                initials: root.entry.initials;
+                size: 34px;
+                tint: root.entry.is-request ? Theme.accent : Theme.chip-bg-hover;
+                ink: root.entry.is-request ? white : Theme.text;
+            }
         }
 
         VerticalLayout {
-            padding-top: 6px;
-            padding-bottom: 6px;
+            alignment: center;
             spacing: 2px;
+            horizontal-stretch: 1;
             Text {
                 text: root.entry.name;
                 color: Theme.text-strong;
                 font-weight: 600;
-                vertical-alignment: center;
                 overflow: elide;
             }
             Text {
                 text: root.entry.detail;
-                color: Theme.text-muted;
-                font-size: State.touch ? 13px : 11px;
-                vertical-alignment: center;
+                color: root.entry.is-request ? Theme.accent-text : Theme.text-muted;
+                font-size: Theme.font-xs;
                 overflow: elide;
             }
         }
 
-        Rectangle { horizontal-stretch: 1; }
-
         if root.entry.is-request: HorizontalLayout {
-            spacing: 6px;
-            PrimaryButton { label: "Accept"; clicked => { Logic.accept-suggestion(root.entry.endpoint-id); } }
-            GhostButton { label: "Decline"; clicked => { Logic.decline-suggestion(root.entry.endpoint-id); } }
+            spacing: Theme.space-1;
+            VerticalLayout {
+                alignment: center;
+                GhostButton { label: "Decline"; clicked => { Logic.decline-suggestion(root.entry.endpoint-id); } }
+            }
+            VerticalLayout {
+                alignment: center;
+                PrimaryButton { label: "Accept"; clicked => { Logic.accept-suggestion(root.entry.endpoint-id); } }
+            }
         }
-        if root.entry.is-suggestion: PrimaryButton {
-            label: "Pair";
-            clicked => { Logic.accept-suggestion(root.entry.endpoint-id); }
+        if root.entry.is-suggestion: VerticalLayout {
+            alignment: center;
+            SecondaryButton {
+                label: "Pair";
+                clicked => { Logic.accept-suggestion(root.entry.endpoint-id); }
+            }
         }
     }
 }
 
 export component AddPeerPage inherits Rectangle {
-    background: transparent;
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-4;
+            alignment: start;
 
-    VerticalLayout {
-        padding: State.touch ? 12px : 18px;
-        spacing: State.touch ? 10px : 14px;
-        alignment: start;
+            PageTitle {
+                title: "Add a peer";
+                subtitle: "Pair once, then send files to each other without codes or prompts.";
+            }
 
-        Text {
-            text: "Add a peer";
-            font-size: State.touch ? 19px : 24px;
-            font-weight: 800;
-            color: Theme.text-strong;
-            vertical-stretch: 0;
-        }
-
-        // Paste an address
-        Text {
-            text: "Paste their TunnelManager / iroh address:";
-            color: Theme.text;
-            font-size: State.touch ? 13px : 12px;
-            vertical-stretch: 0;
-            wrap: word-wrap;
-        }
-
-        Card {
-            VerticalLayout {
-                spacing: 8px;
-                padding: State.touch ? 10px : 12px;
-
-                LineEdit {
-                    text <=> State.add-ticket-input;
-                    placeholder-text: "iroh node id or pairing ticket";
-                }
+            // Outcome of the last pairing attempt (address or nearby).
+            if !State.pairing-busy && State.pairing-status != "": Rectangle {
+                border-radius: Theme.radius;
+                background: State.pairing-error ? Theme.error-soft : Theme.success-soft;
                 HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
-                    PrimaryButton {
-                        label: "Connect";
-                        enabled: State.add-ticket-input != "" && !State.pairing-busy;
-                        clicked => { Logic.pair-with-pasted(); }
+                    padding: Theme.space-3;
+                    padding-left: Theme.space-4;
+                    StatusText { label: State.pairing-status; error: State.pairing-error; }
+                }
+            }
+
+            // Nearby devices + inbound requests
+            Card {
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    spacing: Theme.space-3;
+
+                    SectionTitle { label: "Nearby and requests"; }
+                    HintText {
+                        label: State.nearby-note != "" ? State.nearby-note
+                            : "Devices on your network running TunnelManager, and anyone who asked to pair with you.";
                     }
-                    if State.pairing-busy: HintText { label: "Connecting…"; vertical-alignment: center; }
-                    if !State.pairing-busy && State.pairing-status != "": StatusText {
-                        label: State.pairing-status;
-                        error: State.pairing-error;
-                        vertical-alignment: center;
+                    if State.suggestions.length == 0: Rectangle {
+                        height: 56px;
+                        border-radius: Theme.radius;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        Text {
+                            text: "Looking for devices…";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-sm;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    for node in State.suggestions: SuggestionRow { entry: node; }
+                }
+            }
+
+            // Paste an address
+            Card {
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    spacing: Theme.space-3;
+
+                    SectionTitle { label: "Connect with an address"; }
+                    HintText { label: "Paste the address your peer copied from their “Your address” box."; }
+                    HorizontalLayout {
+                        spacing: Theme.space-2;
+                        LineEdit {
+                            text <=> State.add-ticket-input;
+                            placeholder-text: "Pairing address";
+                            horizontal-stretch: 1;
+                            accepted => { Logic.pair-with-pasted(); }
+                        }
+                        PrimaryButton {
+                            label: State.pairing-busy ? "Connecting…" : "Connect";
+                            enabled: State.add-ticket-input != "" && !State.pairing-busy;
+                            clicked => { Logic.pair-with-pasted(); }
+                        }
                     }
                 }
             }
-        }
 
-        // Suggestions
-        Rectangle { min-height: 6px; }
-        SectionTitle { label: "Suggested peers"; vertical-stretch: 0; }
-        HintText {
-            label: State.nearby-note == ""
-                ? "Peers on your local network, or peers who already asked to connect with you."
-                : State.nearby-note;
-        }
+            // Our own address
+            Card {
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    spacing: Theme.space-3;
 
-        ScrollView {
-            VerticalLayout {
-                spacing: 8px;
-                alignment: start;
+                    SectionTitle { label: "Your address"; }
+                    HintText { label: "Or let them add you: send this to your peer."; }
+                    HorizontalLayout {
+                        spacing: Theme.space-2;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            border-radius: Theme.radius-sm + 2px;
+                            background: Theme.inset-bg;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            min-height: Theme.control-height;
 
-                for node in State.suggestions: SuggestionRow {
-                    entry: node;
-                }
-            }
-        }
-
-        Rectangle { vertical-stretch: 1; }
-
-        // Our own invite
-        Card {
-            VerticalLayout {
-                padding: State.touch ? 10px : 12px;
-                spacing: 6px;
-
-                Text {
-                    text: "Want them to add you instead?";
-                    color: Theme.text;
-                    font-size: 12px;
-                    font-weight: 600;
-                    vertical-stretch: 0;
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text {
-                        text: State.my-ticket;
-                        color: Theme.text-muted;
-                        font-size: State.touch ? 12px : 11px;
-                        vertical-alignment: center;
-                        wrap: word-wrap;
-                        overflow: elide;
-                        horizontal-stretch: 1;
+                            HorizontalLayout {
+                                padding-left: Theme.space-3;
+                                padding-right: Theme.space-3;
+                                Text {
+                                    text: State.my-ticket == "" ? "Available once connected…" : State.my-ticket;
+                                    color: State.my-ticket == "" ? Theme.text-faint : Theme.text;
+                                    font-family: "monospace";
+                                    font-size: Theme.font-xs;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                        SecondaryButton {
+                            label: "Copy";
+                            enabled: State.my-ticket != "";
+                            clicked => { Logic.copy-my-ticket(); }
+                        }
                     }
-                    GhostButton { label: "Copy"; clicked => { Logic.copy-my-ticket(); } }
                 }
             }
         }

@@ -1,116 +1,151 @@
-import { State, Logic } from "globals.slint";
+import { State, Logic, PeerRow } from "globals.slint";
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Dot } from "components.slint";
+import { Theme, Dot, Avatar, Overline } from "components.slint";
 import { PeerPage } from "peer-page.slint";
 import { AddPeerPage } from "add-peer-page.slint";
 import { SettingsPage } from "settings-page.slint";
 
 export { State, Logic }
 
-component NavButton inherits Rectangle {
+// Sidebar row: an icon-less navigation entry (Settings, Add peer).
+component SideButton inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> active;
+    in property <bool> accent;
+    callback clicked;
+
+    height: 36px;
+    border-radius: Theme.radius;
+    background: root.active ? Theme.accent-soft
+        : ta.pressed ? Theme.chip-bg-hover
+        : ta.has-hover ? Theme.chip-bg
+        : transparent;
+    animate background { duration: 90ms; }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-3;
+        spacing: Theme.space-2 + 2px;
+
+        Text {
+            width: 18px;
+            text: root.icon;
+            color: root.accent || root.active ? Theme.accent-text : Theme.text-muted;
+            font-size: 15px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text-strong : root.accent ? Theme.accent-text : Theme.text;
+            font-size: Theme.font-md;
+            font-weight: root.active || root.accent ? 600 : 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+component PeerButton inherits Rectangle {
+    in property <PeerRow> peer;
+    property <bool> selected: State.page == "peer" && State.selected-id == root.peer.endpoint-id;
+
+    height: 44px;
+    border-radius: Theme.radius;
+    background: root.selected ? Theme.accent-soft
+        : ta.pressed ? Theme.chip-bg-hover
+        : ta.has-hover ? Theme.chip-bg
+        : transparent;
+    animate background { duration: 90ms; }
+
+    ta := TouchArea {
+        clicked => {
+            Logic.select-peer(root.peer.endpoint-id);
+            State.page = "peer";
+            Logic.page-changed("peer");
+        }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-2;
+        padding-right: Theme.space-3;
+        spacing: Theme.space-2 + 2px;
+        alignment: stretch;
+
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                initials: root.peer.initials;
+                size: 28px;
+                show-presence: true;
+                online: root.peer.online;
+            }
+        }
+        Text {
+            text: root.peer.name;
+            color: root.selected ? Theme.text-strong : Theme.text;
+            font-size: Theme.font-md;
+            font-weight: root.selected ? 600 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        // In-flight transfer markers.
+        if root.peer.sending: Text {
+            text: "↑";
+            color: Theme.warn;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+        if root.peer.receiving: Text {
+            text: "↓";
+            color: Theme.info;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Bottom navigation entry (compact layout).
+component TabButton inherits Rectangle {
     in property <string> label;
     in property <string> key;
-    in property <bool> active;
-    in property <bool> compact;
-
-    border-radius: root.compact ? Theme.radius : Theme.radius-sm;
-    background: root.active ? Theme.accent-soft
-        : ta.has-hover && !root.compact ? Theme.chip-bg-hover
-        : transparent;
-    min-height: root.compact ? 52px : 34px;
+    property <bool> active: State.page == root.key;
 
     ta := TouchArea {
         clicked => {
             State.page = root.key;
             Logic.page-changed(root.key);
         }
-        mouse-cursor: pointer;
     }
-    animate background { duration: 90ms; }
 
     VerticalLayout {
         alignment: center;
-        padding-left: root.compact ? 0 : 12px;
+        spacing: 6px;
 
-        if root.compact: Text {
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                height: 3px;
+                width: 28px;
+                border-radius: 2px;
+                background: root.active ? Theme.accent : transparent;
+            }
+        }
+        Text {
             text: root.label;
-            color: root.active ? Theme.text-strong : Theme.text;
-            font-size: 20px;
+            color: root.active ? Theme.text-strong : Theme.text-muted;
+            font-size: Theme.font-sm;
+            font-weight: root.active ? 700 : 500;
             horizontal-alignment: center;
-        }
-        if !root.compact: Text {
-            text: root.label;
-            color: root.active ? Theme.accent : Theme.text;
-            font-weight: root.active ? 600 : 400;
-            vertical-alignment: center;
-        }
-    }
-}
-
-component PeerButton inherits Rectangle {
-    in property <string> endpoint-id;
-    in property <string> label;
-    in property <bool> online;
-    in property <bool> compact;
-
-    border-radius: Theme.radius-sm;
-    background: State.page == "peer" && State.selected-id == self.endpoint-id
-        ? Theme.accent-soft
-        : ta.has-hover ? Theme.chip-bg-hover
-        : transparent;
-    min-height: root.compact ? 48px : 34px;
-
-    ta := TouchArea {
-        clicked => {
-            Logic.select-peer(root.endpoint-id);
-            State.page = "peer";
-            Logic.page-changed("peer");
-        }
-        mouse-cursor: pointer;
-    }
-    animate background { duration: 90ms; }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 8px;
-        alignment: start;
-
-        Dot { online: root.online; }
-        Text {
-            text: root.label;
-            color: State.selected-id == root.endpoint-id ? Theme.text-strong : Theme.text;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-    }
-}
-
-component AddPeerButton inherits Rectangle {
-    in property <bool> compact;
-
-    border-radius: Theme.radius-sm;
-    background: ta.has-hover ? Theme.chip-bg-hover : Theme.chip-bg;
-    min-height: root.compact ? 48px : 34px;
-
-    ta := TouchArea {
-        clicked => {
-            State.page = "add-peer";
-            Logic.page-changed("add-peer");
-        }
-        mouse-cursor: pointer;
-    }
-    animate background { duration: 90ms; }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        alignment: center;
-
-        Text {
-            text: "+ Add peer";
-            color: Theme.text-strong;
-            font-weight: 600;
-            vertical-alignment: center;
         }
     }
 }
@@ -118,105 +153,142 @@ component AddPeerButton inherits Rectangle {
 export component AppWindow inherits Window {
     title: "TunnelManager";
     background: Theme.window-bg;
-    // Single-pane layout (no sidebar) with a bottom nav instead.
-    property <bool> compact;
+    default-font-size: Theme.font-md;
 
     // On phones the OS gives us a small window; don't force desktop sizes.
-    preferred-width: State.touch ? 360px : 920px;
-    preferred-height: State.touch ? 720px : 640px;
-    min-width: State.touch ? 0px : 720px;
+    preferred-width: State.touch ? 360px : 960px;
+    preferred-height: State.touch ? 720px : 660px;
+    min-width: State.touch ? 0px : 760px;
     min-height: State.touch ? 0px : 520px;
 
-    // Responsive mode: no room for the fixed 210px sidebar. Driven purely
-    // by State.touch (Rust): binding it to the window width creates a
-    // layout binding loop, and the desktop window enforces min-width 720px.
-    compact: State.touch;
+    // Single-pane layout (no sidebar) with a bottom nav. Driven purely by
+    // State.compact (Rust): binding it to the window width creates a layout
+    // binding loop, and the desktop window enforces min-width anyway.
+    property <bool> compact: State.compact;
 
     VerticalLayout {
         HorizontalLayout {
             // Sidebar: desktop + wide tablets only.
             if !root.compact: Rectangle {
-                min-width: 220px;
-                max-width: 220px;
+                width: 240px;
                 background: Theme.sidebar-bg;
 
                 VerticalLayout {
-                    padding: 14px;
-                    spacing: 6px;
-                    alignment: start;
+                    padding: Theme.space-3;
+                    padding-top: Theme.space-4;
+                    spacing: Theme.space-1;
 
                     // App header
-                    VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "TunnelManager";
-                            font-size: 17px;
-                            font-weight: 800;
-                            color: Theme.text-strong;
-                        }
+                    HorizontalLayout {
+                        padding-left: Theme.space-1;
+                        padding-bottom: Theme.space-3;
+                        spacing: Theme.space-2 + 2px;
 
-                        HorizontalLayout {
-                            spacing: 6px;
-                            alignment: start;
-                            Dot { online: State.node-ready; }
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 9px;
+                            background: @linear-gradient(135deg, #7b6dff 0%, #4f8dff 100%);
                             Text {
-                                text: State.my-name == "" ? "…" : State.my-name;
-                                color: Theme.text-muted;
-                                font-size: 11px;
-                                overflow: elide;
+                                text: "⇅";
+                                color: white;
+                                font-size: 17px;
+                                font-weight: 800;
+                                horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
-                            if !State.node-ready: Text {
-                                text: "starting…";
-                                color: Theme.warn;
-                                font-size: 11px;
-                                vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: "TunnelManager";
+                                font-size: 15px;
+                                font-weight: 700;
+                                color: Theme.text-strong;
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Dot { online: State.node-ready; size: 7px; }
+                                }
+                                Text {
+                                    text: !State.node-ready ? "Connecting…"
+                                        : State.my-name == "" ? "Online" : State.my-name;
+                                    color: State.node-ready ? Theme.text-muted : Theme.warn;
+                                    font-size: Theme.font-xs;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
                     }
 
-                    Rectangle { min-height: 10px; }
+                    SideButton {
+                        label: "Add peer";
+                        icon: "+";
+                        accent: true;
+                        active: State.page == "add-peer";
+                        clicked => {
+                            State.page = "add-peer";
+                            Logic.page-changed("add-peer");
+                        }
+                    }
 
-                    AddPeerButton { compact: false; }
+                    HorizontalLayout {
+                        padding-left: Theme.space-3;
+                        padding-right: Theme.space-3;
+                        padding-top: Theme.space-4;
+                        padding-bottom: Theme.space-1;
+                        Overline { label: "PEERS"; horizontal-stretch: 1; }
+                        if State.peers.length > 0: Text {
+                            text: State.presence-label;
+                            color: Theme.text-faint;
+                            font-size: Theme.font-xs;
+                        }
+                    }
 
-                    if State.peers.length > 0: Rectangle { min-height: 10px; }
-
-                    if State.peers.length > 0: Text {
-                        text: "Peers";
-                        color: Theme.text-faint;
-                        font-size: 11px;
-                        font-weight: 600;
+                    if State.peers.length == 0: HorizontalLayout {
+                        padding-left: Theme.space-3;
+                        padding-right: Theme.space-3;
+                        Text {
+                            text: "No peers yet — add one to start sending.";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-sm;
+                            wrap: word-wrap;
+                        }
                     }
 
                     ScrollView {
+                        vertical-stretch: 1;
                         VerticalLayout {
                             spacing: 2px;
                             alignment: start;
-                            for peer in State.peers: PeerButton {
-                                endpoint-id: peer.endpoint-id;
-                                label: peer.name;
-                                online: peer.online;
-                                compact: false;
-                            }
+                            for peer in State.peers: PeerButton { peer: peer; }
                         }
                     }
 
-                    Rectangle { vertical-stretch: 1; }
-
-                    NavButton { label: "Settings"; key: "settings"; active: State.page == "settings"; compact: false; }
-
-                    Rectangle { min-height: 4px; }
-
-                    Text {
-                        text: State.presence-label;
-                        color: Theme.text-faint;
-                        font-size: 10px;
+                    SideButton {
+                        label: "Settings";
+                        icon: "⚙";
+                        active: State.page == "settings";
+                        clicked => {
+                            State.page = "settings";
+                            Logic.page-changed("settings");
+                        }
                     }
                 }
+            }
+            if !root.compact: Rectangle {
+                width: 1px;
+                background: Theme.border;
             }
 
             // Content
             Rectangle {
+                horizontal-stretch: 1;
                 if State.page == "peer": PeerPage {
                     width: 100%;
                     height: 100%;
@@ -235,18 +307,19 @@ export component AppWindow inherits Window {
         // Bottom nav on compact layouts (phones): thumb-reachable, larger
         // hit targets than the desktop sidebar.
         if root.compact: Rectangle {
-            min-height: 64px;
-            max-height: 64px;
+            height: 60px;
             background: Theme.sidebar-bg;
+            border-width: 0;
 
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.border;
+            }
             HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                spacing: 8px;
-
-                NavButton { label: "Peers"; key: "peer"; active: State.page == "peer"; compact: true; }
-                NavButton { label: "Add"; key: "add-peer"; active: State.page == "add-peer"; compact: true; }
-                NavButton { label: "⚙"; key: "settings"; active: State.page == "settings"; compact: true; }
+                TabButton { label: "Peers"; key: "peer"; }
+                TabButton { label: "Add peer"; key: "add-peer"; }
+                TabButton { label: "Settings"; key: "settings"; }
             }
         }
     }
@@ -254,24 +327,33 @@ export component AppWindow inherits Window {
     // Desktop toast (Android shows native toasts instead). Click to dismiss;
     // Rust clears it after a few seconds.
     if State.toast-text != "": Rectangle {
-        width: min(toast-text.preferred-width + 32px, root.width - 32px);
-        height: toast-text.preferred-height + 20px;
+        width: min(toast-label.preferred-width + 40px, root.width - 48px);
+        height: toast-label.preferred-height + 24px;
         x: (root.width - self.width) / 2;
-        y: root.height - self.height - 20px;
+        y: root.height - self.height - (root.compact ? 76px : 24px);
         border-radius: Theme.radius;
-        background: Theme.card-bg;
+        background: #262a37;
         border-width: 1px;
-        border-color: State.toast-error ? Theme.error : Theme.accent-soft;
-        drop-shadow-color: #0006;
-        drop-shadow-blur: 12px;
-        drop-shadow-offset-y: 3px;
+        border-color: State.toast-error ? #6b2e37 : Theme.border-strong;
+        drop-shadow-color: #00000080;
+        drop-shadow-blur: 16px;
+        drop-shadow-offset-y: 4px;
 
-        toast-text := Text {
-            x: 16px;
-            y: 10px;
-            width: parent.width - 32px;
+        // Tone stripe on the left edge.
+        Rectangle {
+            x: 0;
+            width: 4px;
+            border-top-left-radius: Theme.radius;
+            border-bottom-left-radius: Theme.radius;
+            background: State.toast-error ? Theme.error : Theme.accent;
+        }
+        toast-label := Text {
+            x: 22px;
+            y: 12px;
+            width: parent.width - 40px;
             text: State.toast-text;
-            color: State.toast-error ? Theme.error : Theme.text-strong;
+            color: Theme.text-strong;
+            font-size: Theme.font-md;
             wrap: word-wrap;
         }
         TouchArea {
