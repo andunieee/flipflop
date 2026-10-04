@@ -268,45 +268,36 @@ mod imp {
 
     // ----------------------------------------------------- shared content
 
-    /// Stage content shared into the app via the system share sheet.
-    ///
-    /// A lazy SAF picker needs activity-result plumbing that
-    /// android-activity does not forward, so "Send to TunnelManager" from
-    /// the system share sheet is the supported flow on Android. Files are
-    /// copied into the outbox and the share uses those ordinary paths.
-    pub fn pick_shared_files() -> Vec<PathBuf> {
-        let app = app().clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_java_main_thread(Box::new(move || {
-            let _ = tx.send(with_env(collect_shared_files_with_env));
-        }));
-        match rx.recv() {
-            Ok(Ok(paths)) => paths,
-            Ok(Err(e)) => {
-                tracing::warn!("staging shared files failed: {e}");
-                Vec::new()
-            }
-            Err(_) => {
-                tracing::warn!("file collection task did not run");
-                Vec::new()
-            }
-        }
-    }
-
     /// Shares-into-the-app entry point ("intent listener"): stages whatever the
     /// launch intent carries (ACTION_SEND / ACTION_SEND_MULTIPLE) into the
-    /// outbox, then returns every staged file. Called once at startup (so a
-    /// share launched from another app prompts immediately) and again from the
-    /// send button; a process-local guard keeps the same intent from being
-    /// staged twice. NOTE: sharing while the app is already running in the
-    /// background cannot be observed — android-activity does not forward
-    /// `onNewIntent` — so that case restarts the activity with the share.
-    pub fn pick_send_files() -> Vec<PathBuf> {
-        let first = INTENT_STAGED.set(()).map(|_| true).unwrap_or(false);
-        if first {
-            pick_shared_files();
+    /// outbox, then hands every staged file to `done` on the Slint event loop.
+    ///
+    /// A lazy SAF picker needs activity-result plumbing that android-activity
+    /// does not forward, so "Send to TunnelManager" from the system share
+    /// sheet is the supported flow on Android. Files are copied into the
+    /// outbox and the share uses those ordinary paths.
+    ///
+    /// Never blocks: called at startup, before the event loop runs, while the
+    /// Java main thread is still inside onStart/onResume waiting for this
+    /// thread to acknowledge the lifecycle change. Waiting for the posted
+    /// closure here would deadlock (black screen). A process-local guard keeps
+    /// the same intent from being staged twice. NOTE: sharing while the app is
+    /// already running in the background cannot be observed — android-activity
+    /// does not forward `onNewIntent` — so that case restarts the activity
+    /// with the share.
+    pub fn stage_launch_intent(done: impl FnOnce(Vec<PathBuf>) + Send + 'static) {
+        if INTENT_STAGED.set(()).is_err() {
+            return;
         }
-        outbox_files()
+        app().run_on_java_main_thread(Box::new(move || {
+            if let Err(e) = with_env(collect_shared_files_with_env) {
+                tracing::warn!("staging shared files failed: {e}");
+            }
+            let staged = outbox_files();
+            if let Err(e) = slint::invoke_from_event_loop(move || done(staged)) {
+                tracing::warn!("could not report staged files: {e}");
+            }
+        }));
     }
 
     fn collect_shared_files_with_env(env: &mut jni::JNIEnv) -> Result<Vec<PathBuf>, String> {

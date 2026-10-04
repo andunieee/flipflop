@@ -1332,8 +1332,13 @@ pub fn run() {
     // (android-activity drops onNewIntent); that share restarts the activity.
     #[cfg(target_os = "android")]
     {
-        let staged = crate::android::pick_send_files();
-        if !staged.is_empty() {
+        let weak = ui.as_weak();
+        crate::android::stage_launch_intent(move |staged| {
+            let Some(ui) = weak.upgrade() else { return };
+            if staged.is_empty() {
+                return;
+            }
+            let state = ui.global::<State>();
             let count = staged.len();
             state.set_outbox_count(count as i32);
             state.set_page("peer".into());
@@ -1345,7 +1350,7 @@ pub fn run() {
                 &format!("{count} file(s) shared — pick a peer to send them"),
                 false,
             );
-        }
+        });
     }
 
     register_node(&ctx);
