@@ -67,6 +67,9 @@ pub enum Command {
     /// Groups: create, invite, accept, settings.
     #[command(subcommand)]
     Group(GroupCmd),
+    /// Guest links: groups that anyone with a link joins from a browser. Needs `serve` (or the app) to be running.
+    #[command(subcommand)]
+    Guest(GuestCmd),
     /// Files offered to a group.
     #[command(subcommand)]
     File(FileCmd),
@@ -113,6 +116,31 @@ pub enum GroupCmd {
         #[arg(long)]
         auto_stop: Option<bool>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum GuestCmd {
+    /// List guest links.
+    List,
+    /// Make a guest link: prints the address for browsers on this network and the one for anywhere.
+    New {
+        /// Let guests upload files.
+        #[arg(long)]
+        uploads: bool,
+        /// A name for the group.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Print the addresses of a guest link.
+    Show { group: String },
+    /// Allow or forbid uploads on a guest link.
+    Uploads {
+        group: String,
+        #[arg(action = clap::ArgAction::Set)]
+        on: bool,
+    },
+    /// Close a guest link: guests are disconnected and the group is deleted.
+    Close { group: String },
 }
 
 #[derive(Subcommand)]
@@ -259,6 +287,7 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
             }
         }
         Command::Group(cmd) => group(core, cx, cmd, wait).await?,
+        Command::Guest(cmd) => guest(core, cx, cmd, wait).await?,
         Command::File(cmd) => file(core, cx, cmd, wait).await?,
         Command::Text(cmd) => text(core, cx, cmd, wait).await?,
         Command::Pad(cmd) => pad(core, cx, cmd, wait).await?,
@@ -276,6 +305,60 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
                     let _ = tokio::signal::ctrl_c().await;
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+// ---- guest links ----------------------------------------------------------------------
+
+fn guest_group(core: &Core, query: &str) -> Result<(GroupInfo, crate::core::GuestInfo)> {
+    let info = find_group(core, query)?;
+    let guest = info.guest.clone().ok_or_else(|| anyhow!("{query:?} is not a guest group"))?;
+    Ok((info, guest))
+}
+
+async fn show_guest(core: &Core, cx: &Ctx, id: &str, wait: Duration) -> Result<()> {
+    wait_for(wait, || core.groups().groups.iter().any(|g| g.id == id && g.guest.as_ref().is_some_and(|l| l.lan_url.is_some() && l.web_url.is_some()))).await;
+    let (info, guest) = guest_group(core, id)?;
+    say!(cx, "{}  {}  uploads {}", &info.id[..8], title(&info), if guest.uploads { "on" } else { "off" });
+    say!(cx, "  same network  {}", guest.lan_url.as_deref().unwrap_or("(not available)"));
+    say!(cx, "  anywhere      {}", guest.web_url.as_deref().unwrap_or("(not available yet: no home relay)"));
+    for g in &guest.guests {
+        say!(cx, "  {}{}", g.name, if g.online { "  online" } else { "" });
+    }
+    Ok(())
+}
+
+async fn guest(core: &Core, cx: &Ctx, cmd: &GuestCmd, wait: Duration) -> Result<()> {
+    match cmd {
+        GuestCmd::List => {
+            let ids: Vec<String> = core.groups().groups.iter().filter(|g| g.guest.is_some()).map(|g| g.id.clone()).collect();
+            for id in &ids {
+                show_guest(core, cx, id, Duration::ZERO).await?;
+            }
+            if ids.is_empty() {
+                say!(cx, "no guest links");
+            }
+        }
+        GuestCmd::New { uploads, name } => {
+            let id = core.create_guest_link(*uploads);
+            if let Some(name) = name {
+                core.rename_group(&id, name);
+            }
+            show_guest(core, cx, &id, wait).await?;
+        }
+        GuestCmd::Show { group } => {
+            let (info, _) = guest_group(core, group)?;
+            show_guest(core, cx, &info.id, wait).await?;
+        }
+        GuestCmd::Uploads { group, on } => {
+            let (info, _) = guest_group(core, group)?;
+            core.set_guest_uploads(&info.id, *on);
+        }
+        GuestCmd::Close { group } => {
+            let (info, _) = guest_group(core, group)?;
+            core.close_guest_link(&info.id);
         }
     }
     Ok(())

@@ -133,6 +133,7 @@ private fun GroupCard(group: GroupRow, nav: Nav) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Theme.d.space2), verticalAlignment = Alignment.CenterVertically) {
                     Dot(group.online)
                     Txt(group.title, Theme.d.fontLg, Theme.c.textStrong, 650, Modifier.weight(1f))
+                    if (group.guest) Badge("guest link", "active")
                 }
                 if (group.subtitle.isNotEmpty()) Txt(group.subtitle, Theme.d.fontSm, Theme.c.textMuted)
                 Txt(group.summary, Theme.d.fontSm, Theme.c.textMuted)
@@ -146,13 +147,16 @@ private fun GroupCard(group: GroupRow, nav: Nav) {
 fun GroupsPage(s: UiState, nav: Nav) {
     ListPage(header = {
         HeaderRow("Groups", "Share files, texts and a scratchpad with the devices you trust.") {
-            PrimaryButton("New group", icon = Icons.addPeer) { nav.newGroup() }
+            Row(horizontalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
+                SecondaryButton("Guest link", icon = Icons.link) { nav.newGuestLink() }
+                PrimaryButton("New group", icon = Icons.addPeer) { nav.newGroup() }
+            }
         }
     }) {
         s.invites.forEach { InviteCard(it, nav) }
         s.groups.forEach { GroupCard(it, nav) }
         if (s.groups.isEmpty() && s.invites.isEmpty()) {
-            HintText("No groups yet. Create one, then invite peers; they choose whether to join.", center = true)
+            HintText("No groups yet. Create one, then invite peers; they choose whether to join. A guest link lets anyone with a browser in, no app needed.", center = true)
         }
     }
 }
@@ -211,7 +215,7 @@ fun PeersPage(s: UiState, nav: Nav) {
 // ---- Add a peer ------------------------------------------------------------------------------
 
 @Composable
-private fun QrCode(ticket: String, modifier: Modifier = Modifier) {
+fun QrCode(ticket: String, modifier: Modifier = Modifier) {
     val matrix = remember(ticket) { if (ticket.isEmpty()) null else qrMatrix(ticket) }
     Box(modifier.clip(RoundedCornerShape(Theme.d.radius)).background(Color.White).padding(10.dp), contentAlignment = Alignment.Center) {
         if (matrix != null) {

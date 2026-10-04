@@ -2,6 +2,7 @@
 //! reconnect automatically, group invites and a tiny hello/chat protocol. UI-agnostic; the UI
 //! subscribes through the event callback.
 
+mod guest;
 mod sharing;
 mod unseen;
 
@@ -33,6 +34,7 @@ use crate::{
 };
 
 pub use crate::state::MemberState;
+pub use guest::{GUEST_ALPN, GuestInfo, GuestPerson, is_guest};
 pub use sharing::{DocMember, FileView, GroupView, TextView};
 pub use unseen::Unseen;
 
@@ -82,6 +84,8 @@ pub struct GroupInfo {
     pub auto_stop: bool,
     /// An implied group (see [`Core::pair`]): the other device. Not listed with the groups.
     pub with: Option<EndpointId>,
+    /// A guest group: its link and its guests.
+    pub guest: Option<GuestInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +164,7 @@ struct Inner {
     publish_lock: Mutex<()>,
     peers: Mutex<BTreeMap<EndpointId, PeerEntry>>,
     sharing: sharing::Sharing,
+    guests: guest::Guests,
     ticket: Mutex<String>,
     ble_payload: watch::Sender<Option<BlePayload>>,
     on_event: Box<dyn Fn(Event) + Send + Sync>,
@@ -214,7 +219,7 @@ impl Core {
 
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), GUEST_ALPN.to_vec()])
             .address_lookup(mdns.clone())
             .address_lookup(memory.clone())
             .user_data_for_address_lookup(user_data(&name));
@@ -239,12 +244,16 @@ impl Core {
             publish_lock: Mutex::default(),
             peers: Mutex::default(),
             sharing: sharing::Sharing::new(data_dir),
+            guests: guest::Guests::default(),
             ticket: Mutex::default(),
             ble_payload: watch::channel(None).0,
             on_event: Box::new(on_event),
         }));
         core.emit(Event::Name(name));
         core.load_docs();
+        if core.0.store.lock().unwrap().state.groups.iter().any(|g| g.guest.is_some()) {
+            core.ensure_lan_server();
+        }
         core.publish();
         core.spawn_background(lan_events);
         Ok(core)
@@ -434,6 +443,7 @@ impl Core {
                     auto_download: g.auto_download,
                     auto_stop: g.auto_stop,
                     with: g.with.as_ref().and_then(|w| w.parse().ok()),
+                    guest: g.guest.as_ref().map(|link| self.guest_info(&g.id, link)),
                 })
             })
             .collect();
@@ -805,6 +815,9 @@ impl Core {
         if self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == group && g.with.is_some()) {
             return;
         }
+        if self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == group && g.guest.is_some()) {
+            return self.close_guest_link(group);
+        }
         self.drop_doc(group);
         self.with_state(|st| st.groups.retain(|g| g.id != group));
     }
@@ -966,6 +979,7 @@ impl Core {
                 let this = this.clone();
                 tokio::spawn(async move {
                     match incoming.await {
+                        Ok(conn) if conn.alpn() == GUEST_ALPN => guest::serve_tunnel(this, conn).await,
                         Ok(conn) => {
                             this.drop_stale(&conn).await;
                             this.adopt(conn, false);
@@ -1080,6 +1094,8 @@ impl Core {
                 *this.0.ticket.lock().unwrap() = ticket.clone();
                 this.refresh_ble_payload();
                 this.emit(Event::Ticket(ticket));
+                // The home relay is part of every guest link.
+                this.publish();
             }
         });
     }
@@ -1157,6 +1173,7 @@ async fn send_msg(conn: &Connection, msg: &Msg) -> Result<()> {
 impl Core {
     pub async fn shutdown(&self) {
         self.save_docs();
+        self.stop_lan_server();
         self.0.endpoint.close().await;
         #[cfg(not(target_os = "android"))]
         let _ = self.0.dir_lock.unlock();

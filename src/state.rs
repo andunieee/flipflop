@@ -53,6 +53,18 @@ pub struct Group {
     /// What the user had seen of this group the last time they looked.
     #[serde(default)]
     pub seen: Seen,
+    /// A guest group: anyone holding the link joins it from a browser.
+    #[serde(default)]
+    pub guest: Option<GuestLink>,
+}
+
+/// The secret behind a guest group's links, and what its guests may do.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuestLink {
+    /// Part of every link: the only key.
+    pub token: String,
+    /// Guests may upload files.
+    pub uploads: bool,
 }
 
 /// The state of a group at the last look, to tell what is new since.
@@ -71,7 +83,7 @@ fn yes() -> bool {
 
 impl Group {
     pub fn new(id: String, members: Vec<Member>) -> Group {
-        Group { id, alias: None, members, auto_download: true, auto_stop: false, with: None, seen: Seen::default() }
+        Group { id, alias: None, members, auto_download: true, auto_stop: false, with: None, seen: Seen::default(), guest: None }
     }
 }
 

@@ -2,6 +2,8 @@ package dev.flipflop.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -241,6 +243,42 @@ private fun MemberLine(m: MemberRow) {
     }
 }
 
+/** One address of a guest link: its QR code, the text and a Copy button. */
+@Composable
+private fun GuestAddress(title: String, hint: String, url: String, nav: Nav) {
+    val d = Theme.d
+    Card {
+        Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
+            Txt(title, d.fontMd, Theme.c.textStrong, 650)
+            HintText(hint)
+            if (url.isEmpty()) {
+                HintText("Not available right now.")
+            } else {
+                BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    QrCode(url, Modifier.size(minOf(maxWidth, 220.dp)))
+                }
+                Field(url, {}, readOnly = true)
+                SecondaryButton("Copy link", icon = Icons.copy) { nav.backend.app.copyText(url) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuestLinkCards(s: UiState, nav: Nav) {
+    Overline("GUEST LINK")
+    Card {
+        Column(Modifier.padding(Theme.d.cardPadding)) {
+            ToggleRow("Guests can upload files", "Off: they can still download what is offered, read and write texts and edit the scratchpad.", s.guestUploads) {
+                nav.backend.app.setGuestUploads(it)
+            }
+        }
+    }
+    GuestAddress("Same network", "Opens a page served by this device. Works without internet, as long as the guest is on the same Wi-Fi.", s.guestLanUrl, nav)
+    GuestAddress("Anywhere", "Opens the flipflop page on the web, which connects to this device through its relay.", s.guestWebUrl, nav)
+    HintText("Anyone with a link joins the group and can read and change everything in it. Only share it with people you would hand the files to.")
+}
+
 @Composable
 private fun InfoTab(s: UiState, nav: Nav) {
     val app = nav.backend.app
@@ -284,14 +322,15 @@ private fun InfoTab(s: UiState, nav: Nav) {
                 }
             }
         } else {
-            Overline("MEMBERS")
+            if (s.groupGuest) GuestLinkCards(s, nav)
+            Overline(if (s.groupGuest) "GUESTS AND MEMBERS" else "MEMBERS")
             Card {
                 Column(Modifier.padding(d.cardPadding)) {
                     s.members.forEach { MemberLine(it) }
                     if (s.members.isEmpty()) HintText("Nobody yet.")
                 }
             }
-            if (s.candidates.isNotEmpty()) {
+            if (s.candidates.isNotEmpty() && !s.groupGuest) {
                 Overline("INVITE FROM YOUR PEERS")
                 Card {
                     Column(Modifier.padding(d.cardPadding)) {
@@ -319,7 +358,8 @@ private fun InfoTab(s: UiState, nav: Nav) {
             Row(horizontalArrangement = Arrangement.spacedBy(d.space2)) {
                 SecondaryButton("Rename", icon = Icons.edit) { nav.edit = Edit("group", s.openGroup, s.groupHaiku, s.groupAlias) }
                 // Leaving needs a second press.
-                DangerButton(if (confirmLeave) "Confirm leave" else "Leave group", icon = Icons.trash) {
+                val closing = if (s.groupGuest) "Close link" else "Leave group"
+                DangerButton(if (confirmLeave) "Confirm" else closing, icon = Icons.trash) {
                     if (confirmLeave) {
                         confirmLeave = false
                         app.deleteEdit("group", s.openGroup)
@@ -329,7 +369,10 @@ private fun InfoTab(s: UiState, nav: Nav) {
                     }
                 }
             }
-            HintText("Leaving removes the group from this device only. Files you downloaded stay where they are.")
+            HintText(
+                if (s.groupGuest) "Closing the link disconnects its guests and deletes the group from this device. Files they uploaded stay where they are."
+                else "Leaving removes the group from this device only. Files you downloaded stay where they are.",
+            )
         }
     }
 }

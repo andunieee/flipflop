@@ -23,6 +23,17 @@ test:
 cli *cargs:
     cargo run --bin flipflop-cli -- {{cargs}}
 
+# --- Guest page ---
+
+# rebuild the guest page's wasm: refreshes the copy the app embeds for guests on the LAN (src/core/guest/assets,
+# commit it after changing src/groupdoc.rs or web/) and the full page for links from anywhere in web/dist
+web:
+    web/build.sh
+
+# serve the full guest page on http://localhost:8099 (a link from anywhere opens it with #t=..&e=..&r=..)
+web-serve: web
+    cd web/dist && python3 -m http.server 8099
+
 # --- Android ---
 # gradle builds the Rust library with cargo-ndk (see kmp/build-native.sh). Needs NDK 27, Android SDK 35.
 

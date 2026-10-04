@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>flipflop guest</title>
+<style>
+:root {
+  --bg: #f6f6f4; --card: #fff; --fg: #1d1d1b; --dim: #74746f; --line: #e2e2dd;
+  --accent: #2b6cb0; --accent-fg: #fff; --bad: #b3261e; --ok: #2e7d32;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --card: #1f1f1d; --fg: #ecebe6; --dim: #9a9993; --line: #333330; --accent: #6aa5e8; --accent-fg: #101010; --bad: #f2928b; --ok: #7bc47f; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
+body { max-width: 720px; margin: 0 auto; padding: 0 16px 48px; }
+header { padding: 16px 0 8px; }
+h1 { font-size: 1.25rem; margin: 0; }
+.me { color: var(--dim); font-size: .9rem; margin-top: 2px; }
+.status { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: var(--dim); margin-right: .4rem; }
+.status.on { background: var(--ok); }
+nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 8px 0 16px; position: sticky; top: 0; background: var(--bg); }
+nav button { flex: 1; background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 4px; color: var(--dim); font: inherit; cursor: pointer; }
+nav button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+nav .count { font-size: .75rem; color: var(--dim); margin-left: .25rem; }
+section[hidden] { display: none; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.grow { flex: 1; min-width: 0; }
+.name { overflow-wrap: anywhere; font-weight: 500; }
+.meta { color: var(--dim); font-size: .85rem; }
+button.act, label.act { background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; white-space: nowrap; }
+button.act.quiet { background: none; color: var(--accent); padding: 6px 8px; }
+button.act[aria-disabled="true"] { opacity: .6; pointer-events: none; }
+textarea, input[type=text] { width: 100%; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit; }
+textarea { resize: vertical; }
+#pad { min-height: 55vh; font-family: ui-monospace, monospace; font-size: .95rem; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+.empty { color: var(--dim); text-align: center; padding: 24px 0; }
+.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); margin-bottom: 12px; }
+.drop.over { border-color: var(--accent); color: var(--fg); }
+progress { width: 100%; height: .5rem; }
+.banner { background: var(--card); border: 1px solid var(--bad); color: var(--bad); border-radius: 10px; padding: 12px; margin: 12px 0; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">flipflop</h1>
+  <div class="me"><span class="status" id="dot"></span><span id="state">Connecting…</span></div>
+</header>
+<div id="closed" class="banner" hidden>This link was closed.</div>
+<nav role="tablist">
+  <button role="tab" data-tab="files" aria-selected="true">Files<span class="count" id="n-files"></span></button>
+  <button role="tab" data-tab="texts" aria-selected="false">Texts<span class="count" id="n-texts"></span></button>
+  <button role="tab" data-tab="pad" aria-selected="false">Scratchpad</button>
+</nav>
+
+<section id="files">
+  <div id="upload" hidden>
+    <div class="drop" id="drop">Drop files here or <label class="act" style="margin-left:.4rem">Choose files<input id="pick" type="file" multiple hidden></label></div>
+    <div id="uploads"></div>
+  </div>
+  <div id="file-list"></div>
+</section>
+
+<section id="texts" hidden>
+  <div class="card">
+    <textarea id="text-in" rows="3" placeholder="Paste a link, a code, anything…"></textarea>
+    <div class="row" style="margin-top:8px;justify-content:flex-end"><button class="act" id="text-send">Send</button></div>
+  </div>
+  <div id="text-list"></div>
+</section>
+
+<section id="pad" hidden>
+  <textarea id="pad-in" spellcheck="false" placeholder="A notepad everyone here can edit."></textarea>
+</section>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  e.append(...kids);
+  return e;
+};
+
+// ---- where we are: a link from anywhere (#t=&e=&r=) or the app's own server on the LAN ----------------
+
+const link = new URLSearchParams(location.hash.slice(1));
+const remote = link.has("t") && link.has("e") && link.has("r");
+const token = remote ? link.get("t") : location.pathname.split("/").filter(Boolean)[0] || "";
+// Where HTTP requests go: the app's server, or (over iroh) the same paths on a stream.
+const base = "/" + token + "/";
+
+const state = { me: null, uploads: false, snap: { members: [], files: [], texts: [], scratch: "" }, closed: false };
+
+const mod = await import("./flipflop_web.js");
+await mod.default();
+const doc = new mod.Doc();
+
+// ---- transports: both carry the same messages -----------------------------------------------------------
+
+function lanTransport(handlers) {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + base + "ws");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = handlers.open;
+  ws.onmessage = (e) => handlers.message(new Uint8Array(e.data));
+  ws.onclose = handlers.close;
+  return { send: (bytes) => ws.readyState === 1 && ws.send(bytes), close: () => ws.close() };
+}
+
+let tunnel = null;
+function secret() {
+  try {
+    let s = localStorage.getItem("flipflop-secret");
+    if (!s) localStorage.setItem("flipflop-secret", (s = mod.new_secret()));
+    return s;
+  } catch (_) { return mod.new_secret(); }
+}
+
+function irohTransport(handlers) {
+  let sync = null;
+  let dead = false;
+  (async () => {
+    try {
+      if (!tunnel || tunnel.closed()) tunnel = await mod.Tunnel.connect(link.get("e"), link.get("r"), secret());
+      sync = await tunnel.open_sync(token);
+      handlers.open();
+      for (let m; (m = await sync.recv()); ) handlers.message(m);
+    } catch (e) { console.warn(e); }
+    if (!dead) handlers.close();
+  })();
+  return {
+    send: (bytes) => sync && sync.send(bytes).catch(() => {}),
+    close: () => { dead = true; if (tunnel) { tunnel.close(); tunnel = null; } },
+  };
+}
+
+// ---- the document ---------------------------------------------------------------------------------------
+
+let transport = null;
+let retry = 1000;
+
+function pump() {
+  if (!transport) return;
+  for (let m; (m = doc.message()); ) transport.send(m);
+}
+
+function setStatus(text, on) {
+  $("state").textContent = text;
+  $("dot").classList.toggle("on", !!on);
+}
+
+function connect() {
+  if (state.closed) return;
+  setStatus("Connecting…", false);
+  const t = (remote ? irohTransport : lanTransport)({
+    open() { retry = 1000; },
+    message(bytes) {
+      const payload = bytes.subarray(1);
+      if (bytes[0] === 0) return control(JSON.parse(new TextDecoder().decode(payload)));
+      if (bytes[0] === 1) {
+        try { if (doc.receive(payload)) refresh(); } catch (e) { console.warn(e); }
+        pump();
+      }
+    },
+    close() {
+      if (transport !== t) return;
+      transport = null;
+      doc.reset();
+      if (state.closed) return;
+      setStatus("Disconnected, retrying…", false);
+      setTimeout(connect, retry);
+      retry = Math.min(retry * 2, 10000);
+    },
+  });
+  transport = t;
+}
+
+function control(msg) {
+  if (msg.t === "hello") {
+    state.me = { id: msg.id, name: msg.name };
+    state.uploads = msg.uploads;
+    $("title").textContent = msg.group;
+    document.title = msg.group + " · flipflop";
+    setStatus("You are " + msg.name + " · connected to " + msg.host, true);
+    $("upload").hidden = !state.uploads;
+    pump();
+  } else if (msg.t === "uploads") {
+    state.uploads = msg.on;
+    $("upload").hidden = !msg.on;
+  } else if (msg.t === "closed") {
+    state.closed = true;
+    $("closed").hidden = false;
+    setStatus("Closed", false);
+    if (transport) transport.close();
+  }
+}
+
+function refresh() {
+  state.snap = JSON.parse(doc.snapshot());
+  renderFiles();
+  renderTexts();
+  renderPad();
+}
+
+function edited() { pump(); refresh(); }
+
+// ---- tabs -------------------------------------------------------------------------------------------------
+
+for (const b of document.querySelectorAll("nav button")) {
+  b.onclick = () => {
+    for (const o of document.querySelectorAll("nav button")) {
+      o.setAttribute("aria-selected", String(o === b));
+      $(o.dataset.tab).hidden = o !== b;
+    }
+  };
+}
+
+// ---- files ------------------------------------------------------------------------------------------------
+
+function size(n) {
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+  return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+}
+
+function renderFiles() {
+  const files = [...state.snap.files].reverse();
+  $("n-files").textContent = files.length || "";
+  const list = $("file-list");
+  list.replaceChildren();
+  if (!files.length) list.append(el("div", { class: "empty" }, "Nothing shared yet."));
+  for (const f of files) {
+    const mine = state.me && f.from === state.me.id;
+    const button = el("button", { class: "act" }, "Download");
+    if (f.stopped) { button.textContent = "Gone"; button.setAttribute("aria-disabled", "true"); }
+    else button.onclick = () => download(f, button);
+    list.append(el("div", { class: "card row" },
+      el("div", { class: "grow" },
+        el("div", { class: "name" }, f.name),
+        el("div", { class: "meta" }, size(f.size) + " · " + (mine ? "you" : f.from_name) + (state.me && f.downloaded.includes(state.me.id) ? " · downloaded" : ""))),
+      button));
+  }
+}
+
+// A service worker turns bytes pulled over iroh into a real download, streamed to disk; without one they are
+// collected in memory first.
+let worker = null;
+function serviceWorker() {
+  if (!worker) {
+    worker = "serviceWorker" in navigator
+      ? navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).then((reg) => reg.active).catch(() => null)
+      : Promise.resolve(null);
+  }
+  return worker;
+}
+
+async function request(method, path, opts = {}) {
+  if (!tunnel || tunnel.closed()) tunnel = await mod.Tunnel.connect(link.get("e"), link.get("r"), secret());
+  const headers = [];
+  if (opts.type) headers.push("Content-Type", opts.type);
+  const res = await tunnel.request(method, base + path, headers, opts.body, opts.progress, opts.signal);
+  return {
+    status: res.status,
+    header: (name) => res.header(name),
+    chunk: () => res.chunk(),
+    cancel: () => res.cancel(),
+    free: () => res.free(),
+    text: async () => { try { return await res.text(); } finally { res.free(); } },
+  };
+}
+
+async function download(f, button) {
+  if (!remote) {
+    // The browser does the rest.
+    const a = el("a", { href: base + "dl/" + encodeURIComponent(f.id), download: f.name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    return;
+  }
+  const label = button.textContent;
+  button.setAttribute("aria-disabled", "true");
+  const done = (text) => { button.textContent = text; setTimeout(() => { button.textContent = label; button.removeAttribute("aria-disabled"); }, 2000); };
+  let res;
+  try {
+    button.textContent = "Starting…";
+    res = await request("GET", "dl/" + encodeURIComponent(f.id));
+    if (res.status !== 200) { done("Failed"); alert(await res.text()); return; }
+  } catch (_) { done("Failed"); return; }
+  const total = Number(res.header("content-length")) || 0;
+  let got = 0;
+  const progress = (n) => { got += n; if (total) button.textContent = Math.floor(100 * got / total) + "%"; };
+  const sw = await serviceWorker();
+  if (!sw) {
+    try {
+      const parts = [];
+      for (let c; (c = await res.chunk()); ) { parts.push(c); progress(c.length); }
+      const a = el("a", { href: URL.createObjectURL(new Blob(parts)), download: f.name });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      done("Saved");
+    } catch (_) { done("Failed"); } finally { res.free(); }
+    return;
+  }
+  const id = Math.random().toString(36).slice(2);
+  const channel = new MessageChannel();
+  const frame = el("iframe", { hidden: "" });
+  const end = (text) => { done(text); res.free(); setTimeout(() => frame.remove(), 1000); };
+  channel.port1.onmessage = async ({ data }) => {
+    if (data === "cancel") { await res.cancel(); return end("Cancelled"); }
+    try {
+      const c = await res.chunk();
+      if (c) { progress(c.length); channel.port1.postMessage({ chunk: c }, [c.buffer]); }
+      else { channel.port1.postMessage({ done: true }); end("Saved"); }
+    } catch (e) { channel.port1.postMessage({ error: String(e) }); end("Failed"); }
+  };
+  sw.postMessage({ download: { id, name: f.name, size: total } }, [channel.port2]);
+  frame.src = "save/" + id + "/" + encodeURIComponent(f.name);
+  document.body.append(frame);
+}
+
+// ---- uploads ----------------------------------------------------------------------------------------------
+
+function upload(file) {
+  const bar = el("progress", { max: String(file.size || 1), value: "0" });
+  const status = el("div", { class: "meta" }, "Sending…");
+  const card = el("div", { class: "card" }, el("div", { class: "name" }, file.name + " · " + size(file.size)), bar, status);
+  $("uploads").prepend(card);
+  const finish = (ok, text) => {
+    status.textContent = text;
+    if (ok) setTimeout(() => card.remove(), 3000);
+  };
+  const path = "up?name=" + encodeURIComponent(file.name);
+  if (remote) {
+    request("PUT", path, { body: file, progress: (n) => { bar.value = n; } })
+      .then(async (res) => { const t = await res.text(); finish(res.status === 200, res.status === 200 ? "Sent" : t || "Failed"); })
+      .catch((e) => finish(false, String(e && e.message || e)));
+  } else {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", base + path);
+    xhr.upload.onprogress = (e) => { bar.value = e.loaded; };
+    xhr.onload = () => finish(xhr.status === 200, xhr.status === 200 ? "Sent" : xhr.responseText || "Failed");
+    xhr.onerror = () => finish(false, "Failed");
+    xhr.send(file);
+  }
+}
+
+$("pick").onchange = (e) => { for (const f of e.target.files) upload(f); e.target.value = ""; };
+const drop = $("drop");
+for (const type of ["dragenter", "dragover"]) drop.addEventListener(type, (e) => { e.preventDefault(); drop.classList.add("over"); });
+for (const type of ["dragleave", "drop"]) drop.addEventListener(type, (e) => { e.preventDefault(); drop.classList.remove("over"); });
+drop.addEventListener("drop", (e) => { for (const f of e.dataTransfer.files) upload(f); });
+
+// ---- texts ------------------------------------------------------------------------------------------------
+
+async function copyText(text, button, pre) {
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
+  } catch (_) {}
+  if (!ok) {
+    // Plain-HTTP pages have no clipboard API: copy through a selection.
+    const area = el("textarea", { readonly: "", style: "position:fixed;top:0;left:0;opacity:0" });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    area.setSelectionRange(0, text.length);
+    try { ok = document.execCommand("copy"); } catch (_) {}
+    area.remove();
+  }
+  if (!ok) window.getSelection().selectAllChildren(pre);
+  button.textContent = ok ? "Copied" : "Selected, copy it";
+  setTimeout(() => { button.textContent = "Copy"; }, 2000);
+}
+
+function linkify(text) {
+  const out = document.createDocumentFragment();
+  let last = 0;
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"]+/g)) {
+    out.append(text.slice(last, m.index));
+    out.append(el("a", { href: m[0], target: "_blank", rel: "noopener noreferrer" }, m[0]));
+    last = m.index + m[0].length;
+  }
+  out.append(text.slice(last));
+  return out;
+}
+
+function renderTexts() {
+  const texts = [...state.snap.texts].reverse();
+  $("n-texts").textContent = texts.length || "";
+  const list = $("text-list");
+  list.replaceChildren();
+  if (!texts.length) list.append(el("div", { class: "empty" }, "No texts yet."));
+  for (const t of texts) {
+    const mine = state.me && t.from === state.me.id;
+    const pre = el("div", { class: "text" });
+    pre.append(linkify(t.text));
+    const copy = el("button", { class: "act quiet" }, "Copy");
+    copy.onclick = () => copyText(t.text, copy, pre);
+    const actions = el("div", { class: "row", style: "justify-content:flex-end" }, copy);
+    if (mine) {
+      const del = el("button", { class: "act quiet" }, "Delete");
+      del.onclick = () => { doc.delete_text(t.id); edited(); };
+      actions.append(del);
+    }
+    list.append(el("div", { class: "card" }, el("div", { class: "meta" }, (mine ? "you" : t.name) + " · " + new Date(t.ts).toLocaleString()), pre, actions));
+  }
+}
+
+$("text-send").onclick = () => {
+  const text = $("text-in").value.trim();
+  if (!text || !state.me) return;
+  doc.add_text(state.me.id, state.me.name, text);
+  $("text-in").value = "";
+  edited();
+};
+
+// ---- the scratchpad ---------------------------------------------------------------------------------------
+
+const pad = $("pad-in");
+let composing = false;
+pad.addEventListener("compositionstart", () => { composing = true; });
+pad.addEventListener("compositionend", () => { composing = false; pad.dispatchEvent(new Event("input")); });
+pad.addEventListener("input", () => {
+  if (composing) return;
+  if (doc.set_scratch(pad.value)) pump();
+  state.snap.scratch = pad.value;
+});
+
+// The document counts characters (code points); the textarea counts UTF-16 units.
+const chars = (s, units) => [...s.slice(0, units)].length;
+const units = (s, n) => [...s].slice(0, n).join("").length;
+
+function renderPad() {
+  const next = state.snap.scratch;
+  if (composing || pad.value === next) return;
+  const old = pad.value;
+  const [a, b] = [pad.selectionStart, pad.selectionEnd];
+  pad.value = next;
+  if (document.activeElement === pad) {
+    pad.setSelectionRange(units(next, mod.map_cursor(old, next, chars(old, a))), units(next, mod.map_cursor(old, next, chars(old, b))));
+  }
+}
+
+refresh();
+connect();
+</script>
+</body>
+</html>

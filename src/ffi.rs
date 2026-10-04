@@ -51,6 +51,8 @@ pub struct GroupRow {
     pub subtitle: String,
     pub summary: String,
     pub online: bool,
+    /// A guest group: anyone with its link joins from a browser.
+    pub guest: bool,
 }
 
 /// What is new in one group since it was last looked at.
@@ -180,6 +182,11 @@ pub struct UiState {
     pub pad_local: bool,
     pub auto_download: bool,
     pub auto_stop: bool,
+    /// The open group is a guest group, with these links ("" while not available) and whether guests may upload.
+    pub group_guest: bool,
+    pub guest_lan_url: String,
+    pub guest_web_url: String,
+    pub guest_uploads: bool,
 }
 
 /// A QR code: `size` x `size` modules, row by row, true = dark.
@@ -544,6 +551,22 @@ impl App {
         Some(id)
     }
 
+    /// Create a guest group and open it; returns its id.
+    pub fn new_guest_link(&self, uploads: bool) -> Option<String> {
+        let _g = self.inner.enter();
+        let id = self.inner.core()?.create_guest_link(uploads);
+        self.open_group(Some(id.clone()));
+        Some(id)
+    }
+
+    /// Allow or forbid uploads on the open guest group's link.
+    pub fn set_guest_uploads(&self, on: bool) {
+        let _g = self.inner.enter();
+        if let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) {
+            core.set_guest_uploads(&gid, on);
+        }
+    }
+
     /// Open a group's page (`None`: leave it). The UI decides which page that is.
     pub fn open_group(&self, id: Option<String>) {
         {
@@ -885,6 +908,7 @@ fn build_state(shared: &Shared) -> UiState {
                 subtitle: if g.alias.is_some() { g.haiku.clone() } else { String::new() },
                 summary,
                 online: others_online,
+                guest: g.guest.is_some(),
             }
         })
         .collect();
@@ -929,6 +953,10 @@ fn build_state(shared: &Shared) -> UiState {
     ui.group_peer = info.with.and_then(|w| shared.peers.iter().find(|p| p.id == w)).map(peer_row);
     ui.auto_download = info.auto_download;
     ui.auto_stop = info.auto_stop;
+    ui.group_guest = info.guest.is_some();
+    ui.guest_lan_url = info.guest.as_ref().and_then(|g| g.lan_url.clone()).unwrap_or_default();
+    ui.guest_web_url = info.guest.as_ref().and_then(|g| g.web_url.clone()).unwrap_or_default();
+    ui.guest_uploads = info.guest.as_ref().is_some_and(|g| g.uploads);
     let view = shared.views.get(&info.id);
 
     // Members: who the document lists, then invitees that have not joined.

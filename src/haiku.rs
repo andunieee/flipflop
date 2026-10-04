@@ -119,3 +119,40 @@ mod tests {
         println!("{}", name(&[200; 16]));
     }
 }
+
+const GUEST_ADJ: &[&str] = &[
+    "amber", "bold", "brave", "breezy", "bright", "calm", "cheerful", "clever", "cosmic", "crimson", "curious", "dapper", "daring",
+    "dreamy", "eager", "elegant", "fancy", "fierce", "fuzzy", "gentle", "giddy", "glowing", "golden", "graceful", "happy", "hasty",
+    "humble", "jolly", "kind", "lively", "lucky", "mellow", "mighty", "noble", "odd", "peaceful", "playful", "proud", "quick",
+    "quiet", "radiant", "rapid", "shiny", "silent", "silly", "sleepy", "smooth", "snappy", "speedy", "spicy", "steady", "sunny",
+    "swift", "tidy", "tiny", "vivid", "warm", "wild", "wise", "witty", "zany", "zesty", "beautiful",
+];
+const GUEST_ANIMAL: &[&str] = &[
+    "alpaca", "badger", "beaver", "camel", "crane", "dolphin", "eagle", "falcon", "ferret", "finch", "gazelle", "gecko", "giraffe",
+    "hamster", "hedgehog", "heron", "ibis", "iguana", "impala", "jackal", "jaguar", "kangaroo", "kiwi", "koala", "lemur", "llama",
+    "lobster", "lynx", "manatee", "marmot", "mongoose", "narwhal", "newt", "ocelot", "octopus", "orca", "otter", "panda", "parrot",
+    "pelican", "penguin", "puffin", "quail", "quokka", "rabbit", "raccoon", "salamander", "seal", "sloth", "stoat", "swan", "tapir",
+    "toucan", "turtle", "walrus", "weasel", "whale", "wombat", "yak", "zebra", "starling", "tortoise", "magpie",
+];
+
+/// The name a guest gets, such as "beautiful-iguana": always the same for the same `seed` (their iroh key, or their
+/// address on the LAN).
+pub fn guest_name(seed: &str) -> String {
+    let h = blake3::hash(seed.as_bytes());
+    let b = h.as_bytes();
+    let a = u16::from_le_bytes([b[0], b[1]]) as usize;
+    let n = u16::from_le_bytes([b[2], b[3]]) as usize;
+    format!("{}-{}", GUEST_ADJ[a % GUEST_ADJ.len()], GUEST_ANIMAL[n % GUEST_ANIMAL.len()])
+}
+
+#[cfg(test)]
+mod guest_tests {
+    use super::*;
+
+    #[test]
+    fn guest_names_are_stable_and_spread() {
+        assert_eq!(guest_name("lan:192.168.1.5"), guest_name("lan:192.168.1.5"));
+        let names: std::collections::BTreeSet<String> = (0..50).map(|i| guest_name(&format!("lan:10.0.0.{i}"))).collect();
+        assert!(names.len() > 40, "{names:?}");
+    }
+}

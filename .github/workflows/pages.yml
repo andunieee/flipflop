@@ -1,0 +1,67 @@
+name: Pages
+
+# The guest page for links from anywhere (web/): src/core/guest/page.html plus the group document and iroh in wasm,
+# at https://andunieee.github.io/flipflop/. Needs Settings → Pages → Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/**"
+      - "src/core/guest/page.html"
+      - "src/groupdoc.rs"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # The CLI must match the wasm-bindgen crate pinned in web/Cargo.toml.
+      - name: wasm-bindgen version
+        id: bindgen
+        run: |
+          v=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' web/Cargo.toml)
+          test -n "$v" || { echo "::error::wasm-bindgen must be pinned with = in web/Cargo.toml"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web
+
+      - name: Build
+        run: web/build.sh _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

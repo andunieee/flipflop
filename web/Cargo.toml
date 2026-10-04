@@ -1,0 +1,43 @@
+# The guest page: the group's Automerge document (src/groupdoc.rs, shared with the app) and, for links from
+# anywhere, iroh in wasm. Built by web/build.sh; the page for guests on the LAN is served by the app itself
+# from the `lan` build of it (src/core/guest/assets), and the full build is published to GitHub Pages by
+# .github/workflows/pages.yml.
+[package]
+name = "flipflop-web"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# Not part of the app's build.
+[workspace]
+
+[features]
+# iroh, to reach the app through its relay. Without it (the LAN build) only the document is built.
+default = ["tunnel"]
+tunnel = ["dep:iroh", "dep:httparse", "dep:tokio", "dep:web-sys", "dep:tracing-wasm"]
+
+[dependencies]
+automerge = { version = "0.12", features = ["wasm"] }
+serde_json = "1"
+tracing = "0.1"
+# Exact: the wasm-bindgen CLI that generates the JS glue must match it.
+wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+iroh = { version = "1", default-features = false, features = ["tls-ring"], optional = true }
+httparse = { version = "1", optional = true }
+web-sys = { version = "0.3", features = ["AbortSignal", "Blob"], optional = true }
+tracing-wasm = { version = "0.2", optional = true }
+tokio = { version = "1", default-features = false, features = ["sync"], optional = true }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = false
+strip = true

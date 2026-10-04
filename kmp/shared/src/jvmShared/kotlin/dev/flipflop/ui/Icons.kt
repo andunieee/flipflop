@@ -27,5 +27,6 @@ object Icons {
     val apps = Res.drawable.ic_apps
     val clipboard = Res.drawable.ic_clipboard
     val share = Res.drawable.ic_share
+    val link = Res.drawable.ic_link
     val logo: DrawableResource = Res.drawable.logo
 }
