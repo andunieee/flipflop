@@ -66,6 +66,56 @@ export global Theme {
     out property <length> card-padding: State.touch ? 14px : 16px;
 }
 
+// Line icons (24px grid, 2px stroke), tinted with `Icon.tint`.
+export global Icons {
+    out property <image> logo: @image-url("icons/logo.svg");
+    out property <image> peers: @image-url("icons/peers.svg");
+    out property <image> add-peer: @image-url("icons/add-peer.svg");
+    out property <image> settings: @image-url("icons/settings.svg");
+    out property <image> arrow-up: @image-url("icons/arrow-up.svg");
+    out property <image> arrow-down: @image-url("icons/arrow-down.svg");
+    out property <image> chevron-down: @image-url("icons/chevron-down.svg");
+    out property <image> close: @image-url("icons/close.svg");
+    out property <image> refresh: @image-url("icons/refresh.svg");
+    out property <image> copy: @image-url("icons/copy.svg");
+    out property <image> edit: @image-url("icons/edit.svg");
+    out property <image> trash: @image-url("icons/trash.svg");
+    out property <image> send: @image-url("icons/send.svg");
+    out property <image> folder: @image-url("icons/folder.svg");
+    out property <image> inbox: @image-url("icons/inbox.svg");
+    out property <image> link: @image-url("icons/link.svg");
+    out property <image> nearby: @image-url("icons/nearby.svg");
+    out property <image> open: @image-url("icons/open.svg");
+    out property <image> device: @image-url("icons/device.svg");
+    out property <image> shield: @image-url("icons/shield.svg");
+    out property <image> relay: @image-url("icons/relay.svg");
+    out property <image> globe: @image-url("icons/globe.svg");
+}
+
+export component Icon inherits Image {
+    in property <length> size: 18px;
+    in property <color> tint: Theme.text;
+    width: root.size;
+    height: root.size;
+    colorize: root.tint;
+    image-fit: contain;
+}
+
+// App mark: the logo on the brand gradient.
+export component LogoMark inherits Rectangle {
+    in property <length> size: 32px;
+    width: root.size;
+    height: root.size;
+    border-radius: root.size * 0.28;
+    background: @linear-gradient(135deg, #8b7cff 0%, #3f7fff 100%);
+
+    Icon {
+        source: Icons.logo;
+        size: root.size * 0.62;
+        tint: white;
+    }
+}
+
 export component PageTitle inherits VerticalLayout {
     in property <string> title;
     in property <string> subtitle;
@@ -82,6 +132,32 @@ export component PageTitle inherits VerticalLayout {
         font-size: Theme.font-sm;
         color: Theme.text-muted;
         wrap: word-wrap;
+    }
+}
+
+// Section heading with a leading icon in a soft tile.
+export component SectionHeader inherits HorizontalLayout {
+    in property <string> label;
+    in property <image> icon;
+    spacing: Theme.space-2 + 2px;
+
+    VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            background: Theme.accent-soft;
+            Icon { source: root.icon; size: 16px; tint: Theme.accent-text; }
+        }
+    }
+    Text {
+        text: root.label;
+        font-size: Theme.font-md;
+        font-weight: 650;
+        color: Theme.text-strong;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
     }
 }
 
@@ -254,19 +330,18 @@ export component DirectionIcon inherits Rectangle {
     border-radius: root.size / 2;
     background: root.sending ? Theme.warn-soft : Theme.info-soft;
 
-    Text {
-        text: root.sending ? "↑" : "↓";
-        color: root.sending ? Theme.warn : Theme.info;
-        font-size: root.size * 0.5;
-        font-weight: 800;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    Icon {
+        source: root.sending ? Icons.arrow-up : Icons.arrow-down;
+        size: root.size * 0.52;
+        tint: root.sending ? Theme.warn : Theme.info;
     }
 }
 
-// Buttons share one shape: fixed height, rounded, centered label.
+// Buttons share one shape: fixed height, rounded, centered label and/or
+// leading icon (icon only when `label` is empty).
 component ButtonBase inherits Rectangle {
     in property <string> label;
+    in property <image> icon;
     in property <bool> enabled: true;
     in property <color> fill;
     in property <color> fill-hover;
@@ -293,10 +368,15 @@ component ButtonBase inherits Rectangle {
 
     HorizontalLayout {
         alignment: center;
-        padding-left: Theme.space-3 + 2px;
-        padding-right: Theme.space-3 + 2px;
+        padding-left: root.label == "" ? 0 : Theme.space-3 + 2px;
+        padding-right: root.label == "" ? 0 : Theme.space-3 + 2px;
+        spacing: Theme.space-2;
 
-        Text {
+        if root.icon.width > 0: VerticalLayout {
+            alignment: center;
+            Icon { source: root.icon; size: 18px; tint: root.ink; }
+        }
+        if root.label != "": Text {
             text: root.label;
             color: root.ink;
             font-size: Theme.font-md;
@@ -340,4 +420,34 @@ export component DangerButton inherits ButtonBase {
     fill-hover: root.solid ? #d24b5a : Theme.error-soft;
     fill-press: root.solid ? #a93744 : #4a2229;
     ink: root.solid ? white : Theme.error;
+}
+
+// Round, icon-only borderless button (row actions, toolbar actions).
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> tint: Theme.text-muted;
+    in property <bool> enabled: true;
+    in property <bool> danger: false;
+    callback clicked;
+
+    width: Theme.control-height;
+    height: Theme.control-height;
+    border-radius: self.height / 2;
+    background: !root.enabled ? transparent
+        : touch.pressed ? (root.danger ? #4a2229 : Theme.chip-bg-hover)
+        : touch.has-hover ? (root.danger ? Theme.error-soft : Theme.chip-bg)
+        : transparent;
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background { duration: 90ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: root.enabled ? pointer : default;
+    }
+    Icon {
+        source: root.icon;
+        size: State.touch ? 20px : 17px;
+        tint: root.danger ? Theme.error : root.tint;
+    }
 }

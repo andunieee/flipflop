@@ -1,16 +1,16 @@
 import { State, Logic, PeerRow } from "globals.slint";
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Dot, Avatar, Overline } from "components.slint";
+import { Theme, Dot, Avatar, Overline, Icon, Icons, LogoMark } from "components.slint";
 import { PeerPage } from "peer-page.slint";
 import { AddPeerPage } from "add-peer-page.slint";
 import { SettingsPage } from "settings-page.slint";
 
 export { State, Logic }
 
-// Sidebar row: an icon-less navigation entry (Settings, Add peer).
+// Sidebar navigation entry (Settings, Add peer).
 component SideButton inherits Rectangle {
     in property <string> label;
-    in property <string> icon;
+    in property <image> icon;
     in property <bool> active;
     in property <bool> accent;
     callback clicked;
@@ -33,14 +33,13 @@ component SideButton inherits Rectangle {
         padding-right: Theme.space-3;
         spacing: Theme.space-2 + 2px;
 
-        Text {
-            width: 18px;
-            text: root.icon;
-            color: root.accent || root.active ? Theme.accent-text : Theme.text-muted;
-            font-size: 15px;
-            font-weight: 700;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                source: root.icon;
+                size: 18px;
+                tint: root.accent || root.active ? Theme.accent-text : Theme.text-muted;
+            }
         }
         Text {
             text: root.label;
@@ -99,25 +98,24 @@ component PeerButton inherits Rectangle {
             horizontal-stretch: 1;
         }
         // In-flight transfer markers.
-        if root.peer.sending: Text {
-            text: "↑";
-            color: Theme.warn;
-            font-weight: 800;
-            vertical-alignment: center;
+        if root.peer.sending: VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.arrow-up; size: 15px; tint: Theme.warn; }
         }
-        if root.peer.receiving: Text {
-            text: "↓";
-            color: Theme.info;
-            font-weight: 800;
-            vertical-alignment: center;
+        if root.peer.receiving: VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.arrow-down; size: 15px; tint: Theme.info; }
         }
     }
 }
 
-// Bottom navigation entry (compact layout).
+// Bottom navigation entry (compact layout): icon in an "active" pill over
+// the label, with an optional count badge.
 component TabButton inherits Rectangle {
     in property <string> label;
     in property <string> key;
+    in property <image> icon;
+    in property <int> badge;
     property <bool> active: State.page == root.key;
 
     ta := TouchArea {
@@ -129,24 +127,66 @@ component TabButton inherits Rectangle {
 
     VerticalLayout {
         alignment: center;
-        spacing: 6px;
+        spacing: 4px;
 
         HorizontalLayout {
             alignment: center;
             Rectangle {
-                height: 3px;
-                width: 28px;
-                border-radius: 2px;
-                background: root.active ? Theme.accent : transparent;
+                width: 60px;
+                height: 32px;
+                border-radius: 16px;
+                background: root.active ? Theme.accent-soft
+                    : ta.pressed ? Theme.chip-bg : transparent;
+                animate background { duration: 120ms; }
+
+                Icon {
+                    source: root.icon;
+                    size: 22px;
+                    tint: root.active ? Theme.accent-text : Theme.text-muted;
+                }
+                if root.badge > 0: Rectangle {
+                    x: parent.width / 2 + 4px;
+                    y: 0px;
+                    height: 16px;
+                    width: max(16px, badge-text.preferred-width + 8px);
+                    border-radius: 8px;
+                    background: Theme.accent;
+                    badge-text := Text {
+                        text: root.badge;
+                        color: white;
+                        font-size: 10px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
         Text {
             text: root.label;
             color: root.active ? Theme.text-strong : Theme.text-muted;
-            font-size: Theme.font-sm;
+            font-size: Theme.font-xs;
             font-weight: root.active ? 700 : 500;
             horizontal-alignment: center;
         }
+    }
+}
+
+// "Connecting…" / own name, with a presence dot.
+component NodeStatus inherits HorizontalLayout {
+    spacing: 6px;
+    alignment: start;
+    VerticalLayout {
+        alignment: center;
+        Dot { online: State.node-ready; size: 7px; }
+    }
+    Text {
+        text: !State.node-ready ? "Connecting…"
+            : State.my-name == "" ? "Online" : State.my-name;
+        color: State.node-ready ? Theme.text-muted : Theme.warn;
+        font-size: Theme.font-xs;
+        overflow: elide;
+        vertical-alignment: center;
     }
 }
 
@@ -166,7 +206,49 @@ export component AppWindow inherits Window {
     // binding loop, and the desktop window enforces min-width anyway.
     property <bool> compact: State.compact;
 
+    // System bars drawn over the window (Android is edge-to-edge). The
+    // preview-* values stand in for them in headless screenshots.
+    in property <length> preview-inset-top;
+    in property <length> preview-inset-bottom;
+    property <length> inset-top: max(root.safe-area-insets.top, root.preview-inset-top);
+    property <length> inset-bottom: max(root.safe-area-insets.bottom, root.preview-inset-bottom);
+
     VerticalLayout {
+        // Compact app bar (phones), under the status bar.
+        if root.compact: Rectangle {
+            height: root.inset-top + 60px;
+            background: Theme.window-bg;
+
+            HorizontalLayout {
+                padding-top: root.inset-top;
+                padding-left: Theme.page-padding;
+                padding-right: Theme.page-padding;
+                spacing: Theme.space-3;
+
+                VerticalLayout {
+                    alignment: center;
+                    LogoMark { size: 34px; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: "TunnelManager";
+                        font-size: Theme.font-lg;
+                        font-weight: 700;
+                        color: Theme.text-strong;
+                    }
+                    NodeStatus { }
+                }
+            }
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.border;
+            }
+        }
+
         HorizontalLayout {
             // Sidebar: desktop + wide tablets only.
             if !root.compact: Rectangle {
@@ -184,20 +266,7 @@ export component AppWindow inherits Window {
                         padding-bottom: Theme.space-3;
                         spacing: Theme.space-2 + 2px;
 
-                        Rectangle {
-                            width: 32px;
-                            height: 32px;
-                            border-radius: 9px;
-                            background: @linear-gradient(135deg, #7b6dff 0%, #4f8dff 100%);
-                            Text {
-                                text: "⇅";
-                                color: white;
-                                font-size: 17px;
-                                font-weight: 800;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
+                        LogoMark { size: 32px; }
                         VerticalLayout {
                             alignment: center;
                             spacing: 2px;
@@ -207,28 +276,13 @@ export component AppWindow inherits Window {
                                 font-weight: 700;
                                 color: Theme.text-strong;
                             }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                alignment: start;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Dot { online: State.node-ready; size: 7px; }
-                                }
-                                Text {
-                                    text: !State.node-ready ? "Connecting…"
-                                        : State.my-name == "" ? "Online" : State.my-name;
-                                    color: State.node-ready ? Theme.text-muted : Theme.warn;
-                                    font-size: Theme.font-xs;
-                                    overflow: elide;
-                                    vertical-alignment: center;
-                                }
-                            }
+                            NodeStatus { }
                         }
                     }
 
                     SideButton {
                         label: "Add peer";
-                        icon: "+";
+                        icon: Icons.add-peer;
                         accent: true;
                         active: State.page == "add-peer";
                         clicked => {
@@ -272,7 +326,7 @@ export component AppWindow inherits Window {
 
                     SideButton {
                         label: "Settings";
-                        icon: "⚙";
+                        icon: Icons.settings;
                         active: State.page == "settings";
                         clicked => {
                             State.page = "settings";
@@ -306,8 +360,9 @@ export component AppWindow inherits Window {
 
         // Bottom nav on compact layouts (phones): thumb-reachable, larger
         // hit targets than the desktop sidebar.
+        // Extends under the system navigation bar.
         if root.compact: Rectangle {
-            height: 60px;
+            height: 68px + root.inset-bottom;
             background: Theme.sidebar-bg;
             border-width: 0;
 
@@ -317,9 +372,10 @@ export component AppWindow inherits Window {
                 background: Theme.border;
             }
             HorizontalLayout {
-                TabButton { label: "Peers"; key: "peer"; }
-                TabButton { label: "Add peer"; key: "add-peer"; }
-                TabButton { label: "Settings"; key: "settings"; }
+                padding-bottom: root.inset-bottom;
+                TabButton { label: "Peers"; key: "peer"; icon: Icons.peers; badge: State.outbox-count; }
+                TabButton { label: "Add peer"; key: "add-peer"; icon: Icons.add-peer; }
+                TabButton { label: "Settings"; key: "settings"; icon: Icons.settings; }
             }
         }
     }
@@ -330,7 +386,7 @@ export component AppWindow inherits Window {
         width: min(toast-label.preferred-width + 40px, root.width - 48px);
         height: toast-label.preferred-height + 24px;
         x: (root.width - self.width) / 2;
-        y: root.height - self.height - (root.compact ? 76px : 24px);
+        y: root.height - self.height - (root.compact ? 84px + root.inset-bottom : 24px);
         border-radius: Theme.radius;
         background: #262a37;
         border-width: 1px;
