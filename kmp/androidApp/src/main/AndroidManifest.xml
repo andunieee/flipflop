@@ -29,6 +29,7 @@
 
     <application
         android:label="flipflop"
+        android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
                 android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity

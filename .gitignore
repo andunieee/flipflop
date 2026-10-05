@@ -4,4 +4,7 @@ kmp/.kotlin/
 kmp/**/build/
 kmp/androidApp/src/main/jniLibs/
 kmp/androidApp/blew-kt/
+/dist/
 kmp/local.properties
+*.jks
+*.keystore

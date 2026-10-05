@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=flipflop
+GenericName=Peer-to-peer sharing
+Comment=Share files, texts and a scratchpad with your devices, peer to peer
+Exec=flipflop
+Icon=dev.flipflop.app
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=p2p;share;files;sync;iroh;
+StartupNotify=true
+StartupWMClass=dev-flipflop-desktop-MainKt
