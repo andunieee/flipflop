@@ -559,6 +559,14 @@ impl App {
         Some(id)
     }
 
+    /// Turn the open group into a guest group and generate its link.
+    pub fn enable_guest_link(&self, uploads: bool) {
+        let _g = self.inner.enter();
+        if let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) {
+            core.enable_guest_link(&gid, uploads);
+        }
+    }
+
     /// Allow or forbid uploads on the open guest group's link.
     pub fn set_guest_uploads(&self, on: bool) {
         let _g = self.inner.enter();

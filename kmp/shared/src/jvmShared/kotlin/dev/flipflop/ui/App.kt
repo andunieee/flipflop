@@ -236,6 +236,7 @@ private fun Sidebar(s: UiState, nav: Nav) {
             }
             SideButton("Peers", Icons.peers, nav.page == "peers") { nav.go("peers") }
             SideButton("Add a peer", Icons.addPeer, nav.page == "add") { nav.go("add") }
+            SideButton("Guest link", Icons.link, false) { nav.newGuestLink() }
             SideButton("Settings", Icons.settings, nav.page == "settings") { nav.go("settings") }
         }
         Box(Modifier.width(1.dp).fillMaxHeight().background(Theme.c.border))
