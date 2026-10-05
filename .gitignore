@@ -2,9 +2,6 @@
 /target
 **/target
 
-# Android signing keystore (local only)
-.keystore.jks
-
 # IDE and editor files
 .vscode/
 .idea/
@@ -21,3 +18,4 @@ Thumbs.db
 
 # Logs
 *.log
+*.jks
