@@ -2,6 +2,7 @@ import { State, Logic, PeerRow } from "globals.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme, Dot, Avatar, Overline, Icon, Icons, LogoMark } from "components.slint";
 import { PeerPage } from "peer-page.slint";
+import { PeersListPage } from "peers-list-page.slint";
 import { AddPeerPage } from "add-peer-page.slint";
 import { SettingsPage } from "settings-page.slint";
 
@@ -120,6 +121,10 @@ component TabButton inherits Rectangle {
 
     ta := TouchArea {
         clicked => {
+            // Re-tapping Peers from a peer's page returns to the list.
+            if root.key == "peer" {
+                State.peer-open = false;
+            }
             State.page = root.key;
             Logic.page-changed(root.key);
         }
@@ -212,6 +217,31 @@ export component AppWindow inherits Window {
     in property <length> preview-inset-bottom;
     property <length> inset-top: max(root.safe-area-insets.top, root.preview-inset-top);
     property <length> inset-bottom: max(root.safe-area-insets.bottom, root.preview-inset-bottom);
+    // Compact: a peer's own screen is showing (it still exists).
+    property <bool> peer-screen: State.peer-open && State.selected-name != "";
+
+    // Android Back: peer screen → peer list → Peers tab → background.
+    // Unhandled, Android would finish the activity (and the process).
+    back-handler := FocusScope {
+        width: 100%;
+        height: 100%;
+        init => { self.focus(); }
+        key-pressed(event) => {
+            if event.text != Key.Back {
+                return reject;
+            }
+            if State.rename-mode {
+                Logic.rename-peer-cancel();
+            } else if root.compact && State.page == "peer" && root.peer-screen {
+                State.peer-open = false;
+            } else if State.page != "peer" {
+                State.page = "peer";
+                Logic.page-changed("peer");
+            } else {
+                Logic.back-at-root();
+            }
+            accept
+        }
 
     VerticalLayout {
         // Compact app bar (phones), under the status bar.
@@ -343,7 +373,12 @@ export component AppWindow inherits Window {
             // Content
             Rectangle {
                 horizontal-stretch: 1;
-                if State.page == "peer": PeerPage {
+                // Phones: the peer list, or one peer's own screen.
+                if State.page == "peer" && (!root.compact || root.peer-screen): PeerPage {
+                    width: 100%;
+                    height: 100%;
+                }
+                if State.page == "peer" && root.compact && !root.peer-screen: PeersListPage {
                     width: 100%;
                     height: 100%;
                 }
@@ -378,6 +413,7 @@ export component AppWindow inherits Window {
                 TabButton { label: "Settings"; key: "settings"; icon: Icons.settings; }
             }
         }
+    }
     }
 
     // Desktop toast (Android shows native toasts instead). Click to dismiss;

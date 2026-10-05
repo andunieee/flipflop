@@ -3,7 +3,7 @@ import { State, Logic, HistoryRow, TransferRow } from "globals.slint";
 import {
     Theme, Dot, Card, ProgressBar, HintText, Avatar, Badge, DirectionIcon,
     PrimaryButton, SecondaryButton, GhostButton, DangerButton, SectionTitle,
-    Icon, Icons, IconButton, LogoMark,
+    Icon, Icons, IconButton, LogoMark, Divider,
 } from "components.slint";
 
 component HistoryItem inherits Rectangle {
@@ -161,46 +161,231 @@ component TransferCard inherits Card {
     }
 }
 
-// Compact-mode peer switcher entry.
-component PeerChip inherits Rectangle {
-    in property <string> endpoint-id;
-    in property <string> label;
-    in property <string> initials;
-    in property <bool> online;
+// Inline rename field (shown while `State.rename-mode`).
+component RenameRow inherits HorizontalLayout {
+    spacing: Theme.space-2;
+    LineEdit {
+        text <=> State.rename-input;
+        placeholder-text: "Peer name";
+        horizontal-stretch: 1;
+        accepted => { Logic.rename-peer-confirm(); }
+    }
+    PrimaryButton { label: "Save"; clicked => { Logic.rename-peer-confirm(); } }
+    GhostButton { label: "Cancel"; clicked => { Logic.rename-peer-cancel(); } }
+}
+
+// "Forget <peer>?" with an explicit, solid confirm button.
+component ForgetConfirm inherits Rectangle {
+    callback cancelled;
+    callback confirmed;
 
     border-radius: Theme.radius;
-    background: State.selected-id == root.endpoint-id ? Theme.accent-soft
-        : ta.has-hover ? Theme.card-bg-hover : Theme.card-bg;
-    height: Theme.control-height + 8px;
+    background: Theme.error-soft;
+    border-width: 1px;
+    border-color: #5a2a32;
 
-    ta := TouchArea {
-        clicked => {
-            Logic.select-peer(root.endpoint-id);
-            State.show-peer-picker = false;
-        }
-        mouse-cursor: pointer;
-    }
+    VerticalLayout {
+        padding: Theme.space-3;
+        padding-left: Theme.space-4;
+        spacing: Theme.space-2;
 
-    HorizontalLayout {
-        padding-left: Theme.space-3;
-        padding-right: Theme.space-3;
-        spacing: Theme.space-3;
-
-        VerticalLayout {
-            alignment: center;
-            Avatar { initials: root.initials; size: 30px; show-presence: true; online: root.online; }
-        }
         Text {
-            text: root.label;
-            color: State.selected-id == root.endpoint-id ? Theme.text-strong : Theme.text;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
+            text: "Forget " + State.selected-name + "? You'll need to pair again to exchange files.";
+            color: Theme.text-strong;
+            font-size: Theme.font-sm;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: Theme.space-2;
+            GhostButton { label: "Cancel"; clicked => { root.cancelled(); } }
+            DangerButton {
+                label: "Forget";
+                icon: Icons.trash;
+                solid: true;
+                clicked => { root.confirmed(); }
+            }
         }
     }
 }
 
-export component PeerPage inherits Rectangle {
+// No peers yet / none selected.
+export component EmptyPeersCard inherits Card {
+    VerticalLayout {
+        padding: Theme.space-5;
+        spacing: Theme.space-3;
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-bottom: Theme.space-1;
+            LogoMark { size: 56px; }
+        }
+        Text {
+            text: State.peers.length == 0 ? "Pair your first device" : "Choose a peer";
+            color: Theme.text-strong;
+            font-size: Theme.font-lg;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+        HintText {
+            label: State.peers.length == 0
+                ? "Peers are devices you trust. Once paired, files you send them arrive automatically — no codes to type."
+                : "Pick a peer in the sidebar to send files or see your history with them.";
+            horizontal-alignment: center;
+        }
+        if State.peers.length == 0: HorizontalLayout {
+            alignment: center;
+            PrimaryButton {
+                label: "Add a peer";
+                icon: Icons.add-peer;
+                clicked => {
+                    State.page = "add-peer";
+                    Logic.page-changed("add-peer");
+                }
+            }
+        }
+    }
+}
+
+// Share-sheet queue: every staged file with a remove button. On a peer's
+// page it also sends the lot to that peer.
+export component OutboxCard inherits Card {
+    in property <bool> can-send;
+    border-color: #3a4170;
+
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-2;
+
+        HorizontalLayout {
+            spacing: Theme.space-3;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 10px;
+                    background: Theme.accent-soft;
+                    Icon { source: Icons.inbox; size: 18px; tint: Theme.accent-text; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: State.outbox-count == 1 ? "1 file ready to send" : State.outbox-count + " files ready to send";
+                    color: Theme.text-strong;
+                    font-weight: 650;
+                    overflow: elide;
+                }
+                HintText {
+                    label: root.can-send ? "Waiting to be sent." : "Pick a peer below to send them.";
+                    font-size: Theme.font-xs;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                GhostButton { label: "Clear"; clicked => { Logic.outbox-clear(); } }
+            }
+        }
+
+        for file in State.outbox: HorizontalLayout {
+            spacing: Theme.space-2;
+            padding-left: Theme.space-1;
+            VerticalLayout {
+                alignment: center;
+                Icon { source: Icons.file; size: 16px; tint: Theme.text-muted; }
+            }
+            Text {
+                text: file.name;
+                color: Theme.text;
+                font-size: Theme.font-sm;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: file.size;
+                color: Theme.text-faint;
+                font-size: Theme.font-xs;
+                vertical-alignment: center;
+            }
+            IconButton {
+                icon: Icons.close;
+                clicked => { Logic.outbox-remove(file.path); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            padding-top: Theme.space-1;
+            SecondaryButton {
+                label: "Add files…";
+                icon: Icons.folder;
+                horizontal-stretch: root.can-send ? 0 : 1;
+                clicked => { Logic.pick-files(); }
+            }
+            if root.can-send: PrimaryButton {
+                label: State.selected-sending ? "Sending…" : "Send to " + State.selected-name;
+                icon: Icons.send;
+                enabled: !State.selected-sending;
+                horizontal-stretch: 1;
+                clicked => { Logic.send-to-peer(); }
+            }
+        }
+    }
+}
+
+component HistoryHeader inherits HorizontalLayout {
+    padding-top: Theme.space-2;
+    SectionTitle { label: "History"; horizontal-stretch: 1; }
+    if State.touch: IconButton { icon: Icons.refresh; clicked => { Logic.refresh-history(); } }
+    if !State.touch: GhostButton { label: "Refresh"; icon: Icons.refresh; clicked => { Logic.refresh-history(); } }
+}
+
+component NoHistory inherits Rectangle {
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+    height: 64px;
+    Text {
+        text: "No transfers with " + State.selected-name + " yet.";
+        color: Theme.text-faint;
+        font-size: Theme.font-sm;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component PresenceLine inherits HorizontalLayout {
+    in property <bool> show-detail;
+    spacing: 6px;
+    alignment: start;
+    VerticalLayout {
+        alignment: center;
+        Dot { online: State.selected-online; size: 7px; }
+    }
+    Text {
+        text: State.selected-online ? "Online" : "Offline";
+        color: State.selected-online ? Theme.online : Theme.text-muted;
+        font-size: Theme.font-sm;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    if root.show-detail: Text {
+        text: "· " + State.selected-detail;
+        color: Theme.text-faint;
+        font-size: Theme.font-sm;
+        vertical-alignment: center;
+        overflow: elide;
+        horizontal-stretch: 1;
+    }
+}
+
+// Desktop / wide layout: the selected peer next to the sidebar.
+component WidePeerView inherits Rectangle {
     property <bool> has-peer: State.selected-name != "";
     property <bool> confirm-forget: false;
     // A pending "Forget?" never carries over to another peer.
@@ -211,85 +396,17 @@ export component PeerPage inherits Rectangle {
         padding: Theme.page-padding;
         spacing: Theme.space-4;
 
-        // Compact layout has no sidebar: pick the peer here.
-        if State.compact && State.peers.length > 0: Rectangle {
-            border-radius: Theme.radius;
-            background: Theme.card-bg;
-            border-width: 1px;
-            border-color: State.show-peer-picker ? Theme.border-strong : Theme.border;
-            height: Theme.control-height + 8px;
-
-            TouchArea {
-                clicked => { State.show-peer-picker = !State.show-peer-picker; }
-                mouse-cursor: pointer;
-            }
-            HorizontalLayout {
-                padding-left: Theme.space-3;
-                padding-right: Theme.space-3;
-                spacing: Theme.space-2;
-
-                VerticalLayout {
-                    alignment: center;
-                    if root.has-peer: Avatar {
-                        initials: State.selected-initials;
-                        size: 28px;
-                        show-presence: true;
-                        online: State.selected-online;
-                    }
-                    if !root.has-peer: Icon { source: Icons.peers; size: 20px; tint: Theme.text-muted; }
-                }
-                Text {
-                    text: root.has-peer ? State.selected-name : "Choose a peer";
-                    color: Theme.text-strong;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                }
-                VerticalLayout {
-                    alignment: center;
-                    Icon {
-                        source: Icons.chevron-down;
-                        size: 20px;
-                        tint: Theme.text-muted;
-                        rotation-angle: State.show-peer-picker ? 180deg : 0deg;
-                        animate rotation-angle { duration: 150ms; easing: ease-out; }
-                    }
-                }
-            }
-        }
-
-        if State.compact && State.show-peer-picker: ScrollView {
-            // Hug short lists; scroll past ~5 peers.
-            height: min(260px, picker-list.preferred-height);
-            picker-list := VerticalLayout {
-                spacing: Theme.space-1;
-                alignment: start;
-                for peer in State.peers: PeerChip {
-                    endpoint-id: peer.endpoint-id;
-                    label: peer.name;
-                    initials: peer.initials;
-                    online: peer.online;
-                }
-            }
-        }
-
-        // Header
         if root.has-peer: HorizontalLayout {
             spacing: Theme.space-3 + 2px;
 
             VerticalLayout {
                 alignment: center;
-                Avatar {
-                    initials: State.selected-initials;
-                    size: State.touch ? 44px : 52px;
-                }
+                Avatar { initials: State.selected-initials; size: 52px; }
             }
             VerticalLayout {
                 alignment: center;
                 spacing: Theme.space-1;
                 horizontal-stretch: 1;
-
                 Text {
                     text: State.selected-name;
                     color: Theme.text-strong;
@@ -297,43 +414,9 @@ export component PeerPage inherits Rectangle {
                     font-weight: 700;
                     overflow: elide;
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Dot { online: State.selected-online; size: 7px; }
-                    }
-                    Text {
-                        text: State.selected-online ? "Online" : "Offline";
-                        color: State.selected-online ? Theme.online : Theme.text-muted;
-                        font-size: Theme.font-sm;
-                        font-weight: 600;
-                        vertical-alignment: center;
-                    }
-                    if !State.compact: Text {
-                        text: "· " + State.selected-detail;
-                        color: Theme.text-faint;
-                        font-size: Theme.font-sm;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
-                }
+                PresenceLine { show-detail: true; }
             }
-            // Phones: icon-only actions keep the name readable.
-            if !State.rename-mode && !root.confirm-forget && State.touch: HorizontalLayout {
-                alignment: end;
-                VerticalLayout {
-                    alignment: center;
-                    IconButton { icon: Icons.edit; clicked => { Logic.rename-peer(); } }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    IconButton { icon: Icons.trash; danger: true; clicked => { root.confirm-forget = true; } }
-                }
-            }
-            if !State.rename-mode && !root.confirm-forget && !State.touch: HorizontalLayout {
+            if !State.rename-mode && !root.confirm-forget: HorizontalLayout {
                 spacing: Theme.space-1;
                 alignment: end;
                 VerticalLayout {
@@ -347,100 +430,21 @@ export component PeerPage inherits Rectangle {
             }
         }
 
-        // Forget confirmation
-        if root.has-peer && root.confirm-forget: Rectangle {
-            border-radius: Theme.radius;
-            background: Theme.error-soft;
-            border-width: 1px;
-            border-color: #5a2a32;
-
-            HorizontalLayout {
-                padding: Theme.space-3;
-                padding-left: Theme.space-4;
-                spacing: Theme.space-2;
-
-                Text {
-                    text: "Forget " + State.selected-name + "? You'll need to pair again to exchange files.";
-                    color: Theme.text-strong;
-                    font-size: Theme.font-sm;
-                    wrap: word-wrap;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                VerticalLayout {
-                    alignment: center;
-                    GhostButton { label: "Cancel"; clicked => { root.confirm-forget = false; } }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    DangerButton {
-                        label: "Forget";
-                        solid: true;
-                        clicked => {
-                            root.confirm-forget = false;
-                            Logic.remove-peer();
-                        }
-                    }
-                }
+        if root.has-peer && root.confirm-forget: ForgetConfirm {
+            cancelled => { root.confirm-forget = false; }
+            confirmed => {
+                root.confirm-forget = false;
+                Logic.remove-peer();
             }
         }
+        if State.rename-mode: RenameRow { }
+        if !root.has-peer: EmptyPeersCard { }
 
-        // Inline rename
-        if State.rename-mode: HorizontalLayout {
-            spacing: Theme.space-2;
-            LineEdit {
-                text <=> State.rename-input;
-                placeholder-text: "Peer name";
-                horizontal-stretch: 1;
-                accepted => { Logic.rename-peer-confirm(); }
-            }
-            PrimaryButton { label: "Save"; clicked => { Logic.rename-peer-confirm(); } }
-            GhostButton { label: "Cancel"; clicked => { Logic.rename-peer-cancel(); } }
-        }
-
-        // No peer selected (or none at all): a friendly empty state. On
-        // phones with peers, the picker above does the job instead.
-        if !root.has-peer && (!State.compact || State.peers.length == 0): Card {
-            VerticalLayout {
-                padding: Theme.space-5;
-                spacing: Theme.space-3;
-                alignment: center;
-
-                HorizontalLayout {
-                    alignment: center;
-                    padding-bottom: Theme.space-1;
-                    LogoMark { size: 56px; }
-                }
-                Text {
-                    text: State.peers.length == 0 ? "Pair your first device" : "Choose a peer";
-                    color: Theme.text-strong;
-                    font-size: Theme.font-lg;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                }
-                HintText {
-                    label: State.peers.length == 0
-                        ? "Peers are devices you trust. Once paired, files you send them arrive automatically — no codes to type."
-                        : "Pick a peer in the sidebar to send files or see your history with them.";
-                    horizontal-alignment: center;
-                }
-                if State.peers.length == 0: HorizontalLayout {
-                    alignment: center;
-                    PrimaryButton {
-                        label: "Add a peer";
-                        icon: Icons.add-peer;
-                        clicked => {
-                            State.page = "add-peer";
-                            Logic.page-changed("add-peer");
-                        }
-                    }
-                }
-            }
-        }
+        // Share-sheet queue (touch devices that are wide enough for this view).
+        if root.has-peer && State.outbox-count > 0: OutboxCard { can-send: true; }
 
         // Send action (hidden while a send to this peer is in flight).
-        if root.has-peer && !State.selected-sending: Card {
-            border-color: State.touch && State.outbox-count > 0 ? #3a4170 : Theme.border;
+        if root.has-peer && !State.selected-sending && State.outbox-count == 0: Card {
             HorizontalLayout {
                 padding: Theme.card-padding;
                 spacing: Theme.space-3 + 2px;
@@ -452,38 +456,31 @@ export component PeerPage inherits Rectangle {
                         height: 40px;
                         border-radius: 12px;
                         background: Theme.accent-soft;
-                        Icon {
-                            source: State.touch && State.outbox-count > 0 ? Icons.inbox : Icons.send;
-                            size: 20px;
-                            tint: Theme.accent-text;
-                        }
+                        Icon { source: Icons.send; size: 20px; tint: Theme.accent-text; }
                     }
                 }
-
                 VerticalLayout {
                     alignment: center;
                     spacing: 3px;
                     horizontal-stretch: 1;
                     Text {
-                        text: State.touch && State.outbox-count > 0
-                            ? (State.outbox-count == 1 ? "1 file ready" : State.outbox-count + " files ready")
-                            : "Send files to " + State.selected-name;
+                        text: "Send files to " + State.selected-name;
                         color: Theme.text-strong;
                         font-weight: 650;
                         overflow: elide;
                     }
                     HintText {
-                        label: State.touch && State.outbox-count == 0
+                        label: State.touch
                             ? "Share files to TunnelManager from any app — they'll be ready to send here."
                             : State.selected-online
                                 ? "They're online — files arrive right away."
                                 : "They're offline — sending works once they're back.";
                     }
                 }
-                VerticalLayout {
+                if !State.touch: VerticalLayout {
                     alignment: center;
                     PrimaryButton {
-                        label: State.touch ? "Send" : "Send files…";
+                        label: "Send files…";
                         icon: Icons.send;
                         clicked => { Logic.send-to-peer(); }
                     }
@@ -491,31 +488,10 @@ export component PeerPage inherits Rectangle {
             }
         }
 
-        // In-flight and finished transfers for this peer.
         for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
 
-        // History for this peer
-        if root.has-peer: HorizontalLayout {
-            padding-top: Theme.space-2;
-            SectionTitle { label: "History"; horizontal-stretch: 1; }
-            if State.touch: IconButton { icon: Icons.refresh; clicked => { Logic.refresh-history(); } }
-            if !State.touch: GhostButton { label: "Refresh"; icon: Icons.refresh; clicked => { Logic.refresh-history(); } }
-        }
-
-        if root.has-peer && State.history.length == 0: Rectangle {
-            border-radius: Theme.radius;
-            border-width: 1px;
-            border-color: Theme.border;
-            height: 64px;
-            Text {
-                text: "No transfers with " + State.selected-name + " yet.";
-                color: Theme.text-faint;
-                font-size: Theme.font-sm;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
+        if root.has-peer: HistoryHeader { }
+        if root.has-peer && State.history.length == 0: NoHistory { }
         if root.has-peer && State.history.length > 0: ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
@@ -529,4 +505,143 @@ export component PeerPage inherits Rectangle {
 
         if !root.has-peer || State.history.length == 0: Rectangle { vertical-stretch: 1; }
     }
+}
+
+// Phone layout: one peer's own screen, opened from the peer list. Everything
+// scrolls together; Forget lives in its own section at the very bottom.
+component PhonePeerView inherits Rectangle {
+    property <bool> confirm-forget: false;
+    property <string> selected-id: State.selected-id;
+    changed selected-id => { root.confirm-forget = false; }
+
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            padding-top: Theme.space-2;
+            spacing: Theme.space-4;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: Theme.space-2;
+
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon: Icons.arrow-left;
+                        tint: Theme.text-strong;
+                        clicked => { State.peer-open = false; }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Avatar { initials: State.selected-initials; size: 44px; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    padding-left: Theme.space-1;
+                    Text {
+                        text: State.selected-name;
+                        color: Theme.text-strong;
+                        font-size: Theme.font-xl;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                    PresenceLine { }
+                }
+                if !State.rename-mode: VerticalLayout {
+                    alignment: center;
+                    IconButton { icon: Icons.edit; clicked => { Logic.rename-peer(); } }
+                }
+            }
+
+            if State.rename-mode: RenameRow { }
+
+            if State.outbox-count > 0: OutboxCard { can-send: true; }
+            if State.outbox-count == 0 && !State.selected-sending: Card {
+                VerticalLayout {
+                    padding: Theme.card-padding;
+                    spacing: Theme.space-3;
+                    HorizontalLayout {
+                        spacing: Theme.space-3;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 36px;
+                                height: 36px;
+                                border-radius: 10px;
+                                background: Theme.accent-soft;
+                                Icon { source: Icons.send; size: 18px; tint: Theme.accent-text; }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: "Send files to " + State.selected-name;
+                                color: Theme.text-strong;
+                                font-weight: 650;
+                                overflow: elide;
+                            }
+                            HintText {
+                                label: "Choose them here, or share them to TunnelManager from any app.";
+                                font-size: Theme.font-xs;
+                            }
+                        }
+                    }
+                    PrimaryButton {
+                        label: "Choose files…";
+                        icon: Icons.folder;
+                        clicked => { Logic.pick-files(); }
+                    }
+                }
+            }
+
+            for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
+
+            HistoryHeader { }
+            if State.history.length == 0: NoHistory { }
+            for entry in State.history: HistoryItem { entry: entry; }
+
+            // Danger zone, out of the way of everyday actions.
+            VerticalLayout {
+                padding-top: Theme.space-4;
+                spacing: Theme.space-3;
+                Divider { }
+                if !root.confirm-forget: HorizontalLayout {
+                    spacing: Theme.space-3;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: "Forget this peer";
+                            color: Theme.text-strong;
+                            font-weight: 600;
+                        }
+                        HintText { label: "Unpairs " + State.selected-name + " — you would have to pair again."; font-size: Theme.font-xs; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        DangerButton { label: "Forget"; clicked => { root.confirm-forget = true; } }
+                    }
+                }
+                if root.confirm-forget: ForgetConfirm {
+                    cancelled => { root.confirm-forget = false; }
+                    confirmed => {
+                        root.confirm-forget = false;
+                        State.peer-open = false;
+                        Logic.remove-peer();
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component PeerPage inherits Rectangle {
+    if !State.compact: WidePeerView { width: 100%; height: 100%; }
+    if State.compact: PhonePeerView { width: 100%; height: 100%; }
 }

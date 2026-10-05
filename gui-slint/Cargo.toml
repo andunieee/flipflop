@@ -19,6 +19,8 @@ path = "src/main.rs"
 
 [build-dependencies]
 slint-build = "=1.16.1"
+# Compiles android/java into a dex for Android builds (as Slint does).
+android-build = "0.1"
 
 [dependencies]
 engine = { path = "../engine" }

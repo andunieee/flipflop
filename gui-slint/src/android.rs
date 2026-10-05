@@ -22,8 +22,8 @@ mod imp {
     use std::sync::OnceLock;
     use std::time::Duration;
 
-    use jni::objects::{GlobalRef, JObject, JString, JValue};
-    use jni::JavaVM;
+    use jni::objects::{GlobalRef, JClass, JObject, JObjectArray, JString, JValue};
+    use jni::{JNIEnv, JavaVM, NativeMethod};
 
     use slint::android::android_activity::{AndroidApp, MainEvent, PollEvent};
 
@@ -47,6 +47,66 @@ mod imp {
         app.internal_data_path()
             .or_else(|| app.external_data_path())
             .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// `Context.getCacheDir()`; app-private and writable on every version.
+    fn cache_dir() -> Result<PathBuf, String> {
+        with_env(|env| {
+            let dir = env
+                .call_method(&activity()?, "getCacheDir", "()Ljava/io/File;", &[])
+                .map_err(|e| e.to_string())?
+                .l()
+                .map_err(|e| e.to_string())?;
+            if dir.is_null() {
+                return Err("no cache dir".to_string());
+            }
+            let path = env
+                .call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
+                .map_err(|e| e.to_string())?
+                .l()
+                .map_err(|e| e.to_string())?;
+            Ok(PathBuf::from(
+                env.get_string(&JString::from(path))
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .into_owned(),
+            ))
+        })
+    }
+
+    /// Point the engine's blob stores at the app cache dir. Before Android 13
+    /// `std::env::temp_dir()` is `/data/local/tmp`, which apps cannot write:
+    /// every send failed to set up and receives never started. Must run
+    /// before the first transfer (and the history sweep, which scans it).
+    pub fn use_cache_dir_for_blob_stores() {
+        let dir = cache_dir().unwrap_or_else(|e| {
+            tracing::warn!("cache dir unavailable ({e}); using the data dir");
+            data_dir().join("cache")
+        });
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(dir = %dir.display(), "cannot create blob store root: {e}");
+        }
+        tracing::info!(dir = %dir.display(), "blob stores live here");
+        let _ = engine::storage::TEMP_DIR.set(dir);
+    }
+
+    /// Send the app to the background, as Back does at an app's top level.
+    /// Unlike letting Android finish the activity, the process (and any
+    /// transfer in flight) keeps running.
+    pub fn move_to_background() {
+        let Some(app) = ANDROID_APP.get() else {
+            return;
+        };
+        app.run_on_java_main_thread(Box::new(|| {
+            let moved = with_env(|env| {
+                env.call_method(&activity()?, "moveTaskToBack", "(Z)Z", &[JValue::Bool(1)])
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            });
+            if let Err(e) = moved {
+                tracing::warn!("moveTaskToBack failed: {e}");
+            }
+        }));
     }
 
     /// Default location for received files.
@@ -284,23 +344,32 @@ mod imp {
 
     thread_local! {
         /// Receives staged outbox files; lives on the UI (event loop) thread.
-        static ON_SHARED: RefCell<Option<Box<dyn Fn(Vec<PathBuf>)>>> = RefCell::new(None);
+        static ON_SHARED: RefCell<Option<Box<dyn Fn(Vec<PathBuf>, Origin)>>> = RefCell::new(None);
     }
 
-    /// Register the UI's handler for shared content: called on the event loop
-    /// with every staged outbox file each time something is shared in. Must be
-    /// called on the UI thread.
-    pub fn on_shared(handler: impl Fn(Vec<PathBuf>) + 'static) {
+    /// How content got into the outbox.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Origin {
+        /// Shared from another app (the share sheet).
+        Share,
+        /// Picked with the in-app file picker.
+        Picker,
+    }
+
+    /// Register the UI's handler for new outbox content: called on the event
+    /// loop with every staged outbox file each time something is shared in or
+    /// picked. Must be called on the UI thread.
+    pub fn on_shared(handler: impl Fn(Vec<PathBuf>, Origin) + 'static) {
         ON_SHARED.with(|h| *h.borrow_mut() = Some(Box::new(handler)));
     }
 
     /// Hand the outbox to the UI's [`on_shared`] handler.
-    fn deliver_outbox() {
+    fn deliver_outbox(origin: Origin) {
         let staged = outbox_files();
         let posted = slint::invoke_from_event_loop(move || {
             ON_SHARED.with(|h| {
                 if let Some(handler) = h.borrow().as_ref() {
-                    handler(staged);
+                    handler(staged, origin);
                 }
             })
         });
@@ -330,7 +399,7 @@ mod imp {
         let app = app().clone();
         std::thread::spawn(move || {
             stage_intent_of(&app);
-            deliver_outbox();
+            deliver_outbox(Origin::Share);
         });
     }
 
@@ -357,7 +426,7 @@ mod imp {
             // Stage before finishing: the sender's URI grant only lasts as
             // long as this activity does.
             stage_intent_of(&worker);
-            deliver_outbox();
+            deliver_outbox(Origin::Share);
             let closer = worker.clone();
             worker.run_on_java_main_thread(Box::new(move || {
                 if let Err(e) = with_env(|env| show_primary_and_finish(env, &closer)) {
@@ -418,6 +487,141 @@ mod imp {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    // -------------------------------------------------------- file picker
+
+    /// `android/java`, compiled by build.rs.
+    const JAVA_HELPERS_DEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+
+    /// `dev.tunnelmanager.slint.FilePicker`, loaded once from the embedded dex.
+    static FILE_PICKER: OnceLock<GlobalRef> = OnceLock::new();
+
+    fn file_picker_class(env: &mut JNIEnv) -> Result<&'static GlobalRef, String> {
+        if let Some(class) = FILE_PICKER.get() {
+            return Ok(class);
+        }
+        // SAFETY: the buffer is 'static and only ever read by the loader.
+        let dex = unsafe {
+            env.new_direct_byte_buffer(JAVA_HELPERS_DEX.as_ptr() as *mut u8, JAVA_HELPERS_DEX.len())
+        }
+        .map_err(|e| e.to_string())?;
+        let parent = env
+            .call_method(
+                &activity()?,
+                "getClassLoader",
+                "()Ljava/lang/ClassLoader;",
+                &[],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        let loader = env
+            .new_object(
+                "dalvik/system/InMemoryDexClassLoader",
+                "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V",
+                &[JValue::Object(&dex), JValue::Object(&parent)],
+            )
+            .map_err(|e| e.to_string())?;
+        let name = env
+            .new_string("dev.tunnelmanager.slint.FilePicker")
+            .map_err(|e| e.to_string())?;
+        let class: JClass = env
+            .call_method(
+                &loader,
+                "loadClass",
+                "(Ljava/lang/String;)Ljava/lang/Class;",
+                &[JValue::Object(&name)],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?
+            .into();
+        // A class from a runtime loader can't find JNI symbols by name.
+        env.register_native_methods(
+            &class,
+            &[NativeMethod {
+                name: "onPicked".into(),
+                sig: "([Ljava/lang/String;)V".into(),
+                fn_ptr: on_picked as *mut std::ffi::c_void,
+            }],
+        )
+        .map_err(|e| e.to_string())?;
+        let class = env.new_global_ref(class).map_err(|e| e.to_string())?;
+        Ok(FILE_PICKER.get_or_init(|| class))
+    }
+
+    /// Open the system file picker; picked files are staged into the outbox
+    /// and reported to the [`on_shared`] handler (as [`Origin::Picker`]).
+    pub fn pick_files() {
+        let Some(app) = ANDROID_APP.get() else {
+            return;
+        };
+        app.run_on_java_main_thread(Box::new(|| {
+            let opened = with_env(|env| {
+                let class = file_picker_class(env)?;
+                env.call_static_method(
+                    class,
+                    "pick",
+                    "(Landroid/app/Activity;)V",
+                    &[JValue::Object(&activity()?)],
+                )
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            });
+            if let Err(e) = opened {
+                tracing::warn!("file picker failed: {e}");
+                show_toast("Could not open the file picker", true);
+            }
+        }));
+    }
+
+    /// `FilePicker.onPicked`, on the Java main thread. Copies the picked
+    /// files on a worker thread: their URI grants last while the activity
+    /// lives, and big files would stall the UI.
+    extern "system" fn on_picked<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        uris: JObjectArray<'local>,
+    ) {
+        let mut picked = Vec::new();
+        let len = env.get_array_length(&uris).unwrap_or(0);
+        for i in 0..len {
+            let Ok(item) = env.get_object_array_element(&uris, i) else {
+                continue;
+            };
+            if let Ok(uri) = env.get_string(&JString::from(item)) {
+                picked.push(String::from(uri));
+            }
+        }
+        if picked.is_empty() {
+            return;
+        }
+        std::thread::spawn(move || {
+            let staged = with_env(|env| {
+                let mut parsed = Vec::new();
+                for uri in &picked {
+                    let text = env.new_string(uri).map_err(|e| e.to_string())?;
+                    let uri = env
+                        .call_static_method(
+                            "android/net/Uri",
+                            "parse",
+                            "(Ljava/lang/String;)Landroid/net/Uri;",
+                            &[JValue::Object(&text)],
+                        )
+                        .map_err(|e| e.to_string())?
+                        .l()
+                        .map_err(|e| e.to_string())?;
+                    parsed.push(uri);
+                }
+                stage_uris(env, &activity()?, parsed)
+            });
+            if let Err(e) = staged {
+                tracing::warn!("staging picked files failed: {e}");
+                show_toast("Could not read the picked files", true);
+            }
+            deliver_outbox(Origin::Picker);
+        });
     }
 
     fn collect_shared_files_with_env(
@@ -784,6 +988,9 @@ mod imp {
 
     /// Unused on desktop.
     pub fn clear_outbox(_paths: &[PathBuf]) {}
+
+    /// Unused on desktop (Back is an Android key).
+    pub fn move_to_background() {}
 }
 #[cfg(not(target_os = "android"))]
 pub use imp::*;

@@ -147,7 +147,9 @@ fn default_downloads_dir() -> Option<std::path::PathBuf> {
 
 #[cfg(not(target_os = "android"))]
 fn default_downloads_dir() -> Option<std::path::PathBuf> {
-    dirs::download_dir()
+    // Without an XDG user-dirs config `download_dir()` is None on Linux;
+    // ~/Downloads is the conventional spot then.
+    dirs::download_dir().or_else(|| dirs::home_dir().map(|home| home.join("Downloads")))
 }
 
 #[cfg(test)]
