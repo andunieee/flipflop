@@ -237,6 +237,18 @@ pub fn is_touch() -> bool {
     cfg!(target_os = "android")
 }
 
+/// Select-to-copy on Linux desktops: the selected text goes to the PRIMARY selection.
+#[uniffi::export]
+pub fn copy_primary(text: String) {
+    crate::platform::copy_primary(&text);
+}
+
+/// The PRIMARY selection, for middle-click paste (empty where there is none).
+#[uniffi::export]
+pub fn paste_primary() -> String {
+    crate::platform::paste_primary()
+}
+
 /// Whether scanning uses a live webcam preview in the app (the phone hands over to a scanner activity).
 #[uniffi::export]
 pub fn has_live_camera() -> bool {

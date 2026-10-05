@@ -185,6 +185,7 @@ private fun PadTab(s: UiState, nav: Nav) {
         value = new
         if (changed) app.padEdited(new.text)
     }
+    val primary = rememberPrimarySelection(value, edit)
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(d.space2)) {
         val shape = RoundedCornerShape(d.radiusLg)
         Box(
@@ -195,9 +196,10 @@ private fun PadTab(s: UiState, nav: Nav) {
             BasicTextField(
                 value = value,
                 onValueChange = edit,
+                onTextLayout = { primary.layout = it },
                 textStyle = TextStyle(color = c.textStrong, fontSize = d.fontMd),
                 cursorBrush = SolidColor(c.accent),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp).onFocus { focused = it },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp).then(primary.modifier).onFocus { focused = it },
             )
             if (value.text.isEmpty() && !focused) {
                 Txt("A plain-text page everyone in the group can edit. Notes, a shopping list, a draft…", d.fontMd, c.textFaint)
