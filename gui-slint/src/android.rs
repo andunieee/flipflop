@@ -247,6 +247,142 @@ mod imp {
 
     // ----------------------------------------------------------- clipboard
 
+    /// Read the clipboard's text; `done` runs on the Slint event loop with
+    /// `None` when there is no text (or no access).
+    pub fn read_clipboard(done: impl FnOnce(Option<String>) + Send + 'static) {
+        let Some(app) = ANDROID_APP.get() else {
+            done(None);
+            return;
+        };
+        // The clipboard is only readable by the focused app, from its UI thread.
+        app.run_on_java_main_thread(Box::new(move || {
+            let text = with_env(clipboard_text).unwrap_or_else(|e| {
+                tracing::warn!("clipboard read failed: {e}");
+                None
+            });
+            let _ = slint::invoke_from_event_loop(move || done(text));
+        }));
+    }
+
+    fn clipboard_text(env: &mut jni::JNIEnv) -> Result<Option<String>, String> {
+        let activity = activity()?;
+        // Context.CLIPBOARD_SERVICE == "clipboard"
+        let name = env.new_string("clipboard").map_err(|e| e.to_string())?;
+        let manager = env
+            .call_method(
+                &activity,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[JValue::Object(&name)],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if manager.is_null() {
+            return Ok(None);
+        }
+        let clip = env
+            .call_method(
+                &manager,
+                "getPrimaryClip",
+                "()Landroid/content/ClipData;",
+                &[],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if clip.is_null() {
+            return Ok(None);
+        }
+        let count = env
+            .call_method(&clip, "getItemCount", "()I", &[])
+            .map_err(|e| e.to_string())?
+            .i()
+            .map_err(|e| e.to_string())?;
+        if count == 0 {
+            return Ok(None);
+        }
+        let item = env
+            .call_method(
+                &clip,
+                "getItemAt",
+                "(I)Landroid/content/ClipData$Item;",
+                &[JValue::Int(0)],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        let text = env
+            .call_method(
+                &item,
+                "coerceToText",
+                "(Landroid/content/Context;)Ljava/lang/CharSequence;",
+                &[JValue::Object(&activity)],
+            )
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if text.is_null() {
+            return Ok(None);
+        }
+        let text = env
+            .call_method(&text, "toString", "()Ljava/lang/String;", &[])
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        Ok(Some(
+            env.get_string(&JString::from(text))
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned(),
+        ))
+    }
+
+    /// Open a link in the user's browser (ACTION_VIEW).
+    pub fn open_url(url: &str) {
+        let Some(app) = ANDROID_APP.get() else {
+            return;
+        };
+        let url = url.to_string();
+        app.run_on_java_main_thread(Box::new(move || {
+            let opened = with_env(|env| {
+                let text = env.new_string(&url).map_err(|e| e.to_string())?;
+                let uri = env
+                    .call_static_method(
+                        "android/net/Uri",
+                        "parse",
+                        "(Ljava/lang/String;)Landroid/net/Uri;",
+                        &[JValue::Object(&text)],
+                    )
+                    .map_err(|e| e.to_string())?
+                    .l()
+                    .map_err(|e| e.to_string())?;
+                let action = env
+                    .new_string("android.intent.action.VIEW")
+                    .map_err(|e| e.to_string())?;
+                let intent = env
+                    .new_object(
+                        "android/content/Intent",
+                        "(Ljava/lang/String;Landroid/net/Uri;)V",
+                        &[JValue::Object(&action), JValue::Object(&uri)],
+                    )
+                    .map_err(|e| e.to_string())?;
+                env.call_method(
+                    &activity()?,
+                    "startActivity",
+                    "(Landroid/content/Intent;)V",
+                    &[JValue::Object(&intent)],
+                )
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            });
+            if let Err(e) = opened {
+                tracing::warn!("opening {url} failed: {e}");
+                show_toast("No app can open this link", true);
+            }
+        }));
+    }
+
     pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
         let app = app().clone();
         let text = text.to_string();

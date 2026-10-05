@@ -64,6 +64,9 @@ struct ShareHandle {
     /// Android share-sheet files this share serves; deleted once no open
     /// share needs them any more.
     staged: Vec<PathBuf>,
+    /// Private dir holding a pasted text's file; removed when the handle
+    /// drops (end of `shutdown_share`).
+    _cleanup: RemoveDirOnDrop,
 }
 
 impl ShareHandle {
@@ -215,11 +218,16 @@ struct TransferEmitter {
     recorder: Arc<Recorder>,
     /// Sends: closes the share once the peer has everything.
     close_when_sent: Option<AppCtx>,
+    /// Receives: what got saved (to recognize pasted text).
+    received: Option<Arc<Mutex<Received>>>,
 }
 
 impl TransferEmitter {
     fn emit(&self, name: &str, payload: Option<&str>) {
         self.recorder.note(name, payload);
+        if let Some(received) = &self.received {
+            received.lock().unwrap().note(name, payload);
+        }
         let (event, payload_owned) = (name.to_string(), payload.map(str::to_string));
         post_update(&self.weak, &self.key, move |row| {
             apply_transfer_event(row, &event, payload_owned.as_deref());
@@ -327,10 +335,104 @@ fn metadata_for(paths: &[PathBuf]) -> engine::FileMetadata {
 
 /// "report.pdf" for one item, "3 items" for several.
 fn items_title(first_name: &str, count: usize) -> String {
-    if count == 1 {
+    if first_name == PASTE_FILE_NAME && count == 1 {
+        "text".to_string()
+    } else if count == 1 {
         first_name.to_string()
     } else {
         format!("{count} items")
+    }
+}
+
+// ------------------------------------------------------------ pasted text
+
+/// Pasted text travels as a single file with this name; a receiver that
+/// sees exactly this file shows its text instead of a file row. Other
+/// clients just get an ordinary text file.
+pub(crate) const PASTE_FILE_NAME: &str = "tunnelmanager-paste.txt";
+/// Bigger "pastes" stay plain files.
+const PASTE_MAX_BYTES: u64 = 256 * 1024;
+
+/// What a receive saved, from its engine events.
+#[derive(Default)]
+struct Received {
+    names: Vec<String>,
+    /// (original, resolved) paths of files renamed to avoid overwriting.
+    renamed: Vec<(String, String)>,
+}
+
+impl Received {
+    fn note(&mut self, event: &str, payload: Option<&str>) {
+        let Some(payload) = payload else { return };
+        match event {
+            "receive-file-names" => {
+                self.names = serde_json::from_str(payload).unwrap_or_default();
+            }
+            "receive-conflicts" => {
+                #[derive(serde::Deserialize)]
+                struct Conflict {
+                    original: String,
+                    resolved: String,
+                }
+                let conflicts: Vec<Conflict> = serde_json::from_str(payload).unwrap_or_default();
+                self.renamed = conflicts
+                    .into_iter()
+                    .map(|c| (c.original, c.resolved))
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+
+    /// The text of a received paste, if that is what this was.
+    fn pasted_text(&self, save_dir: &Path) -> Option<String> {
+        if self.names.len() != 1 || self.names[0] != PASTE_FILE_NAME {
+            return None;
+        }
+        let saved = save_dir.join(PASTE_FILE_NAME);
+        let saved = self
+            .renamed
+            .iter()
+            .find(|(original, _)| Path::new(original) == saved)
+            .map(|(_, resolved)| PathBuf::from(resolved))
+            .unwrap_or(saved);
+        if std::fs::metadata(&saved).ok()?.len() > PASTE_MAX_BYTES {
+            return None;
+        }
+        std::fs::read_to_string(saved).ok()
+    }
+}
+
+/// A single http(s) link (worth an "Open" button).
+pub(crate) fn as_link(text: &str) -> Option<&str> {
+    let text = text.trim();
+    let is_link = (text.starts_with("https://") || text.starts_with("http://"))
+        && !text.chars().any(char::is_whitespace)
+        && text.len() > "https://".len();
+    is_link.then_some(text)
+}
+
+/// Write `text` to a fresh private dir as the paste file; returns (dir, file).
+fn write_paste_file(text: &str) -> std::io::Result<(PathBuf, PathBuf)> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let dir = engine::storage::temp_dir().join(format!(".tm-paste-{nanos:x}"));
+    std::fs::create_dir_all(&dir)?;
+    let file = dir.join(PASTE_FILE_NAME);
+    std::fs::write(&file, text)?;
+    Ok((dir, file))
+}
+
+/// Deletes a directory when dropped, unless taken.
+struct RemoveDirOnDrop(Option<PathBuf>);
+
+impl Drop for RemoveDirOnDrop {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -343,8 +445,11 @@ fn start_send(
     peer_name: String,
     paths: Vec<PathBuf>,
     staged: Vec<PathBuf>,
+    cleanup: Option<PathBuf>,
 ) {
     let key = ctx.transfers.new_key("send");
+    // Removed on any early return; the open share owns it after that.
+    let mut cleanup = RemoveDirOnDrop(cleanup);
     tracing::info!(%peer_id, %key, paths = paths.len(), "send: starting flow");
     let first_name = paths.first().map(|p| path_name(p)).unwrap_or_default();
     insert_row(
@@ -406,6 +511,7 @@ fn start_send(
             key: key.clone(),
             recorder: recorder.clone(),
             close_when_sent: Some(ctx.clone()),
+            received: None,
         };
         let app_handle: AppHandle = Some(Arc::new(emitter));
 
@@ -446,6 +552,7 @@ fn start_send(
             recorder,
             peer_name: peer_name.clone(),
             staged,
+            _cleanup: RemoveDirOnDrop(cleanup.0.take()),
         };
         {
             let mut shares = ctx.transfers.shares.lock().await;
@@ -806,11 +913,13 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
             },
             history_enabled,
         ));
+        let received = Arc::new(Mutex::new(Received::default()));
         let app_handle: AppHandle = Some(Arc::new(TransferEmitter {
             weak: weak.clone(),
             key: key.clone(),
             recorder: recorder.clone(),
             close_when_sent: None,
+            received: Some(received.clone()),
         }));
         toast_later(&weak, format!("{peer_name} is sending you files"), false);
         post_update(&weak, &key, |row| row.status = "Connecting…".into());
@@ -826,9 +935,23 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
         let ctx_ui = ctx.clone();
         match result {
             Ok(_) => {
+                // Pasted text: show it (the file stays saved too).
+                let pasted = received.lock().unwrap().pasted_text(&save_dir);
                 let _ = weak.upgrade_in_event_loop(move |ui| {
-                    update_row(&ui, &key, |row| row.active = false);
-                    toast(&ui, &format!("Files from {peer_name} saved"), false);
+                    update_row(&ui, &key, |row| {
+                        row.active = false;
+                        if let Some(text) = &pasted {
+                            row.title = "text".into();
+                            row.is_link = as_link(text).is_some();
+                            row.text = text.as_str().into();
+                        }
+                    });
+                    let msg = if pasted.is_some() {
+                        format!("Text from {peer_name}")
+                    } else {
+                        format!("Files from {peer_name} saved")
+                    };
+                    toast(&ui, &msg, false);
                     refresh_history(&ctx_ui);
                 });
             }
@@ -873,6 +996,70 @@ pub(crate) fn register(ctx: &AppCtx) {
     };
     let logic = ui.global::<Logic>();
 
+    {
+        // Send the typed/pasted text to the selected peer.
+        let ctx = ctx.clone();
+        logic.on_send_text(move || {
+            let Some(ui) = ctx.weak.upgrade() else { return };
+            let state = ui.global::<State>();
+            let text = state.get_paste_input().to_string();
+            let peer_id = state.get_selected_id().to_string();
+            let peer_name = state.get_selected_name().to_string();
+            if text.trim().is_empty() || peer_id.is_empty() {
+                return;
+            }
+            let Some(node) = ctx.node() else {
+                toast(&ui, "Still connecting — try again in a moment.", false);
+                return;
+            };
+            match write_paste_file(&text) {
+                Ok((dir, file)) => {
+                    state.set_paste_input("".into());
+                    start_send(
+                        &ctx,
+                        &ui,
+                        node,
+                        peer_id,
+                        peer_name,
+                        vec![file],
+                        Vec::new(),
+                        Some(dir),
+                    );
+                }
+                Err(e) => toast(&ui, &format!("Could not prepare the text: {e}"), true),
+            }
+        });
+    }
+    {
+        // Fill the text box from the clipboard.
+        let weak = ctx.weak.clone();
+        logic.on_paste_clipboard(move || {
+            let weak = weak.clone();
+            platform::read_clipboard(move |text| {
+                let Some(ui) = weak.upgrade() else { return };
+                match text.filter(|t| !t.trim().is_empty()) {
+                    Some(text) => ui.global::<State>().set_paste_input(text.into()),
+                    None => toast(&ui, "The clipboard has no text", false),
+                }
+            });
+        });
+    }
+    {
+        // Received text: copy it, or open it when it is a link.
+        let weak = ctx.weak.clone();
+        logic.on_copy_text(move |text| {
+            let Some(ui) = weak.upgrade() else { return };
+            match platform::copy_to_clipboard(&text) {
+                Ok(()) => toast(&ui, "Copied", false),
+                Err(e) => toast(&ui, &format!("Could not copy: {e}"), true),
+            }
+        });
+        logic.on_open_link(move |text| {
+            if let Some(url) = as_link(&text) {
+                platform::open_url(url);
+            }
+        });
+    }
     {
         // Drop one queued share-sheet file.
         let ctx = ctx.clone();
@@ -938,7 +1125,7 @@ pub(crate) fn register(ctx: &AppCtx) {
                 };
                 let ctx_ui = ctx.clone();
                 let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
-                    start_send(&ctx_ui, &ui, node, peer_id, peer_name, picked, staged);
+                    start_send(&ctx_ui, &ui, node, peer_id, peer_name, picked, staged, None);
                 });
             });
         });
@@ -1020,6 +1207,40 @@ mod tests {
     fn items_title_singular_and_plural() {
         assert_eq!(items_title("a.txt", 1), "a.txt");
         assert_eq!(items_title("a.txt", 4), "4 items");
+    }
+
+    #[test]
+    fn paste_title_and_links() {
+        assert_eq!(items_title(PASTE_FILE_NAME, 1), "text");
+        assert_eq!(
+            as_link("  https://example.com/a?b=c \n"),
+            Some("https://example.com/a?b=c")
+        );
+        assert_eq!(as_link("see https://example.com"), None);
+        assert_eq!(as_link("https://"), None);
+        assert_eq!(as_link("ftp://example.com"), None);
+    }
+
+    #[test]
+    fn received_paste_is_read_from_its_saved_name() {
+        let dir = std::env::temp_dir().join(format!("tm-slint-paste-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let renamed = dir.join("tunnelmanager-paste (1).txt");
+        std::fs::write(&renamed, "hello").unwrap();
+
+        let mut received = Received::default();
+        received.note("receive-file-names", Some(r#"["tunnelmanager-paste.txt"]"#));
+        let conflicts = serde_json::json!([{
+            "original": dir.join(PASTE_FILE_NAME),
+            "resolved": renamed,
+        }]);
+        received.note("receive-conflicts", Some(&conflicts.to_string()));
+        assert_eq!(received.pasted_text(&dir).as_deref(), Some("hello"));
+
+        // Anything else is just files.
+        received.note("receive-file-names", Some(r#"["notes.txt"]"#));
+        assert_eq!(received.pasted_text(&dir), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

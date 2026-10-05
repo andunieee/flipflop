@@ -33,6 +33,10 @@ export struct TransferRow {
     // secondary line, e.g. "2 files renamed to avoid overwriting"
     note: string,
     error: string,
+    // received pasted text (shown instead of a file summary)
+    text: string,
+    // `text` is a single link
+    is-link: bool,
 }
 
 export struct HistoryRow {
@@ -106,6 +110,8 @@ export global State {
     in-out property <[TransferRow]> transfers;
     // the selected peer's subset of `transfers` (kept in sync by Rust)
     in-out property <[TransferRow]> visible-transfers;
+    // "Send text" box on the peer page
+    in-out property <string> paste-input: "";
 
     // settings page
     // device-name field (kept apart from my-name so refreshes don't clobber typing)
@@ -149,6 +155,12 @@ export global Logic {
     callback stop-share(string);
     callback cancel-receive(string);
     callback dismiss-transfer(string);
+
+    // pasted text
+    callback send-text();
+    callback paste-clipboard();
+    callback copy-text(string);
+    callback open-link(string);
 
     // share-sheet queue (Android)
     callback outbox-remove(string);
