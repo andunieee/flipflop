@@ -17,6 +17,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -397,7 +399,7 @@ private fun Picker(options: List<String>, selected: Int, onPicked: (Int) -> Unit
     Box {
         Row(
             Modifier.fillMaxWidth().heightIn(min = d.controlHeight).clip(shape).background(c.insetBg).border(1.dp, c.borderStrong, shape)
-                .clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) { open = true }
+                .pointerHoverIcon(PointerIcon.Hand).clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) { open = true }
                 .padding(horizontal = d.space3),
             verticalAlignment = Alignment.CenterVertically,
         ) {
