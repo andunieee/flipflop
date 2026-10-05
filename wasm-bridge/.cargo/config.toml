@@ -1,6 +1,0 @@
-# wasm32 builds pull in ring (via iroh tls-ring), which needs a clang with
-# wasm32-unknown-unknown support. On macOS, install LLVM: brew install llvm
-# Then use scripts/build-wasm-bridge.sh (sets CC automatically).
-
-[target.wasm32-unknown-unknown]
-linker = "rust-lld"
