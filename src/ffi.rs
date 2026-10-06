@@ -274,7 +274,17 @@ pub fn map_cursor(old: String, new: String, cursor: u32) -> u32 {
 pub fn list_apps() -> Vec<AppRow> {
     #[cfg(target_os = "android")]
     {
-        crate::platform::list_apps().into_iter().map(|(path, name, detail)| AppRow { path, name, detail }).collect()
+        crate::platform::list_apps()
+            .into_iter()
+            .map(|(path, name, detail)| {
+                // The size of what would be sent: the base APK.
+                let detail = match std::fs::metadata(&path) {
+                    Ok(m) => format!("{} · {detail}", format::size(m.len())),
+                    Err(_) => detail,
+                };
+                AppRow { path, name, detail }
+            })
+            .collect()
     }
     #[cfg(not(target_os = "android"))]
     {

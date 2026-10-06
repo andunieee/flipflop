@@ -132,7 +132,13 @@ fun Card(modifier: Modifier = Modifier, background: Color = Theme.c.cardBg, bord
 
 /** A card that darkens a little under the pointer. */
 @Composable
-fun ClickCard(onClick: () -> Unit, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun ClickCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    background: Color = Theme.c.cardBg,
+    hoverBackground: Color = Theme.c.insetBg,
+    border: Color = Theme.c.border,
+    content: @Composable ColumnScope.() -> Unit) {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val hover by source.collectIsHoveredAsState()
@@ -140,8 +146,8 @@ fun ClickCard(onClick: () -> Unit, modifier: Modifier = Modifier, content: @Comp
     val shape = RoundedCornerShape(Theme.d.radiusLg)
     Column(
         modifier.fillMaxWidth().clip(shape)
-            .background(if (pressed) c.chipBg else if (hover) c.insetBg else c.cardBg)
-            .border(1.dp, c.border, shape)
+            .background(if (pressed) c.chipBg else if (hover) hoverBackground else background)
+            .border(1.dp, border, shape)
             .hoverable(source).pointerHoverIcon(PointerIcon.Hand).clickable(source, indication = null, onClick = onClick),
         content = content,
     )

@@ -129,6 +129,7 @@ fun HomePage(s: UiState, nav: Nav) {
 private fun GroupCard(group: GroupRow, nav: Nav) {
     ClickCard({ nav.openGroup(group.id) }) {
         Row(Modifier.padding(Theme.d.cardPadding), horizontalArrangement = Arrangement.spacedBy(Theme.d.space3), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.groups, tint = Theme.c.textMuted)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Theme.d.space2), verticalAlignment = Alignment.CenterVertically) {
                     Dot(group.online)
@@ -181,6 +182,7 @@ private fun PeerCard(peer: PeerRow, nav: Nav) {
     val app = nav.backend.app
     val body: @Composable () -> Unit = {
         Row(Modifier.padding(Theme.d.cardPadding), horizontalArrangement = Arrangement.spacedBy(Theme.d.space3)) {
+            Icon(Icons.peers, tint = Theme.c.textMuted, modifier = Modifier.align(Alignment.CenterVertically))
             Column(Modifier.weight(1f).align(Alignment.CenterVertically), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Txt(peer.title, Theme.d.fontLg, Theme.c.textStrong, 650, elide = true)
                 Txt((if (peer.subtitle.isNotEmpty()) peer.subtitle + " · " else "") + peer.short, Theme.d.fontXs, Theme.c.textFaint, elide = true)
@@ -196,8 +198,9 @@ private fun PeerCard(peer: PeerRow, nav: Nav) {
             }
         }
     }
-    if (peer.groupId.isNotEmpty()) ClickCard({ nav.openGroup(peer.groupId) }) { body() }
-    else Card { body() }
+    val c = Theme.c
+    if (peer.groupId.isNotEmpty()) ClickCard({ nav.openGroup(peer.groupId) }, background = c.peerBg, hoverBackground = c.peerBgHover, border = c.peerBorder) { body() }
+    else Card(background = c.peerBg, border = c.peerBorder) { body() }
 }
 
 @Composable

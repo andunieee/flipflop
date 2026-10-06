@@ -96,13 +96,6 @@ private fun FilesTab(s: UiState, nav: Nav) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(d.space3)) {
         Card {
             Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space3)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(d.space3), verticalAlignment = Alignment.CenterVertically) {
-                    IconTile(Icons.share)
-                    Column(Modifier.weight(1f)) {
-                        Txt("Offer something to the group", d.fontMd, Theme.c.textStrong, 650)
-                        Txt("Members accept it, or get it automatically.", d.fontSm, Theme.c.textMuted)
-                    }
-                }
                 Row(horizontalArrangement = Arrangement.spacedBy(d.space2)) {
                     PrimaryButton("File", Modifier.weight(1f), Icons.file) { nav.pick("file") }
                     SecondaryButton("Media", Modifier.weight(1f), Icons.image) { nav.pick("media") }
@@ -111,7 +104,7 @@ private fun FilesTab(s: UiState, nav: Nav) {
             }
         }
         s.files.forEach { FileCard(it, nav) }
-        if (s.files.isEmpty()) HintText("Nothing offered yet. Files you offer stay on your device until a member downloads them.", center = true)
+        if (s.files.isEmpty()) HintText("Nothing offered yet.", center = true)
     }
 }
 
@@ -154,7 +147,7 @@ private fun TextsTab(s: UiState, nav: Nav) {
             }
         }
         s.texts.forEach { TextCard(it, nav) }
-        if (s.texts.isEmpty()) HintText("Nothing here yet. What you send shows up on every member's device, labelled with yours.", center = true)
+        if (s.texts.isEmpty()) HintText("Nothing sent or received yet.", center = true)
     }
 }
 
@@ -202,7 +195,7 @@ private fun PadTab(s: UiState, nav: Nav) {
                 modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp).then(primary.modifier).onFocus { focused = it },
             )
             if (value.text.isEmpty() && !focused) {
-                Txt("A plain-text page everyone in the group can edit. Notes, a shopping list, a draft…", d.fontMd, c.textFaint)
+                Txt("Everyone in the group can edit this field.", d.fontMd, c.textFaint)
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.space2, Alignment.End)) {
