@@ -15,7 +15,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use iroh::{EndpointId, endpoint::{Connection, RecvStream, SendStream}};
+use iroh::{
+    EndpointId,
+    endpoint::{Connection, RecvStream, SendStream},
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
@@ -123,7 +126,9 @@ impl Sharing {
         let dir = data_dir.join("groups");
         let _ = std::fs::create_dir_all(&dir);
         #[cfg(not(target_os = "android"))]
-        let download_dir = dirs::download_dir().unwrap_or_else(|| data_dir.join("downloads")).join("flipflop");
+        let download_dir = dirs::download_dir()
+            .unwrap_or_else(|| data_dir.join("downloads"))
+            .join("flipflop");
         #[cfg(target_os = "android")]
         let download_dir = data_dir.join("downloads");
         Sharing {
@@ -164,11 +169,20 @@ impl Core {
     }
 
     fn has_group(&self, gid: &str) -> bool {
-        self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == gid)
+        self.0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.id == gid)
     }
 
     fn require_group(&self, gid: &str) -> Result<()> {
-        self.has_group(gid).then_some(()).ok_or_else(|| anyhow!("no such group"))
+        self.has_group(gid)
+            .then_some(())
+            .ok_or_else(|| anyhow!("no such group"))
     }
 
     // ---- documents --------------------------------------------------------------------
@@ -180,7 +194,11 @@ impl Core {
         let doc = docs.entry(gid.to_owned()).or_insert_with(|| {
             std::fs::read(sharing.doc_path(gid))
                 .ok()
-                .and_then(|b| GroupDoc::load(&b).map_err(|e| tracing::warn!("group document unreadable: {e}")).ok())
+                .and_then(|b| {
+                    GroupDoc::load(&b)
+                        .map_err(|e| tracing::warn!("group document unreadable: {e}"))
+                        .ok()
+                })
                 .unwrap_or_else(GroupDoc::new)
         });
         f(doc)
@@ -188,7 +206,16 @@ impl Core {
 
     /// Load every group's document, announce ourselves in it and keep it saved.
     pub(super) fn load_docs(&self) {
-        let groups: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().map(|g| g.id.clone()).collect();
+        let groups: Vec<String> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
         for gid in groups {
             self.join_doc(&gid);
         }
@@ -210,7 +237,8 @@ impl Core {
             let bytes = self.with_doc(&gid, |d| d.save());
             let path = self.0.sharing.doc_path(&gid);
             let tmp = path.with_extension("am.tmp");
-            if let Err(err) = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &path)) {
+            if let Err(err) = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &path))
+            {
                 tracing::warn!("could not save group document: {err}");
             }
         }
@@ -224,7 +252,15 @@ impl Core {
     }
 
     pub(super) fn refresh_doc_names(&self) {
-        let groups: Vec<String> = self.0.sharing.docs.lock().unwrap().keys().cloned().collect();
+        let groups: Vec<String> = self
+            .0
+            .sharing
+            .docs
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
         for gid in groups {
             if self.has_group(&gid) {
                 self.join_doc(&gid);
@@ -237,7 +273,9 @@ impl Core {
         self.0.sharing.dirty.lock().unwrap().remove(gid);
         let _ = std::fs::remove_file(self.0.sharing.doc_path(gid));
         let gone: Vec<Share> = self.with_state(|st| {
-            let (gone, keep) = std::mem::take(&mut st.shares).into_iter().partition(|s| s.group == gid);
+            let (gone, keep) = std::mem::take(&mut st.shares)
+                .into_iter()
+                .partition(|s| s.group == gid);
             st.shares = keep;
             gone
         });
@@ -254,24 +292,49 @@ impl Core {
                 .groups
                 .iter()
                 .filter(|g| g.id == gid)
-                .flat_map(|g| g.members.iter().filter(|m| m.state == MemberState::Accepted).map(|m| m.peer.clone()))
+                .flat_map(|g| {
+                    g.members
+                        .iter()
+                        .filter(|m| m.state == MemberState::Accepted)
+                        .map(|m| m.peer.clone())
+                })
                 .collect()
         };
-        ids.extend(self.with_doc(gid, |d| d.members()).into_iter().map(|(id, _)| id));
+        ids.extend(
+            self.with_doc(gid, |d| d.members())
+                .into_iter()
+                .map(|(id, _)| id),
+        );
         let me = self.id();
-        ids.iter().filter_map(|id| id.parse().ok()).filter(|id| *id != me).collect()
+        ids.iter()
+            .filter_map(|id| id.parse().ok())
+            .filter(|id| *id != me)
+            .collect()
     }
 
     /// Everyone any of our groups' documents lists as a member.
     pub(super) fn doc_peers(&self) -> Vec<EndpointId> {
         let me = self.id();
         let docs = self.0.sharing.docs.lock().unwrap();
-        let ids: BTreeSet<String> = docs.values().flat_map(|d| d.members()).map(|(id, _)| id).collect();
-        ids.iter().filter_map(|id| id.parse().ok()).filter(|id| *id != me).collect()
+        let ids: BTreeSet<String> = docs
+            .values()
+            .flat_map(|d| d.members())
+            .map(|(id, _)| id)
+            .collect();
+        ids.iter()
+            .filter_map(|id| id.parse().ok())
+            .filter(|id| *id != me)
+            .collect()
     }
 
     fn connection(&self, peer: EndpointId) -> Option<Connection> {
-        self.0.peers.lock().unwrap().get(&peer).and_then(|p| p.conn.clone()).filter(|c| c.close_reason().is_none())
+        self.0
+            .peers
+            .lock()
+            .unwrap()
+            .get(&peer)
+            .and_then(|p| p.conn.clone())
+            .filter(|c| c.close_reason().is_none())
     }
 
     /// Something in the document changed: save, show, sync and react.
@@ -306,10 +369,21 @@ impl Core {
         let received: HashMap<String, PathBuf> = {
             let store = self.0.store.lock().unwrap();
             let state = &store.state;
-            state.shares.iter().chain(&state.received).filter(|r| r.group == gid && r.path.exists()).map(|r| (r.file.clone(), r.path.clone())).collect()
+            state
+                .shares
+                .iter()
+                .chain(&state.received)
+                .filter(|r| r.group == gid && r.path.exists())
+                .map(|r| (r.file.clone(), r.path.clone()))
+                .collect()
         };
         let transfers = self.0.sharing.transfers.lock().unwrap();
-        let name_of = |id: &str| members.iter().find(|(m, _)| m == id).map_or_else(|| id.chars().take(8).collect(), |(_, n)| n.clone());
+        let name_of = |id: &str| {
+            members
+                .iter()
+                .find(|(m, _)| m == id)
+                .map_or_else(|| id.chars().take(8).collect(), |(_, n)| n.clone())
+        };
 
         // Old offers nobody shares anymore and we hold no copy of are not worth listing.
         let week_ms = 7 * 24 * 3600 * 1000;
@@ -330,34 +404,61 @@ impl Core {
                     size: f.size,
                     kind: f.kind.clone(),
                     from: f.from.clone(),
-                    from_name: if f.from_name.is_empty() { name_of(&f.from) } else { f.from_name.clone() },
+                    from_name: if f.from_name.is_empty() {
+                        name_of(&f.from)
+                    } else {
+                        f.from_name.clone()
+                    },
                     mine,
                     ts: f.ts,
                     stopped: f.stopped,
-                    downloaded_by: f.downloaded.keys().filter(|id| **id != f.from).map(|id| name_of(id)).collect(),
+                    downloaded_by: f
+                        .downloaded
+                        .keys()
+                        .filter(|id| **id != f.from)
+                        .map(|id| name_of(id))
+                        .collect(),
                     audience,
                     have: mine || f.downloaded.contains_key(&me),
                     saved_to: received.get(&f.id).cloned(),
                     progress: t.filter(|t| t.active).map(|t| (t.done, t.total)),
                     error: t.and_then(|t| t.error.clone()),
                     offerer_online: online.contains(&f.from),
-                    hosts: f.hosts.iter().filter(|id| **id != f.from).map(|id| name_of(id)).collect(),
+                    hosts: f
+                        .hosts
+                        .iter()
+                        .filter(|id| **id != f.from)
+                        .map(|id| name_of(id))
+                        .collect(),
                     hosting: f.hosts.contains(&me),
-                    source_online: online.contains(&f.from) || f.hosts.iter().any(|h| *h != me && online.contains(h)),
+                    source_online: online.contains(&f.from)
+                        || f.hosts.iter().any(|h| *h != me && online.contains(h)),
                 }
             })
             .collect();
         file_views.reverse();
         let mut text_views: Vec<TextView> = texts
             .into_iter()
-            .map(|t| TextView { mine: t.from == me, id: t.id, from: t.from, name: t.name, text: t.text, ts: t.ts })
+            .map(|t| TextView {
+                mine: t.from == me,
+                id: t.id,
+                from: t.from,
+                name: t.name,
+                text: t.text,
+                ts: t.ts,
+            })
             .collect();
         text_views.reverse();
         GroupView {
             id: gid.to_owned(),
             members: members
                 .iter()
-                .map(|(id, name)| DocMember { id: id.clone(), name: name.clone(), me: *id == me, online: online.contains(id) })
+                .map(|(id, name)| DocMember {
+                    id: id.clone(),
+                    name: name.clone(),
+                    me: *id == me,
+                    online: online.contains(id),
+                })
                 .collect(),
             files: file_views,
             texts: text_views,
@@ -391,7 +492,16 @@ impl Core {
 
     /// Peers came or went: members' online marks may have changed. Caller holds the publish lock.
     pub(super) fn refresh_group_views(&self) {
-        let ids: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().map(|g| g.id.clone()).collect();
+        let ids: Vec<String> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
         for gid in ids {
             self.emit_group(&gid, false, false);
         }
@@ -400,7 +510,16 @@ impl Core {
     /// Re-send every group's view (the UI just started).
     pub fn publish_groups(&self) {
         let _ordered = self.0.publish_lock.lock().unwrap();
-        let ids: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().map(|g| g.id.clone()).collect();
+        let ids: Vec<String> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
         for gid in ids {
             self.emit_group(&gid, false, true);
         }
@@ -452,7 +571,16 @@ impl Core {
 
     /// All groups, one peer.
     pub(super) async fn sync_peer(&self, peer: EndpointId) {
-        let groups: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().map(|g| g.id.clone()).collect();
+        let groups: Vec<String> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
         for gid in groups {
             if self.group_peers(&gid).contains(&peer) {
                 self.sync_one(&gid, peer).await;
@@ -467,8 +595,12 @@ impl Core {
         let key = peer.to_string();
         let Some(raw) = parse_gid(gid) else { return };
         for _ in 0..16 {
-            let Some(conn) = self.connection(peer) else { return };
-            let Some(message) = self.with_doc(gid, |d| d.sync_message(&key)) else { break };
+            let Some(conn) = self.connection(peer) else {
+                return;
+            };
+            let Some(message) = self.with_doc(gid, |d| d.sync_message(&key)) else {
+                break;
+            };
             let mut bytes = vec![SYNC_TAG];
             bytes.extend_from_slice(&raw);
             bytes.extend_from_slice(&message);
@@ -502,7 +634,9 @@ impl Core {
     pub fn delete_text(&self, gid: &str, text_id: &str) -> Result<()> {
         self.require_group(gid)?;
         let me = self.me();
-        let mine = self.with_doc(gid, |d| d.texts().iter().any(|t| t.id == text_id && t.from == me));
+        let mine = self.with_doc(gid, |d| {
+            d.texts().iter().any(|t| t.id == text_id && t.from == me)
+        });
         if !mine {
             bail!("not your snippet");
         }
@@ -512,7 +646,8 @@ impl Core {
     }
 
     pub fn scratch(&self, gid: &str) -> Option<String> {
-        self.has_group(gid).then(|| self.with_doc(gid, |d| d.scratch()))
+        self.has_group(gid)
+            .then(|| self.with_doc(gid, |d| d.scratch()))
     }
 
     /// Replace the scratchpad text; only the differing span is edited, so concurrent edits merge.
@@ -522,7 +657,12 @@ impl Core {
         }
         if self.with_doc(gid, |d| d.set_scratch(text)) {
             let now = self.with_doc(gid, |d| d.scratch());
-            self.0.sharing.own_pad.lock().unwrap().insert(gid.to_owned(), super::unseen::hash(&now));
+            self.0
+                .sharing
+                .own_pad
+                .lock()
+                .unwrap()
+                .insert(gid.to_owned(), super::unseen::hash(&now));
             self.doc_changed(gid, true);
         }
     }
@@ -531,15 +671,26 @@ impl Core {
 
     /// Offer a file to the group, under `name` (default: the file's own). `staged`: the file at `path` is our own copy (made for the offer),
     /// removed again when sharing stops. `kind` is "file", "media" or "apk".
-    pub async fn offer_file(&self, gid: &str, path: PathBuf, name: Option<String>, kind: &str, staged: bool) -> Result<String> {
+    pub async fn offer_file(
+        &self,
+        gid: &str,
+        path: PathBuf,
+        name: Option<String>,
+        kind: &str,
+        staged: bool,
+    ) -> Result<String> {
         self.require_group(gid)?;
         let name = match name {
             Some(name) => clean_file_name(&name),
-            None => path.file_name().map(|n| n.to_string_lossy().into_owned()).context("that path has no file name")?,
+            None => path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .context("that path has no file name")?,
         };
         let hashing = path.clone();
         let (hash, size) = tokio::task::spawn_blocking(move || -> Result<(String, u64)> {
-            let mut file = open_source(&hashing).with_context(|| format!("cannot read {}", hashing.display()))?;
+            let mut file = open_source(&hashing)
+                .with_context(|| format!("cannot read {}", hashing.display()))?;
             if !file.metadata()?.is_file() {
                 bail!("{} is not a file", hashing.display());
             }
@@ -549,14 +700,32 @@ impl Core {
         })
         .await??;
         let (me, my_name) = (self.me(), self.name());
-        let fid = self.with_doc(gid, |d| d.offer_file(&me, &my_name, &name, size, &hash, kind));
-        self.with_state(|st| st.shares.push(Share { group: gid.to_owned(), file: fid.clone(), path, staged }));
+        let fid = self.with_doc(gid, |d| {
+            d.offer_file(&me, &my_name, &name, size, &hash, kind)
+        });
+        self.with_state(|st| {
+            st.shares.push(Share {
+                group: gid.to_owned(),
+                file: fid.clone(),
+                path,
+                staged,
+            })
+        });
         self.doc_changed(gid, false);
         Ok(fid)
     }
 
     /// A guest uploaded a file (now at `path`): offer it to the group in their name, served from here.
-    pub(super) fn add_guest_offer(&self, gid: &str, guest: &str, guest_name: &str, path: PathBuf, name: &str, size: u64, hash: &str) -> String {
+    pub(super) fn add_guest_offer(
+        &self,
+        gid: &str,
+        guest: &str,
+        guest_name: &str,
+        path: PathBuf,
+        name: &str,
+        size: u64,
+        hash: &str,
+    ) -> String {
         let me = self.me();
         let fid = self.with_doc(gid, |d| {
             let fid = d.offer_file(guest, guest_name, name, size, hash, "file");
@@ -564,7 +733,14 @@ impl Core {
             d.mark_downloaded(&fid, &me);
             fid
         });
-        self.with_state(|st| st.shares.push(Share { group: gid.to_owned(), file: fid.clone(), path, staged: false }));
+        self.with_state(|st| {
+            st.shares.push(Share {
+                group: gid.to_owned(),
+                file: fid.clone(),
+                path,
+                staged: false,
+            })
+        });
         self.doc_changed(gid, false);
         fid
     }
@@ -574,12 +750,18 @@ impl Core {
         self.require_group(gid)?;
         let me = self.me();
         // A guest's upload is offered in their name, but we are the one serving it.
-        if !self.with_doc(gid, |d| d.file(file).is_some_and(|f| f.from == me || (super::guest::is_guest(&f.from) && f.hosts.contains(&me)))) {
+        if !self.with_doc(gid, |d| {
+            d.file(file).is_some_and(|f| {
+                f.from == me || (super::guest::is_guest(&f.from) && f.hosts.contains(&me))
+            })
+        }) {
             bail!("you are not sharing that file");
         }
         self.with_doc(gid, |d| d.stop_file(file));
         let gone = self.with_state(|st| {
-            let (gone, keep) = std::mem::take(&mut st.shares).into_iter().partition::<Vec<_>, _>(|s| s.group == gid && s.file == file);
+            let (gone, keep) = std::mem::take(&mut st.shares)
+                .into_iter()
+                .partition::<Vec<_>, _>(|s| s.group == gid && s.file == file);
             st.shares = keep;
             gone
         });
@@ -593,7 +775,9 @@ impl Core {
     pub fn host_file(&self, gid: &str, fid: &str) -> Result<()> {
         self.require_group(gid)?;
         let me = self.me();
-        let offer = self.with_doc(gid, |d| d.file(fid)).context("no such file")?;
+        let offer = self
+            .with_doc(gid, |d| d.file(fid))
+            .context("no such file")?;
         if offer.from == me {
             bail!("that is your own file");
         }
@@ -613,7 +797,12 @@ impl Core {
             .context("download it first")?;
         self.with_state(|st| {
             if !st.shares.iter().any(|s| s.group == gid && s.file == fid) {
-                st.shares.push(Share { group: gid.to_owned(), file: fid.to_owned(), path, staged: false });
+                st.shares.push(Share {
+                    group: gid.to_owned(),
+                    file: fid.to_owned(),
+                    path,
+                    staged: false,
+                });
             }
         });
         self.with_doc(gid, |d| d.set_hosting(fid, &me, true));
@@ -624,7 +813,10 @@ impl Core {
     pub fn unhost_file(&self, gid: &str, fid: &str) -> Result<()> {
         self.require_group(gid)?;
         let me = self.me();
-        if self.with_doc(gid, |d| d.file(fid)).is_some_and(|f| f.from == me) {
+        if self
+            .with_doc(gid, |d| d.file(fid))
+            .is_some_and(|f| f.from == me)
+        {
             bail!("that is your own file");
         }
         self.with_state(|st| st.shares.retain(|s| !(s.group == gid && s.file == fid)));
@@ -642,7 +834,16 @@ impl Core {
                 return false;
             }
         }
-        transfers.insert(key, Transfer { done: 0, total, active: true, error: None, failed_at: None });
+        transfers.insert(
+            key,
+            Transfer {
+                done: 0,
+                total,
+                active: true,
+                error: None,
+                failed_at: None,
+            },
+        );
         true
     }
 
@@ -654,7 +855,9 @@ impl Core {
 
     async fn download(&self, gid: &str, fid: &str, manual: bool) -> Result<PathBuf> {
         self.require_group(gid)?;
-        let offer = self.with_doc(gid, |d| d.file(fid)).context("no such file")?;
+        let offer = self
+            .with_doc(gid, |d| d.file(fid))
+            .context("no such file")?;
         let me = self.me();
         if offer.from == me {
             bail!("that is your own file");
@@ -662,7 +865,17 @@ impl Core {
         if offer.stopped {
             bail!("the sender stopped sharing it");
         }
-        if offer.downloaded.contains_key(&me) && self.0.store.lock().unwrap().state.received.iter().any(|r| r.file == fid && r.path.exists()) {
+        if offer.downloaded.contains_key(&me)
+            && self
+                .0
+                .store
+                .lock()
+                .unwrap()
+                .state
+                .received
+                .iter()
+                .any(|r| r.file == fid && r.path.exists())
+        {
             bail!("already downloaded");
         }
         if !self.begin_transfer(gid, fid, offer.size, manual) {
@@ -688,42 +901,80 @@ impl Core {
         match result {
             Ok(path) => {
                 // On Android this moves the file to the public Downloads folder.
-                let path = tokio::task::spawn_blocking(move || crate::platform::file_received(&path)).await?;
-                self.with_state(|st| st.received.push(Share { group: gid.to_owned(), file: fid.to_owned(), path: path.clone(), staged: false }));
+                let path =
+                    tokio::task::spawn_blocking(move || crate::platform::file_received(&path))
+                        .await?;
+                self.with_state(|st| {
+                    st.received.push(Share {
+                        group: gid.to_owned(),
+                        file: fid.to_owned(),
+                        path: path.clone(),
+                        staged: false,
+                    })
+                });
                 self.with_doc(gid, |d| d.mark_downloaded(fid, &me));
                 self.emit(Event::Notice(format!("downloaded {}", offer.name)));
                 self.doc_changed(gid, false);
-                if self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == gid && g.auto_rehost) {
+                if self
+                    .0
+                    .store
+                    .lock()
+                    .unwrap()
+                    .state
+                    .groups
+                    .iter()
+                    .any(|g| g.id == gid && g.auto_rehost)
+                {
                     // Fails when the sender stopped sharing in the meantime; nothing to host then.
                     let _ = self.host_file(gid, fid);
                 }
                 Ok(path)
             }
             Err(err) => {
-                self.emit(Event::Notice(format!("download of {} failed: {err:#}", offer.name)));
+                self.emit(Event::Notice(format!(
+                    "download of {} failed: {err:#}",
+                    offer.name
+                )));
                 self.publish_group(gid, false);
                 Err(err)
             }
         }
     }
 
-    async fn fetch(&self, gid: &str, fid: &str, offer: &crate::groupdoc::FileOffer) -> Result<PathBuf> {
+    async fn fetch(
+        &self,
+        gid: &str,
+        fid: &str,
+        offer: &crate::groupdoc::FileOffer,
+    ) -> Result<PathBuf> {
         let me = self.me();
         let conn = std::iter::once(&offer.from)
-            .chain(offer.hosts.iter().filter(|h| **h != offer.from && **h != me))
+            .chain(
+                offer
+                    .hosts
+                    .iter()
+                    .filter(|h| **h != offer.from && **h != me),
+            )
             .filter_map(|id| id.parse::<EndpointId>().ok())
             .find_map(|id| self.connection(id))
             .context("nobody who has it is online")?;
         let dir = self.download_dir();
-        tokio::fs::create_dir_all(&dir).await.with_context(|| format!("cannot create {}", dir.display()))?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .with_context(|| format!("cannot create {}", dir.display()))?;
 
         let (mut tx, mut rx) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        let request = serde_json::to_vec(&DownloadRequest { group: gid.to_owned(), file: fid.to_owned() })?;
+        let request = serde_json::to_vec(&DownloadRequest {
+            group: gid.to_owned(),
+            file: fid.to_owned(),
+        })?;
         tx.write_all(&request).await.map_err(|e| anyhow!("{e}"))?;
         tx.finish().map_err(|e| anyhow!("{e}"))?;
 
         let mut header = [0u8; 9];
-        rx.read_exact(&mut header).await.map_err(|_| anyhow!("the sender refused or went away"))?;
+        rx.read_exact(&mut header)
+            .await
+            .map_err(|_| anyhow!("the sender refused or went away"))?;
         if header[0] != 0 {
             bail!("the sender no longer shares it");
         }
@@ -738,11 +989,22 @@ impl Core {
             let mut hasher = blake3::Hasher::new();
             let mut buf = vec![0u8; CHUNK];
             let (mut done, mut shown) = (0u64, Instant::now());
-            while let Some(n) = rx.read(&mut buf).await.map_err(|e| anyhow!("connection lost: {e}"))? {
+            while let Some(n) = rx
+                .read(&mut buf)
+                .await
+                .map_err(|e| anyhow!("connection lost: {e}"))?
+            {
                 hasher.update(&buf[..n]);
                 out.write_all(&buf[..n]).await?;
                 done += n as u64;
-                if let Some(t) = self.0.sharing.transfers.lock().unwrap().get_mut(&(gid.to_owned(), fid.to_owned())) {
+                if let Some(t) = self
+                    .0
+                    .sharing
+                    .transfers
+                    .lock()
+                    .unwrap()
+                    .get_mut(&(gid.to_owned(), fid.to_owned()))
+                {
                     t.done = done;
                 }
                 if shown.elapsed() > Duration::from_millis(200) {
@@ -770,7 +1032,12 @@ impl Core {
     }
 
     /// The other side of [`Core::fetch`].
-    pub(super) async fn serve_download(&self, from: EndpointId, mut tx: SendStream, mut rx: RecvStream) {
+    pub(super) async fn serve_download(
+        &self,
+        from: EndpointId,
+        mut tx: SendStream,
+        mut rx: RecvStream,
+    ) {
         if let Err(err) = self.serve(from, &mut tx, &mut rx).await {
             tracing::debug!("refused download to {}: {err:#}", from.fmt_short());
             let _ = tx.write_all(&[1u8; 9]).await;
@@ -779,7 +1046,12 @@ impl Core {
         let _ = tx.stopped().await;
     }
 
-    async fn serve(&self, from: EndpointId, tx: &mut SendStream, rx: &mut RecvStream) -> Result<()> {
+    async fn serve(
+        &self,
+        from: EndpointId,
+        tx: &mut SendStream,
+        rx: &mut RecvStream,
+    ) -> Result<()> {
         let raw = rx.read_to_end(4096).await?;
         if raw == b"ping" {
             // Liveness probe (see `Core::drop_stale`).
@@ -806,7 +1078,9 @@ impl Core {
             .find(|s| s.group == request.group && s.file == request.file)
             .map(|s| s.path.clone())
             .context("not shared here")?;
-        let mut file = tokio::fs::File::from_std(tokio::task::spawn_blocking(move || open_source(&path)).await??);
+        let mut file = tokio::fs::File::from_std(
+            tokio::task::spawn_blocking(move || open_source(&path)).await??,
+        );
         let len = file.metadata().await?.len();
         if len != offer.size {
             bail!("file changed since it was offered");
@@ -829,7 +1103,16 @@ impl Core {
     // ---- automatic behaviour ----------------------------------------------------------
 
     pub(super) fn auto_jobs_all(&self) {
-        let groups: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().map(|g| g.id.clone()).collect();
+        let groups: Vec<String> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
         for gid in groups {
             self.auto_jobs(&gid);
         }
@@ -837,8 +1120,16 @@ impl Core {
 
     /// Per-group local settings at work: download new offers, stop sharing what everybody has.
     pub(super) fn auto_jobs(&self, gid: &str) {
-        let Some((auto_download, auto_stop)) =
-            self.0.store.lock().unwrap().state.groups.iter().find(|g| g.id == gid).map(|g| (g.auto_download, g.auto_stop))
+        let Some((auto_download, auto_stop)) = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .find(|g| g.id == gid)
+            .map(|g| (g.auto_download, g.auto_stop))
         else {
             return;
         };
@@ -849,12 +1140,22 @@ impl Core {
         let (members, files) = self.with_doc(gid, |d| (d.members(), d.files()));
         for f in files.iter().filter(|f| !f.stopped) {
             if f.from == me {
-                let audience: Vec<&String> = members.iter().map(|(id, _)| id).filter(|id| **id != me).collect();
-                if auto_stop && !audience.is_empty() && audience.iter().all(|id| f.downloaded.contains_key(*id)) {
+                let audience: Vec<&String> = members
+                    .iter()
+                    .map(|(id, _)| id)
+                    .filter(|id| **id != me)
+                    .collect();
+                if auto_stop
+                    && !audience.is_empty()
+                    && audience.iter().all(|id| f.downloaded.contains_key(*id))
+                {
                     let _ = self.stop_file(gid, &f.id);
                 }
             } else if auto_download && !f.downloaded.contains_key(&me) {
-                let online = std::iter::once(&f.from).chain(&f.hosts).filter(|id| **id != me).any(|id| id.parse().ok().and_then(|id| self.connection(id)).is_some());
+                let online = std::iter::once(&f.from)
+                    .chain(&f.hosts)
+                    .filter(|id| **id != me)
+                    .any(|id| id.parse().ok().and_then(|id| self.connection(id)).is_some());
                 if online {
                     let (this, gid, fid) = (self.clone(), gid.to_owned(), f.id.clone());
                     tokio::spawn(async move {
@@ -873,7 +1174,8 @@ impl Core {
 pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(target_os = "android")]
     if path.to_str().is_some_and(|p| p.starts_with("content://")) {
-        let fd = crate::platform::open_content_fd(&path.to_string_lossy()).ok_or_else(|| std::io::Error::other("the picked file is no longer readable"))?;
+        let fd = crate::platform::open_content_fd(&path.to_string_lossy())
+            .ok_or_else(|| std::io::Error::other("the picked file is no longer readable"))?;
         return Ok(std::fs::File::from(fd));
     }
     std::fs::File::open(path)
@@ -889,7 +1191,15 @@ impl Core {
             }
             #[cfg(target_os = "android")]
             if let Some(uri) = s.path.to_str().filter(|p| p.starts_with("content://")) {
-                let still_used = self.0.store.lock().unwrap().state.shares.iter().any(|o| o.path == s.path);
+                let still_used = self
+                    .0
+                    .store
+                    .lock()
+                    .unwrap()
+                    .state
+                    .shares
+                    .iter()
+                    .any(|o| o.path == s.path);
                 if !still_used {
                     crate::platform::release_content_uri(uri);
                 }
@@ -905,7 +1215,9 @@ async fn probe(conn: &Connection) -> bool {
         tx.finish().ok()?;
         rx.read_exact(&mut [0u8; 1]).await.ok()
     };
-    tokio::time::timeout(Duration::from_secs(2), ask).await.is_ok_and(|r| r.is_some())
+    tokio::time::timeout(Duration::from_secs(2), ask)
+        .await
+        .is_ok_and(|r| r.is_some())
 }
 
 impl Core {
@@ -916,7 +1228,9 @@ impl Core {
         if id < self.id() {
             return; // the incoming connection wins the tie-break anyway
         }
-        let Some(existing) = self.connection(id) else { return };
+        let Some(existing) = self.connection(id) else {
+            return;
+        };
         if !probe(&existing).await {
             tracing::debug!("dropping stale connection to {}", id.fmt_short());
             existing.close(0u32.into(), b"stale");
@@ -949,8 +1263,18 @@ pub(super) fn unique_path(dir: &Path, name: &str) -> PathBuf {
 }
 
 pub(super) fn clean_file_name(name: &str) -> String {
-    let name = Path::new(name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let name: String = name.chars().filter(|c| !c.is_control() && *c != '\\').collect();
+    let name = Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name: String = name
+        .chars()
+        .filter(|c| !c.is_control() && *c != '\\')
+        .collect();
     let name = name.trim();
-    if name.is_empty() { "file".into() } else { name.to_owned() }
+    if name.is_empty() {
+        "file".into()
+    } else {
+        name.to_owned()
+    }
 }

@@ -15,9 +15,17 @@ use flipflop::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
+        )
+        .init();
     let cli = Cli::parse();
-    let dir = cli.dir.clone().unwrap_or_else(|| dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("flipflop"));
+    let dir = cli.dir.clone().unwrap_or_else(|| {
+        dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("flipflop")
+    });
     let cwd = std::env::current_dir()?;
     let args: Vec<String> = std::env::args().collect();
 
@@ -28,7 +36,9 @@ async fn main() -> Result<()> {
         if Core::dir_in_use(&dir) {
             if ipc::reachable(&dir).await {
                 if cli.downloads.is_some() {
-                    eprintln!("(--downloads is ignored: the running app keeps its own download folder)");
+                    eprintln!(
+                        "(--downloads is ignored: the running app keeps its own download folder)"
+                    );
                 }
                 return ipc::route(&dir, args, cwd).await;
             }
@@ -36,7 +46,10 @@ async fn main() -> Result<()> {
             return run_here(&cli, &dir, cwd).await;
         }
         if started.elapsed() > Duration::from_secs(10) {
-            bail!("{} is in use by another flipflop that does not take commands; stop it, or set FLIPFLOP_DIR for a separate identity", dir.display());
+            bail!(
+                "{} is in use by another flipflop that does not take commands; stop it, or set FLIPFLOP_DIR for a separate identity",
+                dir.display()
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -57,7 +70,11 @@ async fn run_here(cli: &Cli, dir: &std::path::Path, cwd: std::path::PathBuf) -> 
     if let Some(d) = &cli.downloads {
         core.set_download_dir(d.clone());
     }
-    let cx = Ctx { out: Out::stdout(), cwd, routed: false };
+    let cx = Ctx {
+        out: Out::stdout(),
+        cwd,
+        routed: false,
+    };
     let result = cli::run(&core, &cx, cli).await;
     core.shutdown().await;
     result

@@ -41,17 +41,17 @@ pub fn start(
     Scanner(stop)
 }
 
-fn capture(
-    stop: &AtomicBool,
-    on_frame: impl Fn(u32, u32, Vec<u8>),
-) -> Result<String, String> {
+fn capture(stop: &AtomicBool, on_frame: impl Fn(u32, u32, Vec<u8>)) -> Result<String, String> {
     let format = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-    let mut camera = Camera::new(CameraIndex::Index(0), format).map_err(|e| format!("camera: {e}"))?;
+    let mut camera =
+        Camera::new(CameraIndex::Index(0), format).map_err(|e| format!("camera: {e}"))?;
     camera.open_stream().map_err(|e| format!("camera: {e}"))?;
     let mut n = 0u32;
     while !stop.load(Ordering::Relaxed) {
         let frame = camera.frame().map_err(|e| format!("camera: {e}"))?;
-        let img = frame.decode_image::<RgbFormat>().map_err(|e| format!("camera: {e}"))?;
+        let img = frame
+            .decode_image::<RgbFormat>()
+            .map_err(|e| format!("camera: {e}"))?;
         let (w, h) = (img.width(), img.height());
         let rgb = img.as_raw();
         n += 1;
@@ -64,7 +64,10 @@ fn capture(
                 return Ok(text);
             }
         }
-        let rgba = rgb.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        let rgba = rgb
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect();
         on_frame(w, h, rgba);
     }
     Err("cancelled".into())

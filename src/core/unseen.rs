@@ -44,18 +44,31 @@ impl Unseen {
     /// One line per kind of news, e.g. "2 new files: a.png, b.pdf".
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![];
-        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         if !self.files.is_empty() {
             let names: Vec<&str> = self.files.iter().map(|f| f.0.as_str()).take(3).collect();
             let more = self.files.len().saturating_sub(3);
-            lines.push(format!("{}: {}{}", plural(self.files.len(), "new file", "new files"), names.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() }));
+            lines.push(format!(
+                "{}: {}{}",
+                plural(self.files.len(), "new file", "new files"),
+                names.join(", "),
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                }
+            ));
         }
         if let Some((from, text)) = self.texts.last() {
             let mut preview: String = text.lines().next().unwrap_or("").chars().take(60).collect();
             if preview.chars().count() < text.chars().count() {
                 preview.push('…');
             }
-            lines.push(format!("{}, latest from {from}: {preview}", plural(self.texts.len(), "new text", "new texts")));
+            lines.push(format!(
+                "{}, latest from {from}: {preview}",
+                plural(self.texts.len(), "new text", "new texts")
+            ));
         }
         if self.scratch {
             lines.push("the scratchpad changed".into());
@@ -77,21 +90,42 @@ fn now(view: &GroupView) -> Seen {
         files: view.files.iter().map(|f| f.id.clone()).collect(),
         texts: view.texts.iter().map(|t| t.id.clone()).collect(),
         scratch: hash(&view.scratch),
-        members: view.members.iter().filter(|m| !m.me).map(|m| m.id.clone()).collect(),
+        members: view
+            .members
+            .iter()
+            .filter(|m| !m.me)
+            .map(|m| m.id.clone())
+            .collect(),
     }
 }
 
 /// The news in `view` compared with `seen`.
 fn news(view: &GroupView, seen: &Seen, own_pad: Option<&str>) -> Unseen {
-    let mut texts: Vec<(String, String)> =
-        view.texts.iter().filter(|t| !t.mine && !seen.texts.contains(&t.id)).map(|t| (t.name.clone(), t.text.clone())).collect();
+    let mut texts: Vec<(String, String)> = view
+        .texts
+        .iter()
+        .filter(|t| !t.mine && !seen.texts.contains(&t.id))
+        .map(|t| (t.name.clone(), t.text.clone()))
+        .collect();
     texts.reverse(); // the view is newest first
     Unseen {
         group: view.id.clone(),
-        files: view.files.iter().filter(|f| !f.mine && !f.stopped && !seen.files.contains(&f.id)).map(|f| (f.name.clone(), f.from_name.clone())).collect(),
+        files: view
+            .files
+            .iter()
+            .filter(|f| !f.mine && !f.stopped && !seen.files.contains(&f.id))
+            .map(|f| (f.name.clone(), f.from_name.clone()))
+            .collect(),
         texts,
-        scratch: !view.scratch.is_empty() && hash(&view.scratch) != seen.scratch && Some(hash(&view.scratch).as_str()) != own_pad,
-        joined: view.members.iter().filter(|m| !m.me && !seen.members.contains(&m.id)).map(|m| m.name.clone()).collect(),
+        scratch: !view.scratch.is_empty()
+            && hash(&view.scratch) != seen.scratch
+            && Some(hash(&view.scratch).as_str()) != own_pad,
+        joined: view
+            .members
+            .iter()
+            .filter(|m| !m.me && !seen.members.contains(&m.id))
+            .map(|m| m.name.clone())
+            .collect(),
         ..Default::default()
     }
 }
@@ -99,7 +133,16 @@ fn news(view: &GroupView, seen: &Seen, own_pad: Option<&str>) -> Unseen {
 impl Core {
     /// The groups with news, implied groups included.
     pub fn unseen(&self) -> Vec<Unseen> {
-        let seen: Vec<(String, Seen)> = self.0.store.lock().unwrap().state.groups.iter().map(|g| (g.id.clone(), g.seen.clone())).collect();
+        let seen: Vec<(String, Seen)> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .map(|g| (g.id.clone(), g.seen.clone()))
+            .collect();
         let groups = self.groups().groups;
         seen.iter()
             .filter_map(|(gid, seen)| {
@@ -107,7 +150,10 @@ impl Core {
                 let own_pad = self.0.sharing.own_pad.lock().unwrap().get(gid).cloned();
                 let mut n = news(&self.group_view(gid)?, seen, own_pad.as_deref());
                 n.with = info.with;
-                n.title = match info.with.and_then(|w| info.members.iter().find(|m| m.id == w)) {
+                n.title = match info
+                    .with
+                    .and_then(|w| info.members.iter().find(|m| m.id == w))
+                {
                     Some(m) => m.name.clone(),
                     None => info.alias.clone().unwrap_or_else(|| info.haiku.clone()),
                 };
@@ -129,9 +175,19 @@ impl Core {
 
     /// The user looked at this group: everything in it is now seen.
     pub fn mark_seen(&self, gid: &str) {
-        let Some(view) = self.group_view(gid) else { return };
+        let Some(view) = self.group_view(gid) else {
+            return;
+        };
         let current = now(&view);
-        let changed = self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == gid && g.seen != current);
+        let changed = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.id == gid && g.seen != current);
         if changed {
             self.with_state(|st| {
                 if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid) {
@@ -142,7 +198,16 @@ impl Core {
     }
 
     pub fn mark_all_seen(&self) {
-        let ids: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().map(|g| g.id.clone()).collect();
+        let ids: Vec<String> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
         for gid in ids {
             self.mark_seen(&gid);
         }

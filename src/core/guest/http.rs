@@ -9,7 +9,13 @@
 //! - `GET /<token>/dl/<file id>`     download an offer
 //! - `PUT /<token>/up?name=<name>`   upload a file (only while the link allows it)
 
-use std::{convert::Infallible, io, net::IpAddr, pin::Pin, task::{Context, Poll}};
+use std::{
+    convert::Infallible,
+    io,
+    net::IpAddr,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -69,7 +75,9 @@ pub(super) async fn serve(listener: TcpListener, core: Core) {
 /// (length-prefixed messages, the first one `{"t":"join","token":…}`); the others are HTTP exchanges.
 pub(in crate::core) async fn serve_tunnel(core: Core, conn: Connection) {
     let origin = Origin::Iroh(conn.remote_id());
-    let Ok((send, recv)) = conn.accept_bi().await else { return };
+    let Ok((send, recv)) = conn.accept_bi().await else {
+        return;
+    };
     let mut sync = tokio::spawn(tunnel_sync(core.clone(), send, recv, origin.clone()));
     let mut streams = tokio::task::JoinSet::new();
     loop {
@@ -99,19 +107,29 @@ async fn read_frame(recv: &mut RecvStream) -> Option<Vec<u8>> {
 }
 
 async fn write_frame(send: &mut SendStream, frame: &[u8]) -> bool {
-    send.write_all(&(frame.len() as u32).to_be_bytes()).await.is_ok() && send.write_all(frame).await.is_ok()
+    send.write_all(&(frame.len() as u32).to_be_bytes())
+        .await
+        .is_ok()
+        && send.write_all(frame).await.is_ok()
 }
 
 async fn tunnel_sync(core: Core, mut send: SendStream, mut recv: RecvStream, origin: Origin) {
     // Whoever does not say which link they hold within a few seconds is not a guest.
-    let join = tokio::time::timeout(std::time::Duration::from_secs(10), read_frame(&mut recv)).await.ok().flatten();
+    let join = tokio::time::timeout(std::time::Duration::from_secs(10), read_frame(&mut recv))
+        .await
+        .ok()
+        .flatten();
     let token = join
         .filter(|f| f.first() == Some(&TAG_CONTROL))
         .and_then(|f| serde_json::from_slice::<serde_json::Value>(&f[1..]).ok())
         .and_then(|v| v["token"].as_str().map(str::to_owned));
-    let Some((gid, _)) = token.and_then(|t| core.guest_group(&t)) else { return };
+    let Some((gid, _)) = token.and_then(|t| core.guest_group(&t)) else {
+        return;
+    };
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let Some(session) = core.guest_attach(&gid, &origin, tx) else { return };
+    let Some(session) = core.guest_attach(&gid, &origin, tx) else {
+        return;
+    };
     let (in_tx, mut incoming) = mpsc::unbounded_channel();
     let reader = tokio::spawn(async move {
         while let Some(frame) = read_frame(&mut recv).await {
@@ -140,8 +158,12 @@ async fn tunnel_sync(core: Core, mut send: SendStream, mut recv: RecvStream, ori
     let _ = send.finish();
 }
 
-async fn ws_session<S>(core: Core, session: GuestSession, mut ws: WebSocketStream<S>, mut rx: mpsc::UnboundedReceiver<Out>)
-where
+async fn ws_session<S>(
+    core: Core,
+    session: GuestSession,
+    mut ws: WebSocketStream<S>,
+    mut rx: mpsc::UnboundedReceiver<Out>,
+) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     loop {
@@ -188,17 +210,25 @@ where
 /// A whole body, or one streamed from a producer task.
 enum Body {
     Full(Option<Bytes>),
-    Stream { rx: mpsc::Receiver<io::Result<Bytes>>, len: u64 },
+    Stream {
+        rx: mpsc::Receiver<io::Result<Bytes>>,
+        len: u64,
+    },
 }
 
 impl hyper::body::Body for Body {
     type Data = Bytes;
     type Error = io::Error;
 
-    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, io::Error>>> {
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, io::Error>>> {
         match self.get_mut() {
             Body::Full(data) => Poll::Ready(data.take().map(|d| Ok(Frame::data(d)))),
-            Body::Stream { rx, .. } => rx.poll_recv(cx).map(|chunk| chunk.map(|r| r.map(Frame::data))),
+            Body::Stream { rx, .. } => rx
+                .poll_recv(cx)
+                .map(|chunk| chunk.map(|r| r.map(Frame::data))),
         }
     }
 
@@ -233,8 +263,20 @@ fn not_found() -> Reply {
 
 /// `attachment` with an ASCII fallback name and the real one in UTF-8.
 fn content_disposition(name: &str) -> String {
-    let fallback: String = name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect();
-    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{}", super::encode(name))
+    let fallback: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!(
+        "attachment; filename=\"{fallback}\"; filename*=UTF-8''{}",
+        super::encode(name)
+    )
 }
 
 fn decode(s: &str) -> String {
@@ -267,7 +309,11 @@ fn decode(s: &str) -> String {
 }
 
 fn query_param(req: &Request<Incoming>, key: &str) -> Option<String> {
-    req.uri().query()?.split('&').find_map(|pair| pair.strip_prefix(key)?.strip_prefix('=')).map(decode)
+    req.uri()
+        .query()?
+        .split('&')
+        .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
+        .map(decode)
 }
 
 // -------------------------------------------------------------- routing
@@ -276,11 +322,15 @@ async fn route(core: &Core, origin: &Origin, req: Request<Incoming>) -> Reply {
     let path = req.uri().path().to_string();
     let mut parts = path.trim_start_matches('/').split('/');
     let token = parts.next().unwrap_or_default();
-    let Some((gid, _)) = core.guest_group(token) else { return not_found() };
+    let Some((gid, _)) = core.guest_group(token) else {
+        return not_found();
+    };
     let rest: Vec<&str> = parts.collect();
     match (req.method().clone(), rest.as_slice()) {
         (Method::GET, [] | [""]) => reply(StatusCode::OK, "text/html; charset=utf-8", PAGE),
-        (Method::GET, ["flipflop_web.js"]) => reply(StatusCode::OK, "text/javascript; charset=utf-8", WASM_JS),
+        (Method::GET, ["flipflop_web.js"]) => {
+            reply(StatusCode::OK, "text/javascript; charset=utf-8", WASM_JS)
+        }
         (Method::GET, ["flipflop_web_bg.wasm"]) => reply(StatusCode::OK, "application/wasm", WASM),
         (Method::GET, ["ws"]) => upgrade(core, &gid, origin, req),
         (Method::GET, ["dl", fid]) => download(core, &gid, fid, origin).await,
@@ -291,15 +341,25 @@ async fn route(core: &Core, origin: &Origin, req: Request<Incoming>) -> Reply {
 
 fn upgrade(core: &Core, gid: &str, origin: &Origin, mut req: Request<Incoming>) -> Reply {
     let headers = req.headers();
-    let wants = headers.get(header::UPGRADE).is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
-    let Some(key) = headers.get("sec-websocket-key").map(|k| derive_accept_key(k.as_bytes())).filter(|_| wants) else {
+    let wants = headers
+        .get(header::UPGRADE)
+        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
+    let Some(key) = headers
+        .get("sec-websocket-key")
+        .map(|k| derive_accept_key(k.as_bytes()))
+        .filter(|_| wants)
+    else {
         return error(StatusCode::BAD_REQUEST, "Expected a WebSocket");
     };
     let (tx, rx) = mpsc::unbounded_channel();
-    let Some(session) = core.guest_attach(gid, origin, tx) else { return not_found() };
+    let Some(session) = core.guest_attach(gid, origin, tx) else {
+        return not_found();
+    };
     let core = core.clone();
     tokio::spawn(async move {
-        let Ok(upgraded) = hyper::upgrade::on(&mut req).await else { return };
+        let Ok(upgraded) = hyper::upgrade::on(&mut req).await else {
+            return;
+        };
         let ws = WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, None).await;
         ws_session(core, session, ws, rx).await;
     });
@@ -325,7 +385,12 @@ async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
     };
     let len = match file.metadata().await {
         Ok(m) if m.len() == size => size,
-        _ => return error(StatusCode::CONFLICT, "The file changed since it was offered"),
+        _ => {
+            return error(
+                StatusCode::CONFLICT,
+                "The file changed since it was offered",
+            );
+        }
     };
     let (tx, rx) = mpsc::channel(8);
     let (core, gid, fid, guest) = (core.clone(), gid.to_owned(), fid.to_owned(), origin.id());
@@ -336,7 +401,11 @@ async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
             match file.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    if tx.send(Ok(Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                    if tx
+                        .send(Ok(Bytes::copy_from_slice(&buf[..n])))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -352,7 +421,10 @@ async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
     });
     let mut res = Response::new(Body::Stream { rx, len });
     let h = res.headers_mut();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
     h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     if let Ok(v) = HeaderValue::from_str(&content_disposition(&name)) {
@@ -371,7 +443,9 @@ async fn upload(core: &Core, gid: &str, origin: &Origin, req: Request<Incoming>)
     };
     let mut body = req.into_body();
     while let Some(frame) = body.frame().await {
-        let Ok(frame) = frame else { return error(StatusCode::BAD_REQUEST, "The upload was interrupted") };
+        let Ok(frame) = frame else {
+            return error(StatusCode::BAD_REQUEST, "The upload was interrupted");
+        };
         if let Ok(data) = frame.into_data() {
             if let Err(err) = up.write(&data).await {
                 return error(StatusCode::INSUFFICIENT_STORAGE, &err.to_string());
@@ -379,7 +453,11 @@ async fn upload(core: &Core, gid: &str, origin: &Origin, req: Request<Incoming>)
         }
     }
     match up.finish(core, gid, origin).await {
-        Ok(fid) => reply(StatusCode::OK, "application/json", serde_json::json!({ "id": fid }).to_string()),
+        Ok(fid) => reply(
+            StatusCode::OK,
+            "application/json",
+            serde_json::json!({ "id": fid }).to_string(),
+        ),
         Err(err) => error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
     }
 }

@@ -260,7 +260,14 @@ pub fn has_live_camera() -> bool {
 pub fn qr_matrix(text: String) -> Option<QrMatrix> {
     use qrcode::{Color, QrCode};
     let code = QrCode::new(text.as_bytes()).ok()?;
-    Some(QrMatrix { size: code.width() as u32, dark: code.to_colors().into_iter().map(|c| c == Color::Dark).collect() })
+    Some(QrMatrix {
+        size: code.width() as u32,
+        dark: code
+            .to_colors()
+            .into_iter()
+            .map(|c| c == Color::Dark)
+            .collect(),
+    })
 }
 
 /// Where a cursor at `cursor` (a character index into `old`) ends up in `new`.
@@ -377,7 +384,15 @@ impl Inner {
 
     /// Offer a file to a group from a background task and report how it went.
     #[allow(clippy::too_many_arguments)]
-    fn offer(self: &Arc<Self>, core: &Core, gid: String, path: PathBuf, name: Option<String>, kind: &str, staged: bool) {
+    fn offer(
+        self: &Arc<Self>,
+        core: &Core,
+        gid: String,
+        path: PathBuf,
+        name: Option<String>,
+        kind: &str,
+        staged: bool,
+    ) {
         let (this, core, kind) = (self.clone(), core.clone(), kind.to_owned());
         self.rt.spawn(async move {
             match core.offer_file(&gid, path, name, &kind, staged).await {
@@ -411,9 +426,13 @@ impl Inner {
                 let gone = {
                     let mut shared = self.shared.lock().unwrap();
                     shared.groups = view;
-                    let ids: Vec<String> = shared.groups.groups.iter().map(|g| g.id.clone()).collect();
+                    let ids: Vec<String> =
+                        shared.groups.groups.iter().map(|g| g.id.clone()).collect();
                     shared.views.retain(|id, _| ids.contains(id));
-                    let gone = shared.open_group.as_ref().is_some_and(|id| !ids.contains(id));
+                    let gone = shared
+                        .open_group
+                        .as_ref()
+                        .is_some_and(|id| !ids.contains(id));
                     if gone {
                         shared.open_group = None;
                     }
@@ -430,7 +449,9 @@ impl Inner {
                     let mut shared = self.shared.lock().unwrap();
                     let opened = shared.open_group.as_deref() == Some(view.id.as_str());
                     // Our own scratchpad edits are not news; they are caught up when the page is left.
-                    let looking = opened && shared.viewed.as_deref() == Some(view.id.as_str()) && !view.scratch_local;
+                    let looking = opened
+                        && shared.viewed.as_deref() == Some(view.id.as_str())
+                        && !view.scratch_local;
                     shared.views.insert(view.id.clone(), view);
                     looking
                 };
@@ -450,7 +471,10 @@ impl App {
     /// Start the node in `data_dir`. Commands do nothing until it is up (`UiState::node_ready`).
     #[uniffi::constructor]
     pub fn new(data_dir: String, listener: Arc<dyn Listener>) -> Result<Arc<Self>, FfiError> {
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(anyhow::Error::from)?;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(anyhow::Error::from)?;
         let inner = Arc::new(Inner {
             rt,
             listener,
@@ -467,12 +491,17 @@ impl App {
             let inner = inner.clone();
             let data_dir = data_dir.clone();
             inner.clone().rt.spawn(async move {
-                let want_ble = tokio::task::spawn_blocking(crate::platform::ensure_ble_permission).await.unwrap_or(false);
+                let want_ble = tokio::task::spawn_blocking(crate::platform::ensure_ble_permission)
+                    .await
+                    .unwrap_or(false);
                 let events = inner.clone();
-                let core = match Core::start(&data_dir, want_ble, move |event| events.on_event(event)).await {
-                    Ok(core) => core,
-                    Err(err) => return inner.notice(format!("failed to start: {err:#}")),
-                };
+                let core =
+                    match Core::start(&data_dir, want_ble, move |event| events.on_event(event))
+                        .await
+                    {
+                        Ok(core) => core,
+                        Err(err) => return inner.notice(format!("failed to start: {err:#}")),
+                    };
                 let _ = inner.core.set(core.clone());
                 // `flipflop-cli` hands its commands to us while the app is open.
                 #[cfg(not(target_os = "android"))]
@@ -487,12 +516,19 @@ impl App {
                 });
 
                 // Two BLE statuses share one line: the iroh transport and our discovery.
-                let line = Arc::new(Mutex::new((format!("Bluetooth transport {}", core.ble_transport_status()), String::new())));
+                let line = Arc::new(Mutex::new((
+                    format!("Bluetooth transport {}", core.ble_transport_status()),
+                    String::new(),
+                )));
                 let show = {
                     let (line, inner) = (line.clone(), inner.clone());
                     move || {
                         let (t, d) = line.lock().unwrap().clone();
-                        let text = if d.is_empty() { t } else { format!("{d} · {t}") };
+                        let text = if d.is_empty() {
+                            t
+                        } else {
+                            format!("{d} · {t}")
+                        };
                         inner.change(|s| s.ui.ble_status = text);
                     }
                 };
@@ -515,10 +551,19 @@ impl App {
             // A picked file is offered to whichever group is open.
             let files = inner.clone();
             crate::platform::set_file_handler(move |kind, path, name| {
-                let (Some(core), Some(gid)) = (files.core(), files.open_group_id()) else { return };
+                let (Some(core), Some(gid)) = (files.core(), files.open_group_id()) else {
+                    return;
+                };
                 // A content:// URI is shared where it is; anything else is our own copy.
                 let staged = !path.starts_with("content://");
-                files.offer(&core, gid, PathBuf::from(path), Some(name).filter(|n| !n.is_empty()), &kind, staged);
+                files.offer(
+                    &core,
+                    gid,
+                    PathBuf::from(path),
+                    Some(name).filter(|n| !n.is_empty()),
+                    &kind,
+                    staged,
+                );
             });
         }
 
@@ -548,7 +593,9 @@ impl App {
 
     pub fn connect(&self, id: String) {
         let _g = self.inner.enter();
-        let (Some(core), Ok(id)) = (self.inner.core(), id.parse::<EndpointId>()) else { return };
+        let (Some(core), Ok(id)) = (self.inner.core(), id.parse::<EndpointId>()) else {
+            return;
+        };
         let inner = self.inner.clone();
         inner.notice("Connecting…");
         self.inner.rt.spawn(async move {
@@ -652,14 +699,26 @@ impl App {
     /// Invite the open peer to the group at this index of `UiState::invitable`.
     pub fn invite_peer_to(&self, index: i32) {
         let _g = self.inner.enter();
-        let Some(core) = self.inner.core() else { return };
+        let Some(core) = self.inner.core() else {
+            return;
+        };
         let picked = {
             let shared = self.inner.shared.lock().unwrap();
-            let peer = shared.open_group.as_ref().and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id)).and_then(|g| g.with);
-            let group = usize::try_from(index).ok().and_then(|i| invitable_groups(&shared).get(i).map(|g| (g.id.clone(), group_title(g))));
+            let peer = shared
+                .open_group
+                .as_ref()
+                .and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id))
+                .and_then(|g| g.with);
+            let group = usize::try_from(index).ok().and_then(|i| {
+                invitable_groups(&shared)
+                    .get(i)
+                    .map(|g| (g.id.clone(), group_title(g)))
+            });
             peer.zip(group)
         };
-        let Some((peer, (group, title))) = picked else { return };
+        let Some((peer, (group, title))) = picked else {
+            return;
+        };
         core.add_to_group(&group, peer);
         self.inner.notice(format!("Invited to {title}"));
     }
@@ -687,7 +746,9 @@ impl App {
     /// Rename a peer ("peer") or a group ("group"); an empty text removes the name.
     pub fn save_edit(&self, kind: String, id: String, text: String) {
         let _g = self.inner.enter();
-        let Some(core) = self.inner.core() else { return };
+        let Some(core) = self.inner.core() else {
+            return;
+        };
         match kind.as_str() {
             "peer" => {
                 if let Ok(id) = id.parse::<EndpointId>() {
@@ -702,7 +763,9 @@ impl App {
     /// Forget a peer ("peer") or delete a group ("group").
     pub fn delete_edit(&self, kind: String, id: String) {
         let _g = self.inner.enter();
-        let Some(core) = self.inner.core() else { return };
+        let Some(core) = self.inner.core() else {
+            return;
+        };
         match kind.as_str() {
             "peer" => {
                 if let Ok(id) = id.parse::<EndpointId>() {
@@ -722,7 +785,9 @@ impl App {
 
     pub fn send_text(&self, text: String) {
         let _g = self.inner.enter();
-        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
         if let Err(err) = core.send_text(&gid, &text) {
             self.inner.notice(format!("{err:#}"));
         }
@@ -730,7 +795,9 @@ impl App {
 
     pub fn delete_text(&self, id: String) {
         let _g = self.inner.enter();
-        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
         if let Err(err) = core.delete_text(&gid, &id) {
             self.inner.notice(format!("{err:#}"));
         }
@@ -773,17 +840,32 @@ impl App {
         #[cfg(not(target_os = "android"))]
         {
             let _g = self.inner.enter();
-            let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
+            let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+                return;
+            };
             let inner = self.inner.clone();
             let media = kind == "media";
             self.inner.rt.spawn(async move {
                 let mut dialog = rfd::AsyncFileDialog::new().set_title("Offer to the group");
                 if media {
-                    dialog = dialog.add_filter("Photos and videos", &["jpg", "jpeg", "png", "gif", "webp", "heic", "mp4", "mkv", "mov", "webm"]);
+                    dialog = dialog.add_filter(
+                        "Photos and videos",
+                        &[
+                            "jpg", "jpeg", "png", "gif", "webp", "heic", "mp4", "mkv", "mov",
+                            "webm",
+                        ],
+                    );
                 }
                 for file in dialog.pick_files().await.unwrap_or_default() {
                     let kind = if media { "media" } else { "file" };
-                    inner.offer(&core, gid.clone(), file.path().to_owned(), None, kind, false);
+                    inner.offer(
+                        &core,
+                        gid.clone(),
+                        file.path().to_owned(),
+                        None,
+                        kind,
+                        false,
+                    );
                 }
             });
         }
@@ -792,13 +874,24 @@ impl App {
     /// Offer an installed app (one of `list_apps`) to the open group.
     pub fn share_app(&self, path: String, name: String) {
         let _g = self.inner.enter();
-        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
-        self.inner.offer(&core, gid, PathBuf::from(path), Some(format!("{name}.apk")), "apk", false);
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
+        self.inner.offer(
+            &core,
+            gid,
+            PathBuf::from(path),
+            Some(format!("{name}.apk")),
+            "apk",
+            false,
+        );
     }
 
     pub fn stop_file(&self, id: String) {
         let _g = self.inner.enter();
-        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
         if let Err(err) = core.stop_file(&gid, &id) {
             self.inner.notice(format!("{err:#}"));
         }
@@ -807,8 +900,14 @@ impl App {
     /// Serve a downloaded file to the group too (`on`), or stop.
     pub fn host_file(&self, id: String, on: bool) {
         let _g = self.inner.enter();
-        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
-        let result = if on { core.host_file(&gid, &id) } else { core.unhost_file(&gid, &id) };
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
+        let result = if on {
+            core.host_file(&gid, &id)
+        } else {
+            core.unhost_file(&gid, &id)
+        };
         if let Err(err) = result {
             self.inner.notice(format!("{err:#}"));
         }
@@ -816,7 +915,9 @@ impl App {
 
     pub fn download_file(&self, id: String) {
         let _g = self.inner.enter();
-        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
         let inner = self.inner.clone();
         self.inner.rt.spawn(async move {
             if let Err(err) = core.download_file(&gid, &id).await {
@@ -849,7 +950,9 @@ impl App {
         #[cfg(not(target_os = "android"))]
         {
             let _g = self.inner.enter();
-            let Some(core) = self.inner.core() else { return };
+            let Some(core) = self.inner.core() else {
+                return;
+            };
             self.inner.change(|s| s.ui.scanning = true);
             let (frames, done) = (self.inner.clone(), self.inner.clone());
             let scanner = crate::scan::start(
@@ -884,7 +987,11 @@ fn peer_row(p: &Peer) -> PeerRow {
     PeerRow {
         id: p.id.to_string(),
         title: p.alias.clone().unwrap_or_else(|| p.name.clone()),
-        subtitle: if p.alias.is_some() { p.name.clone() } else { String::new() },
+        subtitle: if p.alias.is_some() {
+            p.name.clone()
+        } else {
+            String::new()
+        },
         alias: p.alias.clone().unwrap_or_default(),
         short: p.id.fmt_short().to_string(),
         initials: format::initials(p.alias.as_ref().unwrap_or(&p.name)),
@@ -909,7 +1016,12 @@ fn group_title(g: &GroupInfo) -> String {
 /// The groups the open peer page offers to invite the peer to, in the order of the dropdown: the
 /// listed groups the peer is not part of (a declined invite can be sent again).
 fn invitable_groups(shared: &Shared) -> Vec<&GroupInfo> {
-    let Some(peer) = shared.open_group.as_ref().and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id)).and_then(|g| g.with) else {
+    let Some(peer) = shared
+        .open_group
+        .as_ref()
+        .and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id))
+        .and_then(|g| g.with)
+    else {
         return Vec::new();
     };
     let key = peer.to_string();
@@ -918,8 +1030,17 @@ fn invitable_groups(shared: &Shared) -> Vec<&GroupInfo> {
         .groups
         .iter()
         .filter(|g| g.with.is_none())
-        .filter(|g| !g.members.iter().any(|m| m.id == peer && m.state != MemberState::Declined))
-        .filter(|g| !shared.views.get(&g.id).is_some_and(|v| v.members.iter().any(|m| m.id == key)))
+        .filter(|g| {
+            !g.members
+                .iter()
+                .any(|m| m.id == peer && m.state != MemberState::Declined)
+        })
+        .filter(|g| {
+            !shared
+                .views
+                .get(&g.id)
+                .is_some_and(|v| v.members.iter().any(|m| m.id == key))
+        })
         .collect()
 }
 
@@ -936,7 +1057,11 @@ fn build_state(shared: &Shared) -> UiState {
             let view = shared.views.get(&g.id);
             let joined = view.map_or(1, |v| v.members.len().max(1));
             let others_online = view.is_some_and(|v| v.members.iter().any(|m| m.online && !m.me));
-            let waiting = g.members.iter().filter(|m| matches!(m.state, MemberState::Pending | MemberState::Sent)).count();
+            let waiting = g
+                .members
+                .iter()
+                .filter(|m| matches!(m.state, MemberState::Pending | MemberState::Sent))
+                .count();
             let mut summary = format!("{joined} member{}", if joined == 1 { "" } else { "s" });
             if waiting > 0 {
                 summary += &format!(" · {waiting} invited");
@@ -944,13 +1069,20 @@ fn build_state(shared: &Shared) -> UiState {
             if let Some(v) = view {
                 let files = v.files.iter().filter(|f| !f.stopped).count();
                 if files > 0 {
-                    summary += &format!(" · {files} file{} on offer", if files == 1 { "" } else { "s" });
+                    summary += &format!(
+                        " · {files} file{} on offer",
+                        if files == 1 { "" } else { "s" }
+                    );
                 }
             }
             GroupRow {
                 id: g.id.clone(),
                 title: group_title(g),
-                subtitle: if g.alias.is_some() { g.haiku.clone() } else { String::new() },
+                subtitle: if g.alias.is_some() {
+                    g.haiku.clone()
+                } else {
+                    String::new()
+                },
                 summary,
                 online: others_online,
                 guest: g.guest.is_some(),
@@ -961,8 +1093,14 @@ fn build_state(shared: &Shared) -> UiState {
         .peers
         .iter()
         .filter(|p| p.connected && !p.group_id.is_empty())
-        .map(|p| OnlineRow { group_id: p.group_id.clone(), title: p.title.clone() })
-        .chain(ui.groups.iter().filter(|g| g.online).map(|g| OnlineRow { group_id: g.id.clone(), title: g.title.clone() }))
+        .map(|p| OnlineRow {
+            group_id: p.group_id.clone(),
+            title: p.title.clone(),
+        })
+        .chain(ui.groups.iter().filter(|g| g.online).map(|g| OnlineRow {
+            group_id: g.id.clone(),
+            title: g.title.clone(),
+        }))
         .collect();
     ui.invites = shared
         .groups
@@ -988,20 +1126,35 @@ fn build_state(shared: &Shared) -> UiState {
         .collect();
 
     ui.open_group = shared.open_group.clone().unwrap_or_default();
-    let Some(info) = shared.open_group.as_ref().and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id)) else {
+    let Some(info) = shared
+        .open_group
+        .as_ref()
+        .and_then(|id| shared.groups.groups.iter().find(|g| g.id == *id))
+    else {
         return ui;
     };
     ui.group_title = group_title(info);
     ui.group_haiku = info.haiku.clone();
     ui.group_alias = info.alias.clone().unwrap_or_default();
     ui.group_implied = info.with.is_some();
-    ui.group_peer = info.with.and_then(|w| shared.peers.iter().find(|p| p.id == w)).map(peer_row);
+    ui.group_peer = info
+        .with
+        .and_then(|w| shared.peers.iter().find(|p| p.id == w))
+        .map(peer_row);
     ui.auto_download = info.auto_download;
     ui.auto_stop = info.auto_stop;
     ui.auto_rehost = info.auto_rehost;
     ui.group_guest = info.guest.is_some();
-    ui.guest_lan_url = info.guest.as_ref().and_then(|g| g.lan_url.clone()).unwrap_or_default();
-    ui.guest_web_url = info.guest.as_ref().and_then(|g| g.web_url.clone()).unwrap_or_default();
+    ui.guest_lan_url = info
+        .guest
+        .as_ref()
+        .and_then(|g| g.lan_url.clone())
+        .unwrap_or_default();
+    ui.guest_web_url = info
+        .guest
+        .as_ref()
+        .and_then(|g| g.web_url.clone())
+        .unwrap_or_default();
     ui.guest_uploads = info.guest.as_ref().is_some_and(|g| g.uploads);
     let view = shared.views.get(&info.id);
 
@@ -1014,7 +1167,14 @@ fn build_state(shared: &Shared) -> UiState {
                     id: m.id.clone(),
                     name: m.name.clone(),
                     initials: format::initials(&m.name),
-                    status: if m.me { "this device" } else if m.online { "online" } else { "offline" }.into(),
+                    status: if m.me {
+                        "this device"
+                    } else if m.online {
+                        "online"
+                    } else {
+                        "offline"
+                    }
+                    .into(),
                     tone: if m.me || m.online { "ok" } else { "muted" }.into(),
                     online: m.online,
                     me: m.me,
@@ -1042,13 +1202,19 @@ fn build_state(shared: &Shared) -> UiState {
             me: false,
         });
     }
-    ui.invitable = invitable_groups(shared).iter().map(|g| group_title(g)).collect();
+    ui.invitable = invitable_groups(shared)
+        .iter()
+        .map(|g| group_title(g))
+        .collect();
     // Members the document lists (e.g. everyone but the inviter, after accepting) are not candidates.
     ui.candidates = info
         .candidates
         .iter()
         .filter(|(id, _)| !members.iter().any(|row| row.id == id.to_string()))
-        .map(|(id, name)| CandidateRow { id: id.to_string(), name: name.clone() })
+        .map(|(id, name)| CandidateRow {
+            id: id.to_string(),
+            name: name.clone(),
+        })
         .collect();
     ui.members = members;
 
@@ -1063,7 +1229,15 @@ fn build_state(shared: &Shared) -> UiState {
                 id: f.id.clone(),
                 name: f.name.clone(),
                 size: format::size(f.size),
-                meta: format!("{} · {}", if f.mine { "you".to_string() } else { f.from_name.clone() }, format::time(f.ts)),
+                meta: format!(
+                    "{} · {}",
+                    if f.mine {
+                        "you".to_string()
+                    } else {
+                        f.from_name.clone()
+                    },
+                    format::time(f.ts)
+                ),
                 kind: match f.kind.as_str() {
                     "media" => 1,
                     "apk" => 2,
@@ -1074,14 +1248,30 @@ fn build_state(shared: &Shared) -> UiState {
                 stopped: f.stopped,
                 can_download: !f.mine && !f.have && !f.stopped && !downloading && f.source_online,
                 downloading,
-                progress: if total == 0 { 0.0 } else { done as f32 / total as f32 },
+                progress: if total == 0 {
+                    0.0
+                } else {
+                    done as f32 / total as f32
+                },
                 progress_label: format!("{} of {}", format::size(done), format::size(total)),
-                audience: if f.audience == 0 { String::new() } else { format!("{} of {} have it", f.downloaded_by.len(), f.audience) },
-                saved_to: f.saved_to.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+                audience: if f.audience == 0 {
+                    String::new()
+                } else {
+                    format!("{} of {} have it", f.downloaded_by.len(), f.audience)
+                },
+                saved_to: f
+                    .saved_to
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
                 error: f.error.clone().unwrap_or_default(),
                 can_host: !f.mine && f.have && !f.stopped && !f.hosting && f.saved_to.is_some(),
                 hosting: f.hosting && !f.stopped,
-                hosts: if f.hosts.is_empty() || f.stopped { String::new() } else { format!("Also from {}", f.hosts.join(", ")) },
+                hosts: if f.hosts.is_empty() || f.stopped {
+                    String::new()
+                } else {
+                    format!("Also from {}", f.hosts.join(", "))
+                },
             }
         })
         .collect();

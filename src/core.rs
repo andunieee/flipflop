@@ -111,7 +111,11 @@ pub enum Event {
     Ticket(String),
     /// Our own name changed (also fired once at start-up).
     Name(String),
-    Message { peer: EndpointId, mine: bool, text: String },
+    Message {
+        peer: EndpointId,
+        mine: bool,
+        text: String,
+    },
     /// The shared content of a group changed (files, texts, scratchpad, members, transfer progress).
     Group(GroupView),
     /// What is new in each group since the user last looked (sent when it changes).
@@ -122,11 +126,20 @@ pub enum Event {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum Msg {
-    Hello { name: String },
-    Text { text: String },
+    Hello {
+        name: String,
+    },
+    Text {
+        text: String,
+    },
     /// "Please join this group" (the haiku name derives from the id, so only the id travels).
-    GroupInvite { group: String },
-    GroupReply { group: String, accept: bool },
+    GroupInvite {
+        group: String,
+    },
+    GroupReply {
+        group: String,
+        accept: bool,
+    },
     /// "I paired with you" / "I no longer pair with you".
     Pair,
     Unpair,
@@ -178,7 +191,13 @@ impl Core {
     /// Is another process running a node on this data dir?
     #[cfg(not(target_os = "android"))]
     pub fn dir_in_use(data_dir: &Path) -> bool {
-        match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(data_dir.join("lock")) {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(data_dir.join("lock"))
+        {
             Ok(f) => matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
             Err(_) => false,
         }
@@ -192,7 +211,8 @@ impl Core {
         ble_transport: bool,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Core> {
-        std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
+        std::fs::create_dir_all(data_dir)
+            .with_context(|| format!("creating {}", data_dir.display()))?;
         let dir_lock = lock_data_dir(data_dir)?;
         let settings = Settings::load(data_dir);
         let secret_key = settings.secret_key.clone();
@@ -252,7 +272,16 @@ impl Core {
         }));
         core.emit(Event::Name(name));
         core.load_docs();
-        if core.0.store.lock().unwrap().state.groups.iter().any(|g| g.guest.is_some()) {
+        if core
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.guest.is_some())
+        {
             core.ensure_lan_server();
         }
         core.publish();
@@ -288,13 +317,21 @@ impl Core {
 
     pub fn set_name(&self, name: &str) {
         let name = self.0.settings.lock().unwrap().set_name(name);
-        self.0.endpoint.set_user_data_for_address_lookup(Some(user_data(&name)));
+        self.0
+            .endpoint
+            .set_user_data_for_address_lookup(Some(user_data(&name)));
         self.refresh_ble_payload();
         self.emit(Event::Name(name.clone()));
         self.refresh_doc_names();
         let this = self.clone();
-        let conns: Vec<Connection> =
-            self.0.peers.lock().unwrap().values().filter_map(|p| p.conn.clone()).collect();
+        let conns: Vec<Connection> = self
+            .0
+            .peers
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|p| p.conn.clone())
+            .collect();
         tokio::spawn(async move {
             for conn in conns {
                 let _ = send_msg(&conn, &Msg::Hello { name: name.clone() }).await;
@@ -305,7 +342,10 @@ impl Core {
 
     fn refresh_ble_payload(&self) {
         let ticket = self.ticket();
-        let payload = (!ticket.is_empty()).then(|| BlePayload { n: self.name(), t: ticket });
+        let payload = (!ticket.is_empty()).then(|| BlePayload {
+            n: self.name(),
+            t: ticket,
+        });
         self.0.ble_payload.send_replace(payload);
     }
 
@@ -326,7 +366,15 @@ impl Core {
     /// Names peers use for themselves right now (handshake, else announcement).
     fn live_names(&self) -> BTreeMap<EndpointId, String> {
         let peers = self.0.peers.lock().unwrap();
-        peers.iter().filter_map(|(id, p)| Some((*id, p.hello_name.clone().or_else(|| p.announced_name.clone())?))).collect()
+        peers
+            .iter()
+            .filter_map(|(id, p)| {
+                Some((
+                    *id,
+                    p.hello_name.clone().or_else(|| p.announced_name.clone())?,
+                ))
+            })
+            .collect()
     }
 
     /// Push the peer list and the groups view to the UI.
@@ -370,7 +418,11 @@ impl Core {
                 .or_else(|| contact(id).and_then(|c| c.name.clone()))
                 .unwrap_or_else(|| id.fmt_short().to_string())
         };
-        let display_name = |id: &EndpointId| contact(id).and_then(|c| c.alias.clone()).unwrap_or_else(|| remote_name(id));
+        let display_name = |id: &EndpointId| {
+            contact(id)
+                .and_then(|c| c.alias.clone())
+                .unwrap_or_else(|| remote_name(id))
+        };
         let pairing = |id: &EndpointId| {
             let paired = contact(id).is_some_and(|c| c.paired);
             let paired_us = state.paired_us.contains(&id.to_string());
@@ -400,10 +452,23 @@ impl Core {
                 .collect();
             // Saved contacts stay listed while offline.
             for c in &state.contacts {
-                let Ok(id) = c.id.parse::<EndpointId>() else { continue };
+                let Ok(id) = c.id.parse::<EndpointId>() else {
+                    continue;
+                };
                 if !peers.contains_key(&id) {
                     let (paired, paired_us, pair_group) = pairing(&id);
-                    list.push(Peer { id, name: remote_name(&id), alias: c.alias.clone(), saved: true, lan: false, ble: false, connected: false, paired, paired_us, pair_group });
+                    list.push(Peer {
+                        id,
+                        name: remote_name(&id),
+                        alias: c.alias.clone(),
+                        saved: true,
+                        lan: false,
+                        ble: false,
+                        connected: false,
+                        paired,
+                        paired_us,
+                        pair_group,
+                    });
                 }
             }
             list
@@ -412,7 +477,12 @@ impl Core {
             b.connected
                 .cmp(&a.connected)
                 .then_with(|| b.saved.cmp(&a.saved))
-                .then_with(|| a.alias.as_ref().unwrap_or(&a.name).cmp(b.alias.as_ref().unwrap_or(&b.name)))
+                .then_with(|| {
+                    a.alias
+                        .as_ref()
+                        .unwrap_or(&a.name)
+                        .cmp(b.alias.as_ref().unwrap_or(&b.name))
+                })
         });
 
         let groups = state
@@ -425,7 +495,11 @@ impl Core {
                     .iter()
                     .filter_map(|m| {
                         let id = m.peer.parse::<EndpointId>().ok()?;
-                        Some(MemberInfo { id, name: display_name(&id), state: m.state })
+                        Some(MemberInfo {
+                            id,
+                            name: display_name(&id),
+                            state: m.state,
+                        })
                     })
                     .collect();
                 let candidates = state
@@ -454,7 +528,12 @@ impl Core {
             .iter()
             .filter_map(|i| {
                 let inviter = i.inviter.parse::<EndpointId>().ok()?;
-                Some(InviteInfo { inviter, inviter_name: display_name(&inviter), group: i.group.clone(), haiku: crate::haiku::name(&parse_gid(&i.group)?) })
+                Some(InviteInfo {
+                    inviter,
+                    inviter_name: display_name(&inviter),
+                    group: i.group.clone(),
+                    haiku: crate::haiku::name(&parse_gid(&i.group)?),
+                })
             })
             .collect();
         (list, GroupsView { groups, invites })
@@ -490,7 +569,9 @@ impl Core {
 
     /// A peer seen over BLE: remember how to reach it (address from its ticket) and its name.
     pub fn ble_seen(&self, payload: BlePayload) {
-        let Ok(ticket) = payload.t.parse::<EndpointTicket>() else { return };
+        let Ok(ticket) = payload.t.parse::<EndpointTicket>() else {
+            return;
+        };
         let addr = ticket.endpoint_addr().clone();
         let id = addr.id;
         if id == self.id() {
@@ -512,8 +593,10 @@ impl Core {
 
     /// Connect using a pasted / scanned ticket.
     pub async fn connect_ticket(&self, text: &str) -> Result<EndpointId> {
-        let ticket: EndpointTicket =
-            text.trim().parse().map_err(|e| anyhow!("not a flipflop ticket: {e}"))?;
+        let ticket: EndpointTicket = text
+            .trim()
+            .parse()
+            .map_err(|e| anyhow!("not a flipflop ticket: {e}"))?;
         let addr: EndpointAddr = ticket.into();
         let id = addr.id;
         if id == self.id() {
@@ -528,7 +611,14 @@ impl Core {
     }
 
     pub async fn connect(&self, id: EndpointId) -> Result<()> {
-        if self.0.peers.lock().unwrap().get(&id).is_some_and(|p| p.conn.is_some()) {
+        if self
+            .0
+            .peers
+            .lock()
+            .unwrap()
+            .get(&id)
+            .is_some_and(|p| p.conn.is_some())
+        {
             // Already connected (they dialed us, say): asking to connect saves them.
             self.remember(id);
             return Ok(());
@@ -544,7 +634,13 @@ impl Core {
     }
 
     pub fn disconnect(&self, id: EndpointId) {
-        let conn = self.0.peers.lock().unwrap().get(&id).and_then(|p| p.conn.clone());
+        let conn = self
+            .0
+            .peers
+            .lock()
+            .unwrap()
+            .get(&id)
+            .and_then(|p| p.conn.clone());
         if let Some(conn) = conn {
             conn.close(0u32.into(), b"bye");
         }
@@ -560,7 +656,11 @@ impl Core {
             .and_then(|p| p.conn.clone())
             .context("not connected")?;
         send_msg(&conn, &Msg::Text { text: text.clone() }).await?;
-        self.emit(Event::Message { peer: id, mine: true, text });
+        self.emit(Event::Message {
+            peer: id,
+            mine: true,
+            text,
+        });
         Ok(())
     }
 
@@ -570,11 +670,20 @@ impl Core {
         let stable = conn.stable_id();
         // Both sides may dial each other at once. They must agree on which connection survives:
         // the one dialed by the endpoint with the smaller id.
-        let new_wins = if outgoing { self.id() < id } else { id < self.id() };
+        let new_wins = if outgoing {
+            self.id() < id
+        } else {
+            id < self.id()
+        };
         let previous = {
             let mut peers = self.0.peers.lock().unwrap();
             let entry = peers.entry(id).or_default();
-            if !new_wins && entry.conn.as_ref().is_some_and(|c| c.close_reason().is_none()) {
+            if !new_wins
+                && entry
+                    .conn
+                    .as_ref()
+                    .is_some_and(|c| c.close_reason().is_none())
+            {
                 conn.close(0u32.into(), b"duplicate");
                 return;
             }
@@ -609,10 +718,20 @@ impl Core {
                 tracing::debug!("hello failed: {err:#}");
             }
             // Our side of the pairing, so a change made while they were away still reaches them.
-            let _ = send_msg(&conn, &if this.is_paired(id) { Msg::Pair } else { Msg::Unpair }).await;
+            let _ = send_msg(
+                &conn,
+                &if this.is_paired(id) {
+                    Msg::Pair
+                } else {
+                    Msg::Unpair
+                },
+            )
+            .await;
             this.flush(id).await;
             while let Ok(mut rx) = conn.accept_uni().await {
-                let Ok(bytes) = rx.read_to_end(MAX_SYNC_BYTES).await else { continue };
+                let Ok(bytes) = rx.read_to_end(MAX_SYNC_BYTES).await else {
+                    continue;
+                };
                 if bytes.first() == Some(&sharing::SYNC_TAG) {
                     this.on_sync(id, &bytes[1..]);
                     continue;
@@ -625,13 +744,18 @@ impl Core {
                         let name = clean_name(&name);
                         this.update_peer(id, |p| p.hello_name = Some(name.clone()));
                         this.with_state(|st| {
-                            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == id.to_string()) {
+                            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == id.to_string())
+                            {
                                 c.name = Some(name);
                             }
                         });
                     }
                     Ok(Msg::Text { text }) => {
-                        this.emit(Event::Message { peer: id, mine: false, text });
+                        this.emit(Event::Message {
+                            peer: id,
+                            mine: false,
+                            text,
+                        });
                     }
                     Ok(Msg::GroupInvite { group }) => this.on_invite(id, group),
                     Ok(Msg::GroupReply { group, accept }) => this.on_reply(id, group, accept),
@@ -650,7 +774,10 @@ impl Core {
                 }
             });
             if gone {
-                this.emit(Event::Notice(format!("disconnected from {}", id.fmt_short())));
+                this.emit(Event::Notice(format!(
+                    "disconnected from {}",
+                    id.fmt_short()
+                )));
             }
         });
     }
@@ -659,7 +786,13 @@ impl Core {
 
     /// Every peer we connect to goes in the contact list (and is redialed from now on).
     fn remember(&self, id: EndpointId) {
-        let name = self.0.peers.lock().unwrap().get(&id).and_then(|p| p.hello_name.clone().or_else(|| p.announced_name.clone()));
+        let name = self
+            .0
+            .peers
+            .lock()
+            .unwrap()
+            .get(&id)
+            .and_then(|p| p.hello_name.clone().or_else(|| p.announced_name.clone()));
         self.with_state(|st| {
             let key = id.to_string();
             st.forgotten.retain(|f| *f != key);
@@ -669,7 +802,12 @@ impl Core {
                         c.name = name;
                     }
                 }
-                None => st.contacts.push(Contact { id: key, name, alias: None, paired: false }),
+                None => st.contacts.push(Contact {
+                    id: key,
+                    name,
+                    alias: None,
+                    paired: false,
+                }),
             }
         });
     }
@@ -700,7 +838,13 @@ impl Core {
     }
 
     fn is_forgotten(&self, id: EndpointId) -> bool {
-        self.0.store.lock().unwrap().state.forgotten.contains(&id.to_string())
+        self.0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .forgotten
+            .contains(&id.to_string())
     }
 
     // ---- pairing ----------------------------------------------------------------------
@@ -730,7 +874,14 @@ impl Core {
     }
 
     fn is_paired(&self, id: EndpointId) -> bool {
-        self.0.store.lock().unwrap().state.contacts.iter().any(|c| c.id == id.to_string() && c.paired)
+        self.0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .contacts
+            .iter()
+            .any(|c| c.id == id.to_string() && c.paired)
     }
 
     fn on_pair(&self, from: EndpointId, paired: bool) {
@@ -749,7 +900,16 @@ impl Core {
 
     /// Send a message to a peer if it is connected (pairing is re-announced on every connection).
     fn tell(&self, id: EndpointId, msg: Msg) {
-        let Some(conn) = self.0.peers.lock().unwrap().get(&id).and_then(|p| p.conn.clone()) else { return };
+        let Some(conn) = self
+            .0
+            .peers
+            .lock()
+            .unwrap()
+            .get(&id)
+            .and_then(|p| p.conn.clone())
+        else {
+            return;
+        };
         tokio::spawn(async move {
             let _ = send_msg(&conn, &msg).await;
         });
@@ -762,12 +922,21 @@ impl Core {
         let (mutual, exists) = {
             let store = self.0.store.lock().unwrap();
             let st = &store.state;
-            (st.contacts.iter().any(|c| c.id == key && c.paired) && st.paired_us.contains(&key), st.groups.iter().any(|g| g.id == gid))
+            (
+                st.contacts.iter().any(|c| c.id == key && c.paired) && st.paired_us.contains(&key),
+                st.groups.iter().any(|g| g.id == gid),
+            )
         };
         match (mutual, exists) {
             (true, false) => {
                 self.with_state(|st| {
-                    let mut g = Group::new(gid.clone(), vec![Member { peer: key.clone(), state: MemberState::Accepted }]);
+                    let mut g = Group::new(
+                        gid.clone(),
+                        vec![Member {
+                            peer: key.clone(),
+                            state: MemberState::Accepted,
+                        }],
+                    );
                     g.with = Some(key.clone());
                     g.auto_stop = true;
                     g.auto_rehost = false;
@@ -795,7 +964,13 @@ impl Core {
     }
 
     /// Local, per-group: download offers automatically, stop sharing what everybody has, and rehost what we download.
-    pub fn set_group_settings(&self, group: &str, auto_download: Option<bool>, auto_stop: Option<bool>, auto_rehost: Option<bool>) {
+    pub fn set_group_settings(
+        &self,
+        group: &str,
+        auto_download: Option<bool>,
+        auto_stop: Option<bool>,
+        auto_rehost: Option<bool>,
+    ) {
         self.with_state(|st| {
             if let Some(g) = st.groups.iter_mut().find(|g| g.id == group) {
                 g.auto_download = auto_download.unwrap_or(g.auto_download);
@@ -817,10 +992,28 @@ impl Core {
 
     pub fn delete_group(&self, group: &str) {
         // An implied group goes away with the pairing, not on its own.
-        if self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == group && g.with.is_some()) {
+        if self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.id == group && g.with.is_some())
+        {
             return;
         }
-        if self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == group && g.guest.is_some()) {
+        if self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.id == group && g.guest.is_some())
+        {
             return self.close_guest_link(group);
         }
         self.drop_doc(group);
@@ -833,18 +1026,32 @@ impl Core {
         self.remember_unconnected(peer);
         let key = peer.to_string();
         self.with_state(|st| {
-            let Some(g) = st.groups.iter_mut().find(|g| g.id == group) else { return };
+            let Some(g) = st.groups.iter_mut().find(|g| g.id == group) else {
+                return;
+            };
             match g.members.iter_mut().find(|m| m.peer == key) {
                 Some(m) if m.state == MemberState::Declined => m.state = MemberState::Pending,
                 Some(_) => {}
-                None => g.members.push(Member { peer: key, state: MemberState::Pending }),
+                None => g.members.push(Member {
+                    peer: key,
+                    state: MemberState::Pending,
+                }),
             }
         });
         self.flush_later(peer);
     }
 
     fn remember_unconnected(&self, id: EndpointId) {
-        if !self.0.store.lock().unwrap().state.contacts.iter().any(|c| c.id == id.to_string()) {
+        if !self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .contacts
+            .iter()
+            .any(|c| c.id == id.to_string())
+        {
             self.remember(id);
         }
     }
@@ -861,18 +1068,27 @@ impl Core {
     fn answer_invite(&self, inviter: EndpointId, group: &str, accept: bool) {
         let who = inviter.to_string();
         self.with_state(|st| {
-            let invite = Invite { inviter: who.clone(), group: group.to_string() };
+            let invite = Invite {
+                inviter: who.clone(),
+                group: group.to_string(),
+            };
             st.invites.retain(|i| *i != invite);
             if accept {
                 match st.groups.iter_mut().find(|g| g.id == group) {
                     Some(g) => {
                         if !g.members.iter().any(|m| m.peer == who) {
-                            g.members.push(Member { peer: who.clone(), state: MemberState::Accepted });
+                            g.members.push(Member {
+                                peer: who.clone(),
+                                state: MemberState::Accepted,
+                            });
                         }
                     }
                     None => st.groups.push(Group::new(
                         group.to_string(),
-                        vec![Member { peer: who.clone(), state: MemberState::Accepted }],
+                        vec![Member {
+                            peer: who.clone(),
+                            state: MemberState::Accepted,
+                        }],
                     )),
                 }
             } else if !st.rejected.contains(&invite) {
@@ -892,7 +1108,10 @@ impl Core {
         }
         let who = from.to_string();
         let reply = self.with_state(|st| {
-            let invite = Invite { inviter: who.clone(), group: group.clone() };
+            let invite = Invite {
+                inviter: who.clone(),
+                group: group.clone(),
+            };
             if st.rejected.contains(&invite) {
                 // Not shown again; just tell them (again) so they stop asking.
                 queue_reply(st, &who, &group, false);
@@ -900,7 +1119,10 @@ impl Core {
             } else if let Some(g) = st.groups.iter_mut().find(|g| g.id == group) {
                 // We are already in this group.
                 if !g.members.iter().any(|m| m.peer == who) {
-                    g.members.push(Member { peer: who.clone(), state: MemberState::Accepted });
+                    g.members.push(Member {
+                        peer: who.clone(),
+                        state: MemberState::Accepted,
+                    });
                 }
                 queue_reply(st, &who, &group, true);
                 true
@@ -919,8 +1141,17 @@ impl Core {
     fn on_reply(&self, from: EndpointId, group: String, accept: bool) {
         let who = from.to_string();
         self.with_state(|st| {
-            let state = if accept { MemberState::Accepted } else { MemberState::Declined };
-            if let Some(m) = st.groups.iter_mut().find(|g| g.id == group).and_then(|g| g.members.iter_mut().find(|m| m.peer == who)) {
+            let state = if accept {
+                MemberState::Accepted
+            } else {
+                MemberState::Declined
+            };
+            if let Some(m) = st
+                .groups
+                .iter_mut()
+                .find(|g| g.id == group)
+                .and_then(|g| g.members.iter_mut().find(|m| m.peer == who))
+            {
                 m.state = state;
             }
         });
@@ -937,7 +1168,16 @@ impl Core {
     /// Send everything that was waiting for this peer: undelivered or unanswered invites and
     /// answers to its invites. Receivers de-duplicate, so sending twice is harmless.
     async fn flush(&self, peer: EndpointId) {
-        let Some(conn) = self.0.peers.lock().unwrap().get(&peer).and_then(|p| p.conn.clone()) else { return };
+        let Some(conn) = self
+            .0
+            .peers
+            .lock()
+            .unwrap()
+            .get(&peer)
+            .and_then(|p| p.conn.clone())
+        else {
+            return;
+        };
         let key = peer.to_string();
         let (invites, replies) = {
             let store = self.0.store.lock().unwrap();
@@ -945,18 +1185,41 @@ impl Core {
                 .state
                 .groups
                 .iter()
-                .filter(|g| g.members.iter().any(|m| m.peer == key && matches!(m.state, MemberState::Pending | MemberState::Sent)))
+                .filter(|g| {
+                    g.members.iter().any(|m| {
+                        m.peer == key && matches!(m.state, MemberState::Pending | MemberState::Sent)
+                    })
+                })
                 .map(|g| g.id.clone())
                 .collect();
-            let replies: Vec<Reply> = store.state.replies.iter().filter(|r| r.peer == key).cloned().collect();
+            let replies: Vec<Reply> = store
+                .state
+                .replies
+                .iter()
+                .filter(|r| r.peer == key)
+                .cloned()
+                .collect();
             (invites, replies)
         };
         for group in invites {
-            if send_msg(&conn, &Msg::GroupInvite { group: group.clone() }).await.is_err() {
+            if send_msg(
+                &conn,
+                &Msg::GroupInvite {
+                    group: group.clone(),
+                },
+            )
+            .await
+            .is_err()
+            {
                 return;
             }
             self.with_state(|st| {
-                if let Some(m) = st.groups.iter_mut().find(|g| g.id == group).and_then(|g| g.members.iter_mut().find(|m| m.peer == key)) {
+                if let Some(m) = st
+                    .groups
+                    .iter_mut()
+                    .find(|g| g.id == group)
+                    .and_then(|g| g.members.iter_mut().find(|m| m.peer == key))
+                {
                     if m.state == MemberState::Pending {
                         m.state = MemberState::Sent;
                     }
@@ -964,10 +1227,22 @@ impl Core {
             });
         }
         for r in replies {
-            if send_msg(&conn, &Msg::GroupReply { group: r.group.clone(), accept: r.accept }).await.is_err() {
+            if send_msg(
+                &conn,
+                &Msg::GroupReply {
+                    group: r.group.clone(),
+                    accept: r.accept,
+                },
+            )
+            .await
+            .is_err()
+            {
                 return;
             }
-            self.with_state(|st| st.replies.retain(|x| !(x.peer == r.peer && x.group == r.group)));
+            self.with_state(|st| {
+                st.replies
+                    .retain(|x| !(x.peer == r.peer && x.group == r.group))
+            });
         }
         // Only now: the peer must have our answer before it will take our documents.
         self.sync_peer(peer).await;
@@ -976,7 +1251,10 @@ impl Core {
 
     // ---- background tasks -------------------------------------------------------------
 
-    fn spawn_background(&self, mut events: impl n0_future::Stream<Item = DiscoveryEvent> + Unpin + Send + 'static) {
+    fn spawn_background(
+        &self,
+        mut events: impl n0_future::Stream<Item = DiscoveryEvent> + Unpin + Send + 'static,
+    ) {
         // Accept incoming connections.
         let this = self.clone();
         tokio::spawn(async move {
@@ -984,7 +1262,9 @@ impl Core {
                 let this = this.clone();
                 tokio::spawn(async move {
                     match incoming.await {
-                        Ok(conn) if conn.alpn() == GUEST_ALPN => guest::serve_tunnel(this, conn).await,
+                        Ok(conn) if conn.alpn() == GUEST_ALPN => {
+                            guest::serve_tunnel(this, conn).await
+                        }
                         Ok(conn) => {
                             this.drop_stale(&conn).await;
                             this.adopt(conn, false);
@@ -1027,8 +1307,11 @@ impl Core {
             tokio::spawn(async move {
                 let mut seen: std::collections::BTreeSet<EndpointId> = Default::default();
                 loop {
-                    let now: std::collections::BTreeSet<EndpointId> =
-                        ble.snapshot_peers().into_iter().filter_map(|p| p.verified_endpoint).collect();
+                    let now: std::collections::BTreeSet<EndpointId> = ble
+                        .snapshot_peers()
+                        .into_iter()
+                        .filter_map(|p| p.verified_endpoint)
+                        .collect();
                     for id in now.difference(&seen) {
                         this.update_peer(*id, |p| p.ble_t = true);
                     }
@@ -1065,8 +1348,20 @@ impl Core {
                 }
                 this.auto_jobs_all();
                 for id in ids {
-                    let connected = this.0.peers.lock().unwrap().get(&id).is_some_and(|p| p.conn.is_some());
-                    let due = this.0.retry.lock().unwrap().get(&id).is_none_or(|(at, _)| *at <= Instant::now());
+                    let connected = this
+                        .0
+                        .peers
+                        .lock()
+                        .unwrap()
+                        .get(&id)
+                        .is_some_and(|p| p.conn.is_some());
+                    let due = this
+                        .0
+                        .retry
+                        .lock()
+                        .unwrap()
+                        .get(&id)
+                        .is_none_or(|(at, _)| *at <= Instant::now());
                     if connected || !due || !this.0.dialing.lock().unwrap().insert(id) {
                         continue;
                     }
@@ -1081,7 +1376,10 @@ impl Core {
                             }
                             Err(err) => {
                                 tracing::debug!("reconnect to {} failed: {err:#}", id.fmt_short());
-                                let delay = retry.get(&id).map_or(Duration::from_secs(5), |(_, d)| (*d * 2).min(Duration::from_secs(60)));
+                                let delay =
+                                    retry.get(&id).map_or(Duration::from_secs(5), |(_, d)| {
+                                        (*d * 2).min(Duration::from_secs(60))
+                                    });
                                 retry.insert(id, (Instant::now() + delay, delay));
                             }
                         }
@@ -1109,16 +1407,27 @@ impl Core {
 /// Queue an answer for the inviter, replacing any older answer for the same group.
 fn queue_reply(st: &mut State, peer: &str, group: &str, accept: bool) {
     st.replies.retain(|r| !(r.peer == peer && r.group == group));
-    st.replies.push(Reply { peer: peer.to_string(), group: group.to_string(), accept });
+    st.replies.push(Reply {
+        peer: peer.to_string(),
+        group: group.to_string(),
+        accept,
+    });
 }
 
 /// Take the data dir's exclusive lock (see [`Core::dir_in_use`]). Android has no second process to
 /// keep out, and its std cannot lock files.
 fn lock_data_dir(data_dir: &Path) -> Result<std::fs::File> {
-    std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
+    std::fs::create_dir_all(data_dir)
+        .with_context(|| format!("creating {}", data_dir.display()))?;
     let lock_path = data_dir.join("lock");
     #[allow(unused_mut)]
-    let mut file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock_path).context("opening lock file")?;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .context("opening lock file")?;
     #[cfg(not(target_os = "android"))]
     {
         file.try_lock().map_err(|e| match e {
@@ -1139,12 +1448,19 @@ fn lock_data_dir(data_dir: &Path) -> Result<std::fs::File> {
 
 /// The id of the implied group of two devices: the same on both, whoever computes it.
 fn pair_group_id(a: &EndpointId, b: &EndpointId) -> String {
-    let (lo, hi) = if a.as_bytes() <= b.as_bytes() { (a, b) } else { (b, a) };
+    let (lo, hi) = if a.as_bytes() <= b.as_bytes() {
+        (a, b)
+    } else {
+        (b, a)
+    };
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"flipflop pair group");
     hasher.update(lo.as_bytes());
     hasher.update(hi.as_bytes());
-    hasher.finalize().as_bytes()[..16].iter().map(|b| format!("{b:02x}")).collect()
+    hasher.finalize().as_bytes()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn parse_gid(hex: &str) -> Option<[u8; 16]> {
@@ -1160,11 +1476,15 @@ fn parse_gid(hex: &str) -> Option<[u8; 16]> {
 
 /// 16 random bytes, hex encoded. (Borrows iroh's secret-key generator as a source of randomness.)
 fn new_group_id() -> String {
-    iroh::SecretKey::generate().to_bytes()[..16].iter().map(|b| format!("{b:02x}")).collect()
+    iroh::SecretKey::generate().to_bytes()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn user_data(name: &str) -> UserData {
-    name.parse().unwrap_or_else(|_| UserData::try_from(String::new()).expect("empty fits"))
+    name.parse()
+        .unwrap_or_else(|_| UserData::try_from(String::new()).expect("empty fits"))
 }
 
 async fn send_msg(conn: &Connection, msg: &Msg) -> Result<()> {
