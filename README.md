@@ -24,7 +24,7 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
 
 - **Files**: an offer is an entry in the document (name, size, blake3 hash, who offered it, who has downloaded it). The bytes stay on the offerer's device and are sent straight to whoever downloads them, verified against the hash. Per group, on each device:
   - *Download every file automatically* (default **on**): new offers are fetched as soon as the offerer is reachable. Turn it off to get a Download button instead.
-  - *Stop sharing a file once everybody has it* (default **off**): applies to the files you offer. You can always stop sharing a file by hand.
+  - *Stop sharing a file once everybody has it* (default **off**, **on** in an implied group): applies to the files you offer. You can always stop sharing a file by hand.
   - On Android there are three pickers: any file, photos and videos, and installed apps (the app's APK). Downloads end up in `Download/flipflop`.
 - **Texts**: not a chat, a feed of pasted links, codes and snippets, each labelled with the name of the device that sent it. Links get an Open button; everything has Copy; you can delete your own.
 - **Scratchpad**: one big plain-text document everybody can edit; concurrent edits merge, and your cursor stays put when someone else edits.

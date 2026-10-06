@@ -102,7 +102,6 @@ impl Drop for Abort {
 
 struct LanServer {
     port: u16,
-    ip: Option<Ipv4Addr>,
     _task: Abort,
 }
 
@@ -287,7 +286,7 @@ impl Core {
                 Ok(listener) => {
                     let port = listener.local_addr().map_or(LAN_PORT, |a| a.port());
                     let task = Abort(tokio::spawn(http::serve(listener, this.clone())));
-                    *this.0.guests.server.lock().unwrap() = Some(LanServer { port, ip: lan_ip(), _task: task });
+                    *this.0.guests.server.lock().unwrap() = Some(LanServer { port, _task: task });
                 }
                 Err(err) => tracing::warn!("guest server could not start: {err}"),
             }
@@ -302,7 +301,8 @@ impl Core {
 
     /// What the UI needs of a guest group.
     pub(super) fn guest_info(&self, gid: &str, link: &GuestLink) -> GuestInfo {
-        let lan_url = self.0.guests.server.lock().unwrap().as_ref().and_then(|s| Some(format!("http://{}:{}/{}/", s.ip?, s.port, link.token)));
+        // The address is looked up now, not when the server started: the network may have changed since.
+        let lan_url = self.0.guests.server.lock().unwrap().as_ref().and_then(|s| Some(format!("http://{}:{}/{}/", lan_ip()?, s.port, link.token)));
         let web_url = self.0.endpoint.addr().relay_urls().next().map(|relay| {
             format!("{WEB_PAGE}#t={}&e={}&r={}", link.token, self.id(), encode(&relay.to_string()))
         });

@@ -146,7 +146,7 @@ private fun GroupCard(group: GroupRow, nav: Nav) {
 @Composable
 fun GroupsPage(s: UiState, nav: Nav) {
     ListPage(header = {
-        HeaderRow("Groups", "Share files, texts and a scratchpad with the devices you trust.") {
+        HeaderRow("Groups", "") {
             Row(horizontalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
                 SecondaryButton("Guest link", icon = Icons.link) { nav.newGuestLink() }
                 PrimaryButton("New group", icon = Icons.addPeer) { nav.newGroup() }

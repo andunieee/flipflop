@@ -249,15 +249,15 @@ private fun MemberLine(m: MemberRow) {
 
 /** One address of a guest link: its QR code, the text and a Copy button. */
 @Composable
-private fun GuestAddress(title: String, hint: String, url: String, nav: Nav) {
+private fun GuestAddress(title: String, hint: String, unavailable: String, url: String, nav: Nav) {
     val d = Theme.d
     Card {
         Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
             Txt(title, d.fontMd, Theme.c.textStrong, 650)
-            HintText(hint)
             if (url.isEmpty()) {
-                HintText("Not available right now.")
+                HintText(unavailable)
             } else {
+                HintText(hint)
                 BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     QrCode(url, Modifier.size(minOf(maxWidth, 220.dp)))
                 }
@@ -274,21 +274,21 @@ private fun GuestLinkCards(s: UiState, nav: Nav) {
     Overline("WEB GUESTS")
     Card {
         Column(Modifier.padding(Theme.d.cardPadding), verticalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
-            ToggleRow("Allow guests from a browser", "Anyone with the secret link joins this group from a web page, no app needed. The members stay.", s.groupGuest) {
+            ToggleRow("Allow guests from a browser", "Anyone with the secret link joins this group from a web page, no app needed.", s.groupGuest) {
                 if (it) app.enableGuestLink(false) else app.disableGuestLink()
             }
             if (s.groupGuest) {
                 Divider()
-                ToggleRow("Guests can upload files", "Off: they can still download what is offered, read and write texts and edit the scratchpad.", s.guestUploads) {
+                ToggleRow("Guests can upload files", "Even when off they can still download files, write texts and edit the scratchpad.", s.guestUploads) {
                     app.setGuestUploads(it)
                 }
             }
         }
     }
     if (s.groupGuest) {
-        GuestAddress("Same network", "Opens a page served by this device. Works without internet, as long as the guest is on the same Wi-Fi.", s.guestLanUrl, nav)
-        GuestAddress("Anywhere", "Opens the flipflop page on the web, uses iroh to connect to this device.", s.guestWebUrl, nav)
-        HintText("Anyone with a link joins the group and can read and change everything in it. Only share it with people you would hand the files to.")
+        GuestAddress("Same network", "Opens a page served by this device. Works without internet, as long as the guest is on the same Wi-Fi.", "Not available because you're not connected to any Wi-Fi networks.", s.guestLanUrl, nav)
+        GuestAddress("Anywhere", "Opens the flipflop page on the web, uses Iroh to connect to this device.", "Not available because you're not connected to the internet.", s.guestWebUrl, nav)
+        HintText("Anyone with a link joins the group and can do things in it. Only share it with people you trust.")
     }
 }
 
@@ -386,8 +386,8 @@ private fun InfoTab(s: UiState, nav: Nav) {
                 }
             }
             HintText(
-                if (s.groupGuest) "Closing the link disconnects its guests and keeps the group, with its members and files. Only this device hosts the link; the other members just see Leave group."
-                else "Leaving removes the group from this device only. Files you downloaded stay where they are.",
+                if (s.groupGuest) "Closing the link disconnects its guests and keeps the group, with its members and files."
+                else "Leaving removes the group from this device only. Downloaded files are not affected.",
             )
         }
     }
