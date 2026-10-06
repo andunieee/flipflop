@@ -319,7 +319,6 @@ private fun InfoTab(s: UiState, nav: Nav) {
             Card {
                 Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
                     if (s.invitable.isNotEmpty()) {
-                        HintText("They choose whether to join.")
                         Picker(s.invitable, nav.inviteChoice) { nav.inviteChoice = it }
                         PrimaryButton("Invite", icon = Icons.addPeer) { app.invitePeerTo(nav.inviteChoice) }
                     } else {
@@ -334,7 +333,7 @@ private fun InfoTab(s: UiState, nav: Nav) {
                     s.members.forEach { MemberLine(it) }
                     if (s.members.isEmpty()) HintText("Nobody yet.")
                     Divider()
-                    Txt("Invite from your peers", d.fontSm, c.textMuted, modifier = Modifier.padding(top = d.space2))
+                    Txt("Invite", d.fontSm, c.textMuted, modifier = Modifier.padding(top = d.space2))
                     s.candidates.forEach { cand ->
                         Row(Modifier.fillMaxWidth().heightIn(min = d.controlHeight + 12.dp), horizontalArrangement = Arrangement.spacedBy(d.space3), verticalAlignment = Alignment.CenterVertically) {
                             Txt(cand.name, d.fontMd, c.textStrong, modifier = Modifier.weight(1f), elide = true)

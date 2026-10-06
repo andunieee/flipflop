@@ -157,7 +157,7 @@ fun GroupsPage(s: UiState, nav: Nav) {
         s.invites.forEach { InviteCard(it, nav) }
         s.groups.forEach { GroupCard(it, nav) }
         if (s.groups.isEmpty() && s.invites.isEmpty()) {
-            HintText("No groups yet. Create one, then invite peers; they choose whether to join. A guest link lets anyone with a browser in, no app needed.", center = true)
+            HintText("No groups yet.", center = true)
         }
     }
 }
