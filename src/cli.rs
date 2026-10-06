@@ -115,6 +115,9 @@ pub enum GroupCmd {
         /// Stop sharing a file once everybody has downloaded it.
         #[arg(long)]
         auto_stop: Option<bool>,
+        /// Serve the files you download to the rest of the group too.
+        #[arg(long)]
+        auto_rehost: Option<bool>,
     },
 }
 
@@ -411,6 +414,7 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             say!(cx, "haiku         {}", info.haiku);
             say!(cx, "auto-download {}", info.auto_download);
             say!(cx, "auto-stop     {}", info.auto_stop);
+            say!(cx, "auto-rehost   {}", info.auto_rehost);
             say!(cx, "members:");
             for m in &v.members {
                 say!(cx, "  {}  {}{}", m.id.chars().take(8).collect::<String>(), m.name, if m.me { "  (this device)" } else if m.online { "  online" } else { "" });
@@ -463,12 +467,13 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             sleep(Duration::from_secs(if accept { 4 } else { 2 })).await;
             say!(cx, "{}", if accept { "accepted" } else { "declined" });
         }
-        GroupCmd::Settings { group, auto_download, auto_stop } => {
+        GroupCmd::Settings { group, auto_download, auto_stop, auto_rehost } => {
             let info = find_group(core, group)?;
-            core.set_group_settings(&info.id, *auto_download, *auto_stop);
+            core.set_group_settings(&info.id, *auto_download, *auto_stop, *auto_rehost);
             let info = find_group(core, &info.id)?;
             say!(cx, "auto-download {}", info.auto_download);
             say!(cx, "auto-stop     {}", info.auto_stop);
+            say!(cx, "auto-rehost   {}", info.auto_rehost);
         }
     }
     Ok(())

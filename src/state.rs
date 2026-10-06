@@ -46,6 +46,9 @@ pub struct Group {
     /// Stop sharing our files once every member has downloaded them.
     #[serde(default)]
     pub auto_stop: bool,
+    /// Serve the files we download to the rest of the group too.
+    #[serde(default = "yes")]
+    pub auto_rehost: bool,
     /// The implied group of a pair of devices that paired with each other: the other device's id.
     /// Its id derives from both device ids, and it is not listed among the groups.
     #[serde(default)]
@@ -83,7 +86,7 @@ fn yes() -> bool {
 
 impl Group {
     pub fn new(id: String, members: Vec<Member>) -> Group {
-        Group { id, alias: None, members, auto_download: true, auto_stop: false, with: None, seen: Seen::default(), guest: None }
+        Group { id, alias: None, members, auto_download: true, auto_stop: false, auto_rehost: true, with: None, seen: Seen::default(), guest: None }
     }
 }
 

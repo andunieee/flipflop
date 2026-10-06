@@ -103,7 +103,7 @@ async fn offered_files_are_downloaded_automatically_and_stopped_when_everyone_ha
     let (a, da) = node("alice").await;
     let (b, _db) = node("bob").await;
     let gid = group_of(&a, &b).await;
-    a.set_group_settings(&gid, None, Some(true));
+    a.set_group_settings(&gid, None, Some(true), None);
 
     let src = da.path().join("hello.txt");
     let content: Vec<u8> = (0..300_000u32).flat_map(|i| i.to_le_bytes()).collect();
@@ -131,7 +131,7 @@ async fn manual_download_and_manual_stop() {
     let (a, da) = node("alice").await;
     let (b, _db) = node("bob").await;
     let gid = group_of(&a, &b).await;
-    b.set_group_settings(&gid, Some(false), None);
+    b.set_group_settings(&gid, Some(false), None, None);
 
     let src = da.path().join("report.pdf");
     std::fs::write(&src, b"%PDF-fake").unwrap();

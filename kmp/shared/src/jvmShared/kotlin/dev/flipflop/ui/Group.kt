@@ -74,7 +74,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
                     when {
                         f.stopped -> Badge("Not shared anymore", "muted")
                         f.mine -> Badge("Sharing", "active")
-                        f.hosting -> Badge("Downloaded · hosting", "active")
+                        f.hosting -> Badge("Hosting", "active")
                         f.have -> Badge("Downloaded", "ok")
                         f.downloading -> Badge("Downloading", "active")
                         !f.canDownload -> Badge("Sender offline", "warn")
@@ -363,6 +363,8 @@ private fun InfoTab(s: UiState, nav: Nav) {
                 ToggleRow("Download every file automatically", "New offers from the group are fetched as soon as the sender is reachable.", s.autoDownload) { app.setAutoDownload(it) }
                 Divider()
                 ToggleRow("Stop sharing a file once everybody has it", "Applies to the files you offer. You can always stop one by hand.", s.autoStop) { app.setAutoStop(it) }
+                Divider()
+                ToggleRow("Automatically rehost received files", "Serve the files you download to the rest of the group too, so they stay available when the sender is offline.", s.autoRehost) { app.setAutoRehost(it) }
             }
         }
 
