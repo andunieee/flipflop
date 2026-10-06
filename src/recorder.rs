@@ -20,6 +20,8 @@ pub struct Ctx {
     /// behind for resume. Recorded at open so deleting the row (or a crash
     /// sweep) can reclaim it; cleared when the transfer completes.
     pub resumable_store_path: Option<String>,
+    /// Send only: excerpt of a pasted text (receives learn it at the end).
+    pub text_preview: Option<String>,
 }
 
 #[derive(Default)]
@@ -171,6 +173,16 @@ impl Recorder {
         }
     }
 
+    /// Attaches a pasted-text excerpt once a receive turns out to be one.
+    pub fn set_text_preview(&self, preview: String) {
+        let Some(id) = self.row.lock().unwrap_or_else(|p| p.into_inner()).id.clone() else {
+            return;
+        };
+        if let Err(e) = self.store.update(&id, |record| record.text_preview = Some(preview)) {
+            tracing::warn!("failed to store text preview: {e}");
+        }
+    }
+
     fn open_row(&self) {
         if !self.enabled {
             return;
@@ -188,6 +200,7 @@ impl Recorder {
         record.peer = ctx.peer.clone();
         record.blob_hash = ctx.blob_hash.clone();
         record.resumable_store_path = ctx.resumable_store_path.clone();
+        record.text_preview = ctx.text_preview.clone();
 
         match self.store.open(record) {
             Ok(id) => row.id = Some(id),

@@ -51,6 +51,8 @@ export struct HistoryRow {
     size: string,
     speed: string,
     can-open: bool,
+    // pasted text squeezed onto one line; "" for files
+    preview: string,
 }
 
 // A file shared into the app (Android share sheet), queued until sent.

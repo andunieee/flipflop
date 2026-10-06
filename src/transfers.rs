@@ -412,6 +412,29 @@ pub(crate) fn as_link(text: &str) -> Option<&str> {
     is_link.then_some(text)
 }
 
+/// Longest excerpt of a pasted text the history keeps.
+const PREVIEW_MAX_CHARS: usize = 120;
+
+/// `text` squeezed onto one line for the history list.
+pub(crate) fn text_preview(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(PREVIEW_MAX_CHARS) {
+        Some((cut, _)) => format!("{}…", line[..cut].trim_end()),
+        None => line,
+    }
+}
+
+/// The excerpt of a paste being sent, if `paths` is one.
+fn sent_paste_preview(paths: &[PathBuf]) -> Option<String> {
+    let [path] = paths else { return None };
+    if path_name(path) != PASTE_FILE_NAME
+        || std::fs::metadata(path).ok()?.len() > PASTE_MAX_BYTES
+    {
+        return None;
+    }
+    std::fs::read_to_string(path).ok().map(|text| text_preview(&text))
+}
+
 /// Write `text` to a fresh private dir as the paste file; returns (dir, file).
 fn write_paste_file(text: &str) -> std::io::Result<(PathBuf, PathBuf)> {
     let nanos = std::time::SystemTime::now()
@@ -476,10 +499,11 @@ fn start_send(
         // Walking folders for their size can take a while: keep it off the
         // async workers.
         let scan = paths.clone();
-        let (metadata, path_type) =
-            match tokio::task::spawn_blocking(move || (metadata_for(&scan), path_type_of(&scan)))
-                .await
-            {
+        let (metadata, path_type, preview) = match tokio::task::spawn_blocking(move || {
+            (metadata_for(&scan), path_type_of(&scan), sent_paste_preview(&scan))
+        })
+        .await
+        {
                 Ok(v) => v,
                 Err(e) => return fail(&weak, &key, format!("Could not read the files: {e}")),
             };
@@ -502,6 +526,7 @@ fn start_send(
                     display_name: Some(peer_name.clone()),
                     device_type: None,
                 }),
+                text_preview: preview,
                 ..Ctx::default()
             },
             history_enabled,
@@ -937,6 +962,9 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
             Ok(_) => {
                 // Pasted text: show it (the file stays saved too).
                 let pasted = received.lock().unwrap().pasted_text(&save_dir);
+                if let Some(text) = &pasted {
+                    recorder.set_text_preview(text_preview(text));
+                }
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     update_row(&ui, &key, |row| {
                         row.active = false;
@@ -1219,6 +1247,16 @@ mod tests {
         assert_eq!(as_link("see https://example.com"), None);
         assert_eq!(as_link("https://"), None);
         assert_eq!(as_link("ftp://example.com"), None);
+    }
+
+    #[test]
+    fn paste_preview_is_one_short_line() {
+        assert_eq!(text_preview("  hello\n\n  world\t! "), "hello world !");
+        let long = "é".repeat(PREVIEW_MAX_CHARS + 5);
+        let preview = text_preview(&long);
+        assert_eq!(preview.chars().count(), PREVIEW_MAX_CHARS + 1);
+        assert!(preview.ends_with('…'));
+        assert_eq!(text_preview(&"x".repeat(PREVIEW_MAX_CHARS)).chars().count(), PREVIEW_MAX_CHARS);
     }
 
     #[test]

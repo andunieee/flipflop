@@ -111,6 +111,9 @@ pub struct TransferRecord {
     pub resumable_store_path: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Pasted text only: a one-line excerpt for the history list.
+    #[serde(default)]
+    pub text_preview: Option<String>,
 }
 
 impl TransferRecord {
@@ -139,6 +142,7 @@ impl TransferRecord {
             conflict_count: 0,
             resumable_store_path: None,
             error: None,
+            text_preview: None,
         }
     }
 

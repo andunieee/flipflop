@@ -56,6 +56,7 @@ fn history(title: &str, send: bool, status: &str, tone: &str, size: &str) -> His
         size: size.into(),
         speed: "12.4 MB/s".into(),
         can_open: !send,
+        preview: "".into(),
     }
 }
 
@@ -126,6 +127,12 @@ fn populate(state: &State<'_>) {
 
     state.set_history(model(vec![
         history("quarterly-report.pdf", true, "Completed", "ok", "2.4 MB"),
+        HistoryRow {
+            title: "Pasted text".into(),
+            detail: "tunnelmanager-paste.txt".into(),
+            preview: "Door code is 4471, the spare key is under the blue pot by the back steps — feed the cat twice a day".into(),
+            ..history("paste", false, "Completed", "ok", "96 B")
+        },
         history("holiday-photos", false, "Interrupted", "warn", "2.9 GB"),
         history("project-archive.tar.zst", true, "Failed", "error", "820 MB"),
         history("notes.md", false, "Cancelled", "muted", "4.1 KB"),

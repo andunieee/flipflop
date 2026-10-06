@@ -111,6 +111,7 @@ fn row_from_record(record: &TransferRecord) -> HistoryRow {
             .unwrap_or_else(|| "—".to_string())
             .into(),
         can_open: record.save_path.is_some(),
+        preview: record.text_preview.clone().unwrap_or_default().into(),
     }
 }
 
