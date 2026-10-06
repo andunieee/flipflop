@@ -35,13 +35,13 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
 A guest link is a group that anyone with a browser joins, no app needed (*Groups → Guest link*, or `flipflop-cli guest new`). It is an ordinary group with its own document, plus a secret token. Each link comes as two addresses:
 
 - **Same network**: `http://<lan ip>:53530/<token>/`, served by the app itself (a small HTTP server that only runs while a guest link exists). Needs no internet. The page syncs the document over a WebSocket to that server.
-- **Anywhere**: `https://andunieee.github.io/flipflop/#t=<token>&e=<our endpoint id>&r=<our home relay>`. The same page, with iroh running in the browser (wasm): it dials us through our home relay and syncs the document over an iroh stream. The fragment never leaves the browser.
+- **Anywhere**: `https://andunieee.github.io/flipflop/guest/v<app version>/#t=<token>&e=<our endpoint id>&r=<our home relay>`. The same page, with iroh running in the browser (wasm): it dials us through our home relay and syncs the document over an iroh stream. The fragment never leaves the browser.
 
 Whoever opens a link is a member of the group, named after where they come from, such as `beautiful-iguana` (a hash of their iroh key, kept in the browser, or of their LAN address). The page has a copy of the group's Automerge document, so it does what the apps do: download the files on offer, upload a file (only if you allowed it when making the link, switchable any time), write and read texts, edit the scratchpad. Uploads are saved under `<downloads>/Guests` and offered to the group in the guest's name. You can make as many links as you like; closing one disconnects its guests and deletes its group.
 
 Anyone with a link can read and change everything in the group's document, so keep guest groups for guests, and share a link as you would the files in it.
 
-The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that compiles the very `src/groupdoc.rs` the app uses (plus iroh, for the full build). `just web` rebuilds it: the full page (`web/dist`, published to GitHub Pages by `.github/workflows/pages.yml`) and the build without iroh that the app embeds for the LAN (`src/core/guest/assets`, committed, so rebuild and commit it when `groupdoc.rs` or `web/` change).
+The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that compiles the very `src/groupdoc.rs` the app uses (plus iroh, for the full build). `just web` rebuilds it: the full page (`web/dist`; `.github/workflows/pages.yml` publishes it to GitHub Pages once per release at `/guest/v<version>/`, so a link always opens the page that matches the app that made it, and old links keep working) and the build without iroh that the app embeds for the LAN (`src/core/guest/assets`, committed, so rebuild and commit it when `groupdoc.rs` or `web/` change).
 
 ## CLI
 
