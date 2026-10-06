@@ -3,10 +3,16 @@
 # needs to run when the artwork changes. Needs ImageMagick 7.  Usage: packaging/icons.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-src=assets/top.png
+art=assets/top.png
 bg='#FCF9F6'
 out=packaging/icons
 mkdir -p "$out" packaging/windows packaging/macos
+
+# the artwork may have a transparent background (dropping near-invisible leftovers of a removed one): put it
+# on the cream so every icon is an opaque square
+src=$(mktemp --suffix=.png)
+trap 'rm -f "$src"' EXIT
+magick "$art" -channel A -fx 'u<0.08?0:u' +channel -background "$bg" -flatten "$src"
 
 # rounded square of the artwork, $1 px (about the radius of a macOS / Android launcher icon)
 rounded() {
@@ -34,7 +40,7 @@ for d in mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxhdpi:192:432; do
     IFS=: read -r n legacy fg <<<"$d"
     mkdir -p "$res/mipmap-$n"
     rounded "$legacy" "$res/mipmap-$n/ic_launcher.png"
-    magick "$src" -resize "${fg}x${fg}" -fuzz 7% -transparent "$bg" "$res/mipmap-$n/ic_launcher_foreground.png"
+    magick "$art" -channel A -fx 'u<0.08?0:u' +channel -resize "${fg}x${fg}" -fuzz 7% -transparent "$bg" "$res/mipmap-$n/ic_launcher_foreground.png"
 done
 cat > "$res/values/ic_launcher_background.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
