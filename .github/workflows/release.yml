@@ -87,9 +87,10 @@ jobs:
 
       - name: Verify APK signature
         run: |
-          build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          apk=$(ls target/release/apk/*.apk | head -1)
-          "$build_tools/apksigner" verify --print-certs "$apk"
+          # NOTE: target/release/apk also holds an unsigned *-unaligned.apk
+          # intermediate (plus .idsig sidecar) — verify the exact signed APK.
+          apk=target/release/apk/tunnelmanager-slint.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
           mkdir dist
           cp "$apk" "dist/tunnelmanager-${{ steps.version.outputs.name }}.apk"
 
