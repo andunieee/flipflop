@@ -340,19 +340,15 @@ private fun InfoTab(s: UiState, nav: Nav) {
                 Column(Modifier.padding(d.cardPadding)) {
                     s.members.forEach { MemberLine(it) }
                     if (s.members.isEmpty()) HintText("Nobody yet.")
-                }
-            }
-            if (s.candidates.isNotEmpty() && !s.groupGuest) {
-                Overline("INVITE FROM YOUR PEERS")
-                Card {
-                    Column(Modifier.padding(d.cardPadding)) {
-                        s.candidates.forEach { cand ->
-                            Row(Modifier.fillMaxWidth().heightIn(min = d.controlHeight + 12.dp), horizontalArrangement = Arrangement.spacedBy(d.space3), verticalAlignment = Alignment.CenterVertically) {
-                                Txt(cand.name, d.fontMd, c.textStrong, modifier = Modifier.weight(1f), elide = true)
-                                SecondaryButton("Invite") { app.addToGroup(s.openGroup, cand.id) }
-                            }
+                    Divider()
+                    Txt("Invite from your peers", d.fontSm, c.textMuted, modifier = Modifier.padding(top = d.space2))
+                    s.candidates.forEach { cand ->
+                        Row(Modifier.fillMaxWidth().heightIn(min = d.controlHeight + 12.dp), horizontalArrangement = Arrangement.spacedBy(d.space3), verticalAlignment = Alignment.CenterVertically) {
+                            Txt(cand.name, d.fontMd, c.textStrong, modifier = Modifier.weight(1f), elide = true)
+                            SecondaryButton("Invite") { app.addToGroup(s.openGroup, cand.id) }
                         }
                     }
+                    if (s.candidates.isEmpty()) HintText("Every peer you know is already in, or has been invited.")
                 }
             }
         }
