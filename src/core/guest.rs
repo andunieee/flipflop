@@ -192,6 +192,27 @@ impl Core {
         enabled
     }
 
+    /// Turn a guest group back into a plain group: the link stops working and its guests are disconnected.
+    pub fn disable_guest_link(&self, gid: &str) {
+        let had = self.with_state(|st| match st.groups.iter_mut().find(|g| g.id == gid).and_then(|g| g.guest.take()) {
+            Some(_) => true,
+            None => false,
+        });
+        if !had {
+            return;
+        }
+        self.guest_broadcast(gid, TAG_CONTROL, json!({"t": "closed"}).to_string().as_bytes());
+        if let Some(sessions) = self.0.guests.sessions.lock().unwrap().remove(gid) {
+            for s in sessions.values() {
+                let _ = s.tx.send(Out::Close);
+            }
+        }
+        if !self.0.store.lock().unwrap().state.groups.iter().any(|g| g.guest.is_some()) {
+            *self.0.guests.server.lock().unwrap() = None;
+        }
+        self.publish();
+    }
+
     /// Allow or forbid uploads on a guest link; the pages are told right away.
     pub fn set_guest_uploads(&self, gid: &str, on: bool) {
         let changed = self.with_state(|st| match st.groups.iter_mut().find(|g| g.id == gid).and_then(|g| g.guest.as_mut()) {

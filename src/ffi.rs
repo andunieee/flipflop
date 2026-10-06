@@ -579,6 +579,14 @@ impl App {
         }
     }
 
+    /// Turn the open guest group back into a plain group.
+    pub fn disable_guest_link(&self) {
+        let _g = self.inner.enter();
+        if let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) {
+            core.disable_guest_link(&gid);
+        }
+    }
+
     /// Allow or forbid uploads on the open guest group's link.
     pub fn set_guest_uploads(&self, on: bool) {
         let _g = self.inner.enter();
