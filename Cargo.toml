@@ -97,6 +97,33 @@ name = "android.permission.ACCESS_NETWORK_STATE"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.CHANGE_WIFI_MULTICAST_STATE"
 
+# Bluetooth transport (src/native/src/bluetooth.rs, BluetoothLink.java):
+# BLE advertising/scanning plus L2CAP channels, Android 10+ only. Before
+# Android 12 the legacy pair is granted at install and scanning needs
+# location; from 12 the "nearby devices" trio is requested at runtime, and
+# location still is, since cargo-apk can't mark BLUETOOTH_SCAN
+# neverForLocation.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.BLUETOOTH"
+max_sdk_version = 30
+[[package.metadata.android.uses_permission]]
+name = "android.permission.BLUETOOTH_ADMIN"
+max_sdk_version = 30
+[[package.metadata.android.uses_permission]]
+name = "android.permission.BLUETOOTH_SCAN"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.BLUETOOTH_ADVERTISE"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.BLUETOOTH_CONNECT"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_FINE_LOCATION"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_COARSE_LOCATION"
+# Optional: devices without it simply run without the Bluetooth transport.
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.bluetooth_le"
+required = false
+
 # A share made while the app runs arrives in a second activity instance,
 # which brings the main window's task back to the front.
 [[package.metadata.android.uses_permission]]

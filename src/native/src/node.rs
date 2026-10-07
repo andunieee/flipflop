@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::debug;
 
+use crate::bluetooth::{BluetoothHub, PreferIpThenRelay};
 use crate::device_identity::{
     load_or_create_identity, DeviceIdentity, DeviceInfo, PairedDeviceInfo, PairedDeviceStore,
 };
@@ -823,6 +824,8 @@ pub struct NodeService {
     /// Outgoing shares, served over this node's endpoint. Outlives network
     /// rebuilds: each new router mounts the same provider.
     shares: Arc<ShareRegistry>,
+    /// Bluetooth transport, when the device has one. Outlives rebuilds too.
+    bluetooth: Option<BluetoothHub>,
     /// Serializes `reconfigure_network`, `set_discoverability` and `shutdown`.
     /// Held across each one's whole decide-rebuild-settle sequence so the
     /// decision can't go stale before its consequence runs.
@@ -839,8 +842,32 @@ impl NodeService {
         discoverability: Discoverability,
         app_handle: AppHandle,
     ) -> anyhow::Result<Self> {
+        Self::start_with_bluetooth(
+            data_dir,
+            relay_mode,
+            discovery_mode,
+            discoverability,
+            app_handle,
+            None,
+        )
+        .await
+    }
 
+    /// [`Self::start`], also reaching peers over `bluetooth` (pass `None`
+    /// where the device has no usable adapter). Bluetooth only carries
+    /// traffic when neither a direct IP path nor the relay works.
+    pub async fn start_with_bluetooth(
+        data_dir: &Path,
+        relay_mode: RelayMode,
+        discovery_mode: DiscoveryModeOption,
+        discoverability: Discoverability,
+        app_handle: AppHandle,
+        bluetooth: Option<BluetoothHub>,
+    ) -> anyhow::Result<Self> {
         let identity = Arc::new(load_or_create_identity(data_dir)?);
+        if let Some(hub) = &bluetooth {
+            hub.attach(identity.secret_key.public());
+        }
         let paired_store = Arc::new(PairedDeviceStore::new(data_dir));
         let allowed = load_allowed_from_store(&paired_store)?;
 
@@ -911,6 +938,7 @@ impl NodeService {
             discovery_mode.clone(),
             home_relay_url.clone(),
             shares.clone(),
+            bluetooth.clone(),
         )
         .await?;
         let runtime = Arc::new(Mutex::new(runtime));
@@ -959,6 +987,7 @@ impl NodeService {
             blocked,
             pending_nearby_invites,
             shares,
+            bluetooth,
         })
     }
 
@@ -1045,6 +1074,7 @@ impl NodeService {
             discovery_mode.clone(),
             self.home_relay_url.clone(),
             self.shares.clone(),
+            self.bluetooth.clone(),
         )
         .await?;
 
@@ -2285,6 +2315,7 @@ async fn build_runtime(
     discovery_mode: DiscoveryModeOption,
     home_relay_url: Arc<std::sync::RwLock<Option<String>>>,
     shares: Arc<ShareRegistry>,
+    bluetooth: Option<BluetoothHub>,
 ) -> anyhow::Result<NodeRuntime> {
 
     let hook = PairedOnlyHook {
@@ -2320,6 +2351,13 @@ async fn build_runtime(
         }
     };
 
+    let builder = match &bluetooth {
+        Some(hub) => builder
+            .add_custom_transport(hub.transport())
+            .address_lookup(hub.address_lookup())
+            .path_selector(Arc::new(PreferIpThenRelay)),
+        None => builder,
+    };
     let endpoint = builder
         .secret_key(identity.secret_key.clone())
         .relay_mode(relay_mode.clone())
