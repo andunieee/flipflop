@@ -1,6 +1,6 @@
 //! The command line twin of the GUI: the same node, the same groups, no window.
 //!
-//! Every command runs against a [`Core`]. `flipflop-cli` starts its own node with the identity in
+//! Every command runs against a [`Core`]. `flipflop` starts its own node with the identity in
 //! `--dir` and exits when the job is done; if the GUI already has that directory open it sends the
 //! command there instead (see [`crate::ipc`]) and the GUI runs it, printing back through [`Out`].
 
@@ -26,7 +26,7 @@ macro_rules! say {
 
 #[derive(Parser)]
 #[command(
-    name = "flipflop-cli",
+    name = "flipflop",
     about = "flipflop from the command line: groups with files, texts and a scratchpad"
 )]
 pub struct Cli {
@@ -84,6 +84,9 @@ pub enum Command {
     Pad(PadCmd),
     /// WebAssembly apps (not implemented yet).
     Apps,
+    /// Open the desktop app (`flipflop-gui`) on the same --dir.
+    #[command(alias = "open")]
+    Gui,
     /// Keep running: sync, download, serve files, print events. Stops after --secs, or on Ctrl-C.
     Serve {
         #[arg(long)]
@@ -301,7 +304,7 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
             for i in &invites {
                 say!(
                     cx,
-                    "invite  {}  from {}  (flipflop-cli group accept {})",
+                    "invite  {}  from {}  (flipflop group accept {})",
                     i.haiku,
                     i.inviter_name,
                     &i.group[..8]
@@ -335,6 +338,8 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
             cx,
             "Apps are not implemented yet: groups will share WebAssembly apps with a hypereffect.dev interface."
         ),
+        // The binary launches the app itself; this only runs when it was already open.
+        Command::Gui => say!(cx, "the app is already open"),
         Command::Serve { .. } if cx.routed => {
             say!(
                 cx,
@@ -467,7 +472,7 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             for i in &view.invites {
                 say!(
                     cx,
-                    "invite  {}  from {}  (flipflop-cli group accept {})",
+                    "invite  {}  from {}  (flipflop group accept {})",
                     i.haiku,
                     i.inviter_name,
                     &i.group[..8]

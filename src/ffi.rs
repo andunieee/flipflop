@@ -524,7 +524,7 @@ impl App {
                         Err(err) => return inner.notice(format!("failed to start: {err:#}")),
                     };
                 let _ = inner.core.set(core.clone());
-                // `flipflop-cli` hands its commands to us while the app is open.
+                // `flipflop` hands its commands to us while the app is open.
                 #[cfg(not(target_os = "android"))]
                 if let Err(err) = crate::ipc::serve(&data_dir, core.clone()) {
                     tracing::warn!("command socket: {err:#}");

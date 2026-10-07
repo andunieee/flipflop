@@ -1,11 +1,11 @@
-//! `flipflop-cli` hands its commands to the process that owns the data dir.
+//! `flipflop` hands its commands to the process that owns the data dir.
 
 use std::{path::PathBuf, process::Command};
 
 use flipflop::{core::Core, ipc};
 
 fn cli(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_flipflop-cli"))
+    Command::new(env!("CARGO_BIN_EXE_flipflop"))
         .args(args)
         .env("FLIPFLOP_DIR", dir)
         .env("FLIPFLOP_DOWNLOADS", dir.join("dl"))

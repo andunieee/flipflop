@@ -27,7 +27,7 @@ test:
 
 # command line client
 cli *cargs:
-    cargo run --bin flipflop-cli -- {{cargs}}
+    cargo run --bin flipflop -- {{cargs}}
 
 # --- Packages (each on its own OS; see the README) ---
 

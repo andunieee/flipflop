@@ -1,9 +1,14 @@
-//! `flipflop-cli`: the GUI's command line twin (see [`flipflop::cli`]).
+//! `flipflop`: the GUI's command line twin (see [`flipflop::cli`]).
 //!
 //! If the GUI (or another `serve`) already has the data dir open, the command runs there;
-//! otherwise this process starts its own node on the dir, runs it and exits.
+//! otherwise this process starts its own node on the dir, runs it and exits. `flipflop gui`
+//! starts the GUI itself (`flipflop-gui`) instead.
 
-use std::time::{Duration, Instant};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -28,6 +33,9 @@ async fn main() -> Result<()> {
     });
     let cwd = std::env::current_dir()?;
     let args: Vec<String> = std::env::args().collect();
+    if matches!(cli.command, Command::Gui) {
+        return open_gui(&dir, cli.dir.is_some().then(|| cwd.join(&dir)));
+    }
 
     // The data dir belongs to one process at a time. If it is taken, ask its owner to run the
     // command; if it is free (or frees up while we wait), run it here.
@@ -53,6 +61,67 @@ async fn main() -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+/// Starts the GUI detached, on `dir` if one was given, unless something already has the dir open.
+fn open_gui(dir: &Path, given: Option<PathBuf>) -> Result<()> {
+    if Core::dir_in_use(dir) {
+        println!(
+            "{} is already open (by the app, or a `flipflop serve`)",
+            dir.display()
+        );
+        return Ok(());
+    }
+    let Some(exe) = gui_exe() else {
+        bail!("flipflop-gui not found: install the desktop app, or put flipflop-gui in your PATH");
+    };
+    let mut cmd = std::process::Command::new(&exe);
+    if let Some(d) = given {
+        cmd.env("FLIPFLOP_DIR", d);
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Its own process group, so closing the terminal does not take the window with it.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    cmd.spawn()
+        .map_err(|e| anyhow::anyhow!("starting {}: {e}", exe.display()))?;
+    Ok(())
+}
+
+/// The GUI launcher: `flipflop-gui` in PATH or next to this binary, else the installed app (whose
+/// launcher is named flipflop, like its shortcuts).
+fn gui_exe() -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "flipflop-gui.exe"
+    } else {
+        "flipflop-gui"
+    };
+    let mut places: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).map(|d| d.join(name)).collect())
+        .unwrap_or_default();
+    if let Some(d) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+    {
+        places.push(d.join(name));
+    }
+    if cfg!(target_os = "linux") {
+        places.push("/opt/flipflop/bin/flipflop".into());
+    }
+    if cfg!(windows)
+        && let Some(d) = std::env::var_os("LOCALAPPDATA")
+    {
+        places.push(Path::new(&d).join("flipflop").join("flipflop.exe"));
+    }
+    if cfg!(target_os = "macos") {
+        places.push("/Applications/flipflop.app/Contents/MacOS/flipflop".into());
+        if let Some(home) = dirs::home_dir() {
+            places.push(home.join("Applications/flipflop.app/Contents/MacOS/flipflop"));
+        }
+    }
+    places.into_iter().find(|p| p.is_file())
 }
 
 async fn run_here(cli: &Cli, dir: &std::path::Path, cwd: std::path::PathBuf) -> Result<()> {

@@ -14,7 +14,7 @@ Rust peer-to-peer app (desktop and Android) with a Kotlin Multiplatform (Compose
 
 - **Contacts**: every peer you connect to (or that connects to you) is saved with its public key and name. Saved contacts reconnect automatically, with backoff, and immediately when they show up on the LAN or over BLE. You can rename them locally (the peer's own name stays visible, dimmed) or remove them. A removed contact that keeps dialing you is still accepted but is not saved again; connecting to them yourself saves them again.
 - **Pairing**: press Pair on a peer (scanning or pasting someone's code pairs automatically). When both of you have paired, you share an implied group, with an id derived from both device ids. It is not listed with the groups: it is that peer's page, reached from the Peers menu. From there you can invite the peer to any of your groups. Unpairing removes it on both sides.
-- **Home**: per group, what is new since you last looked (files and texts from others, scratchpad changes, new members). Opening a group marks it as seen; `flipflop-cli home` shows the same.
+- **Home**: per group, what is new since you last looked (files and texts from others, scratchpad changes, new members). Opening a group marks it as seen; `flipflop home` shows the same.
 - **Groups**: create a group, then invite contacts. Each gets an invite and must accept. If they are offline, the invite is sent when they next connect. Declining is remembered per `(inviter, group)`: repeat invites for that pair are not shown, invites from other peers or to other groups still are. Default group names are two-word verses (e.g. "pale moon") generated from the group's random id; you can set a local alias.
 - Members learn about each other through the group's document and connect directly, so a group works even if two members were never introduced.
 
@@ -33,7 +33,7 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
 
 ## Guest links
 
-A guest link is a group that anyone with a browser joins, no app needed (*Groups → Guest link*, or `flipflop-cli guest new`). It is an ordinary group with its own document, plus a secret token. Each link comes as two addresses:
+A guest link is a group that anyone with a browser joins, no app needed (*Groups → Guest link*, or `flipflop guest new`). It is an ordinary group with its own document, plus a secret token. Each link comes as two addresses:
 
 - **Same network**: `http://<lan ip>:53530/<token>/`, served by the app itself (a small HTTP server that only runs while a guest link exists). Needs no internet. The page syncs the document over a WebSocket to that server.
 - **Anywhere**: `https://andunieee.github.io/flipflop/guest/v<app version>/#t=<token>&e=<our endpoint id>&r=<our home relay>`. The same page, with iroh running in the browser (wasm): it dials us through our home relay and syncs the document over an iroh stream. The fragment never leaves the browser.
@@ -46,20 +46,21 @@ The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that 
 
 ## CLI
 
-`flipflop-cli` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process runs a node on a `--dir`. If the GUI (or a `serve`) already has it, the CLI checks the lock, finds the Unix socket (`ipc.sock` in the dir; a named pipe on Windows, untested) and sends the command there; the GUI runs it and the output comes back. Relative file paths are resolved in the CLI's working directory. `--downloads` is ignored in that case. Give one of them its own `FLIPFLOP_DIR` to keep two identities. `serve` keeps a node running (downloading, serving files) so offers stay available.
+`flipflop` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process runs a node on a `--dir`. If the GUI (or a `serve`) already has it, the CLI checks the lock, finds the Unix socket (`ipc.sock` in the dir; a named pipe on Windows, untested) and sends the command there; the GUI runs it and the output comes back. Relative file paths are resolved in the CLI's working directory. `--downloads` is ignored in that case. Give one of them its own `FLIPFLOP_DIR` to keep two identities. `serve` keeps a node running (downloading, serving files) so offers stay available. `flipflop gui` (or `flipflop open`) starts the desktop app on the same `--dir`: `flipflop-gui` from `PATH` or next to `flipflop`, else the installed app (`/opt/flipflop`, `/Applications/flipflop.app`, `%LOCALAPPDATA%\flipflop`). On Linux and macOS the app ships a `bin/flipflop-gui` link to its launcher (the app and its shortcuts are still called flipflop), so `ln -s /opt/flipflop/bin/flipflop-gui ~/.local/bin/` puts it in `PATH` without taking the `flipflop` name.
 
-    flipflop-cli id                                  # id, name, ticket
-    flipflop-cli peers                               # nearby peers and contacts
-    flipflop-cli connect <ticket>
-    flipflop-cli group new | list | show G | invite G PEER | accept G | decline G | rename G NAME | leave G
-    flipflop-cli group settings G --auto-download false --auto-stop true
-    flipflop-cli guest new [--uploads] [--name N]    # prints both addresses (while `serve` runs)
-    flipflop-cli guest list | show G | uploads G true|false | close G
-    flipflop-cli file offer G ./photo.jpg            # stays online until everyone has it (or --wait)
-    flipflop-cli file list G | get G FILE | stop G FILE
-    flipflop-cli text send G "https://example.com" | list G | delete G ID
-    flipflop-cli pad show G | set G TEXT | append G TEXT
-    flipflop-cli serve                               # run until Ctrl-C
+    flipflop id                                  # id, name, ticket
+    flipflop peers                               # nearby peers and contacts
+    flipflop connect <ticket>
+    flipflop group new | list | show G | invite G PEER | accept G | decline G | rename G NAME | leave G
+    flipflop group settings G --auto-download false --auto-stop true
+    flipflop guest new [--uploads] [--name N]    # prints both addresses (while `serve` runs)
+    flipflop guest list | show G | uploads G true|false | close G
+    flipflop file offer G ./photo.jpg            # stays online until everyone has it (or --wait)
+    flipflop file list G | get G FILE | stop G FILE
+    flipflop text send G "https://example.com" | list G | delete G ID
+    flipflop pad show G | set G TEXT | append G TEXT
+    flipflop serve                               # run until Ctrl-C
+    flipflop gui                                 # open the desktop app
 
 `G`, `PEER` and `FILE` can be an id prefix or part of a name. `--wait SECS` bounds how long a command waits for peers. `FLIPFLOP_DIR` and `FLIPFLOP_DOWNLOADS` set the directories.
 
@@ -132,7 +133,7 @@ Every icon comes from `assets/top.png` and is committed: the Linux hicolor PNGs 
 
     just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity)
     just android                   # APK; `just install` to put it on a device
-    cargo run --bin flipflop-cli -- --help
+    cargo run --bin flipflop -- --help
     just web                       # rebuild the guest page's wasm (see Guest links)
     cargo test                     # unit tests + multi-node integration tests
 

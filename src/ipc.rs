@@ -1,4 +1,4 @@
-//! Lets a `flipflop-cli` process hand its command to the app that already owns the data dir.
+//! Lets a `flipflop` process hand its command to the app that already owns the data dir.
 //!
 //! The owner (the GUI, or a CLI running `serve`) listens on a Unix socket in the data dir (a named
 //! pipe on Windows). A client sends one JSON line `{args, cwd}`; the owner parses the arguments

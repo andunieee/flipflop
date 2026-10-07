@@ -8,6 +8,12 @@ license = "AGPL-3.0-or-later"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# The command line client. `doc = false`: it shares the library's name, which `cargo doc` would collide on.
+[[bin]]
+name = "flipflop"
+path = "src/bin/flipflop.rs"
+doc = false
+
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"

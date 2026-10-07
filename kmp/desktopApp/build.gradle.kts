@@ -1,4 +1,6 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.nio.file.Files
+import java.nio.file.Paths
 
 plugins {
     id("org.jetbrains.kotlin.multiplatform")
@@ -60,6 +62,20 @@ val bundleNative = tasks.register("bundleNative") {
 tasks.matching { it.name.startsWith("package") || it.name.startsWith("createDistributable") || it.name.startsWith("createReleaseDistributable") }
     .configureEach { dependsOn(bundleNative) }
 tasks.matching { it.name == "prepareAppResources" }.configureEach { mustRunAfter(bundleNative) }
+
+// The launcher keeps the app's name (flipflop, as do the shortcuts); `flipflop-gui` is a link to it, so it can go in
+// PATH beside the `flipflop` command line client. jpackage resolves the link to find the app's config.
+tasks.matching { it.name == "createDistributable" || it.name == "createReleaseDistributable" }.configureEach {
+    doLast {
+        if (osName.contains("win")) return@doLast
+        val bin = outputs.files.singleFile.walkTopDown().maxDepth(4)
+            .firstOrNull { it.isFile && it.name == "flipflop" && it.parentFile.name in setOf("bin", "MacOS") }
+            ?: error("launcher not found under ${outputs.files.singleFile}")
+        val link = bin.toPath().resolveSibling("flipflop-gui")
+        Files.deleteIfExists(link)
+        Files.createSymbolicLink(link, Paths.get("flipflop"))
+    }
+}
 
 // JNA finds the debug Rust library here when running from Gradle (a packaged app bundles the release one).
 tasks.matching { it.name == "run" }.configureEach {
