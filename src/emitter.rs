@@ -25,7 +25,7 @@ impl MainQueue {
     }
 }
 
-/// `engine::EventEmitter` bound to the node service.
+/// `crate::engine::EventEmitter` bound to the node service.
 pub struct MainEmitter {
     queue: MainQueue,
 }
@@ -36,7 +36,7 @@ impl MainEmitter {
     }
 }
 
-impl engine::EventEmitter for MainEmitter {
+impl crate::engine::EventEmitter for MainEmitter {
     fn emit_event(&self, event_name: &str) -> Result<(), String> {
         self.queue.push(event_name, None);
         Ok(())
