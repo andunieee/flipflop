@@ -1,3 +1,4 @@
+pub mod apps;
 pub mod ble;
 #[cfg(not(target_os = "android"))]
 pub mod cli;
