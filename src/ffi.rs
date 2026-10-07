@@ -49,7 +49,6 @@ pub struct GroupRow {
     pub title: String,
     /// The haiku, shown dimmed when an alias replaces it as the title.
     pub subtitle: String,
-    pub summary: String,
     pub online: bool,
     /// A guest group: anyone with its link joins from a browser.
     pub guest: bool,
@@ -1062,19 +1061,6 @@ fn build_state(shared: &Shared) -> UiState {
                 .iter()
                 .filter(|m| matches!(m.state, MemberState::Pending | MemberState::Sent))
                 .count();
-            let mut summary = format!("{joined} member{}", if joined == 1 { "" } else { "s" });
-            if waiting > 0 {
-                summary += &format!(" · {waiting} invited");
-            }
-            if let Some(v) = view {
-                let files = v.files.iter().filter(|f| !f.stopped).count();
-                if files > 0 {
-                    summary += &format!(
-                        " · {files} file{} on offer",
-                        if files == 1 { "" } else { "s" }
-                    );
-                }
-            }
             GroupRow {
                 id: g.id.clone(),
                 title: group_title(g),
@@ -1083,7 +1069,6 @@ fn build_state(shared: &Shared) -> UiState {
                 } else {
                     String::new()
                 },
-                summary,
                 online: others_online,
                 guest: g.guest.is_some(),
             }
