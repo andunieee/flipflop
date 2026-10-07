@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.dp
 import uniffi.flipflop.GroupRow
 import uniffi.flipflop.HomeRow
 import uniffi.flipflop.InviteRow
-import uniffi.flipflop.OnlineRow
 import uniffi.flipflop.PeerRow
 import uniffi.flipflop.UiState
 import uniffi.flipflop.qrMatrix
@@ -93,13 +92,13 @@ private fun HomeCard(item: HomeRow, nav: Nav) {
     }
 }
 
-/** A group or paired peer that has someone online right now. */
+/** A paired peer that is online: its summary, opening its page. */
 @Composable
-private fun OnlineCard(row: OnlineRow, nav: Nav) {
-    ClickCard({ nav.openGroup(row.groupId) }) {
+private fun OnlinePeerCard(peer: PeerRow, nav: Nav) {
+    ClickCard({ nav.openGroup(peer.groupId) }, border = Theme.c.peerBorder, borderWidth = 2.dp) {
         Row(Modifier.padding(Theme.d.cardPadding), horizontalArrangement = Arrangement.spacedBy(Theme.d.space3), verticalAlignment = Alignment.CenterVertically) {
-            Dot(true)
-            Txt(row.title, Theme.d.fontLg, Theme.c.textStrong, 650, Modifier.weight(1f), elide = true)
+            Icon(Icons.person, tint = Theme.c.textMuted)
+            PeerSummary(peer, Modifier.weight(1f), onHome = true)
             Icon(Icons.chevronRight, tint = Theme.c.textFaint)
         }
     }
@@ -115,9 +114,12 @@ fun HomePage(s: UiState, nav: Nav) {
         s.invites.forEach { InviteCard(it, nav) }
         if (s.home.isNotEmpty()) Overline("NEW")
         s.home.forEach { HomeCard(it, nav) }
-        if (s.online.isNotEmpty()) Overline("ONLINE NOW")
-        s.online.forEach { OnlineCard(it, nav) }
-        if (s.home.isEmpty() && s.invites.isEmpty() && s.online.isEmpty()) {
+        val peers = s.peers.filter { it.connected && it.groupId.isNotEmpty() }
+        val groups = s.groups.filter { it.online }
+        if (peers.isNotEmpty() || groups.isNotEmpty()) Overline("ONLINE NOW")
+        peers.forEach { OnlinePeerCard(it, nav) }
+        groups.forEach { GroupCard(it, nav, onHome = true) }
+        if (s.home.isEmpty() && s.invites.isEmpty() && peers.isEmpty() && groups.isEmpty()) {
             HintText("All caught up. New files, texts and members of your groups show up here.", center = true)
         }
     }
@@ -125,18 +127,20 @@ fun HomePage(s: UiState, nav: Nav) {
 
 // ---- Groups ----------------------------------------------------------------------------------
 
+/** [onHome]: listed under "online now", so the online dot goes without saying. */
 @Composable
-private fun GroupCard(group: GroupRow, nav: Nav) {
-    ClickCard({ nav.openGroup(group.id) }) {
+private fun GroupCard(group: GroupRow, nav: Nav, onHome: Boolean = false) {
+    ClickCard({ nav.openGroup(group.id) }, border = Theme.c.groupBorder, borderWidth = 2.dp) {
         Row(Modifier.padding(Theme.d.cardPadding), horizontalArrangement = Arrangement.spacedBy(Theme.d.space3), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.groups, tint = Theme.c.textMuted)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Theme.d.space2), verticalAlignment = Alignment.CenterVertically) {
-                    Dot(group.online)
+                    if (!onHome) Dot(group.online)
                     Txt(group.title, Theme.d.fontLg, Theme.c.textStrong, 650, Modifier.weight(1f))
                     if (group.guest) Badge("guest link", "active")
                 }
                 if (group.subtitle.isNotEmpty()) Txt(group.subtitle, Theme.d.fontSm, Theme.c.textMuted)
+                Txt(group.summary, Theme.d.fontSm, Theme.c.textMuted)
             }
             Icon(Icons.chevronRight, tint = Theme.c.textFaint)
         }
@@ -163,16 +167,27 @@ fun GroupsPage(s: UiState, nav: Nav) {
 
 // ---- Peers -----------------------------------------------------------------------------------
 
+/** [onHome]: listed under "online now", so "paired" and "connected" go without saying. */
 @Composable
-fun PeerBadges(peer: PeerRow, paired: Boolean = peer.groupId.isNotEmpty()) {
+fun PeerBadges(peer: PeerRow, onHome: Boolean = false) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (peer.groupId.isNotEmpty()) Badge("paired", "ok")
+        if (peer.groupId.isNotEmpty() && !onHome) Badge("paired", "ok")
         if (peer.groupId.isEmpty() && peer.pairedUs && !peer.paired) Badge("wants to pair", "warn")
         if (peer.groupId.isEmpty() && peer.paired && !peer.pairedUs) Badge("waiting for them", "muted")
-        if (peer.connected) Badge("connected", "ok")
+        if (peer.connected && !onHome) Badge("connected", "ok")
         if (peer.saved && !peer.connected) Badge("offline", "muted")
         if (peer.lan) Badge("LAN", "active")
         if (peer.ble) Badge("Bluetooth", "warn")
+    }
+}
+
+/** A peer's name, own name and key prefix, and badges. */
+@Composable
+private fun PeerSummary(peer: PeerRow, modifier: Modifier = Modifier, onHome: Boolean = false) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Txt(peer.title, Theme.d.fontLg, Theme.c.textStrong, 650, elide = true)
+        Txt((if (peer.subtitle.isNotEmpty()) peer.subtitle + " · " else "") + peer.short, Theme.d.fontXs, Theme.c.textFaint, elide = true)
+        PeerBadges(peer, onHome)
     }
 }
 
@@ -181,12 +196,8 @@ private fun PeerCard(peer: PeerRow, nav: Nav) {
     val app = nav.backend.app
     val body: @Composable () -> Unit = {
         Row(Modifier.padding(Theme.d.cardPadding), horizontalArrangement = Arrangement.spacedBy(Theme.d.space3)) {
-            Icon(Icons.peers, tint = Theme.c.textMuted, modifier = Modifier.align(Alignment.CenterVertically))
-            Column(Modifier.weight(1f).align(Alignment.CenterVertically), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Txt(peer.title, Theme.d.fontLg, Theme.c.textStrong, 650, elide = true)
-                Txt((if (peer.subtitle.isNotEmpty()) peer.subtitle + " · " else "") + peer.short, Theme.d.fontXs, Theme.c.textFaint, elide = true)
-                PeerBadges(peer)
-            }
+            Icon(Icons.person, tint = Theme.c.textMuted, modifier = Modifier.align(Alignment.CenterVertically))
+            PeerSummary(peer, Modifier.weight(1f).align(Alignment.CenterVertically))
             Column(Modifier.align(Alignment.CenterVertically), verticalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
                 if (!peer.paired) PrimaryButton("Pair", icon = Icons.addPeer) { app.pairPeer(peer.id) }
                 if (peer.paired && peer.groupId.isEmpty()) GhostButton("Unpair") { app.unpairPeer(peer.id) }
@@ -197,9 +208,8 @@ private fun PeerCard(peer: PeerRow, nav: Nav) {
             }
         }
     }
-    val c = Theme.c
-    if (peer.groupId.isNotEmpty()) ClickCard({ nav.openGroup(peer.groupId) }, background = c.peerBg, hoverBackground = c.peerBgHover, border = c.peerBorder) { body() }
-    else Card(background = c.peerBg, border = c.peerBorder) { body() }
+    if (peer.groupId.isNotEmpty()) ClickCard({ nav.openGroup(peer.groupId) }, border = Theme.c.peerBorder, borderWidth = 2.dp) { body() }
+    else Card(border = Theme.c.peerBorder, borderWidth = 2.dp) { body() }
 }
 
 @Composable
