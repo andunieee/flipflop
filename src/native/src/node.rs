@@ -33,6 +33,8 @@ use crate::paired_connections::{invite_wait_timeout, PairedConnectionManager};
 use crate::pairing_util::{build_control_connect_addr, set_presence};
 use crate::rate_limit::UnpairedRateLimiter;
 use crate::runtime::NodeRuntime;
+use crate::shares::{NodeShare, ShareRegistry};
+use crate::types::ReceiveResult;
 
 #[derive(Debug)]
 pub(crate) struct AccessState {
@@ -818,6 +820,9 @@ pub struct NodeService {
     blocked: Arc<RwLock<HashSet<String>>>,
     /// Same map as `ControlCtx::pending_nearby_invites`, shared with it.
     pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
+    /// Outgoing shares, served over this node's endpoint. Outlives network
+    /// rebuilds: each new router mounts the same provider.
+    shares: Arc<ShareRegistry>,
     /// Serializes `reconfigure_network`, `set_discoverability` and `shutdown`.
     /// Held across each one's whole decide-rebuild-settle sequence so the
     /// decision can't go stale before its consequence runs.
@@ -886,6 +891,8 @@ impl NodeService {
             app_handle.clone(),
         ));
 
+        let shares = Arc::new(ShareRegistry::open(&data_dir.join("outgoing")).await?);
+
         let home_relay_url = Arc::new(std::sync::RwLock::new(None));
         let runtime = build_runtime(
             identity.clone(),
@@ -903,6 +910,7 @@ impl NodeService {
             relay_mode.clone(),
             discovery_mode.clone(),
             home_relay_url.clone(),
+            shares.clone(),
         )
         .await?;
         let runtime = Arc::new(Mutex::new(runtime));
@@ -950,6 +958,7 @@ impl NodeService {
             network_transition: Mutex::new(()),
             blocked,
             pending_nearby_invites,
+            shares,
         })
     }
 
@@ -1035,6 +1044,7 @@ impl NodeService {
             relay_mode.clone(),
             discovery_mode.clone(),
             self.home_relay_url.clone(),
+            self.shares.clone(),
         )
         .await?;
 
@@ -1191,6 +1201,42 @@ impl NodeService {
         }
 
         Ok(())
+    }
+
+    /// Opens a share of `paths` for the peer `endpoint_id`, served from this
+    /// node's endpoint. Deliver its ticket with [`Self::invite_paired_device`];
+    /// drop the share to stop serving it.
+    pub async fn share_with_peer(
+        &self,
+        endpoint_id: &str,
+        paths: Vec<std::path::PathBuf>,
+        app_handle: AppHandle,
+    ) -> anyhow::Result<NodeShare> {
+        let peer = EndpointId::from_str(endpoint_id)?;
+        let addr = self.runtime.lock().await.endpoint.addr();
+        self.shares.share(addr, peer, paths, app_handle).await
+    }
+
+    /// Downloads the share `ticket` from the peer `endpoint_id` into
+    /// `output_dir`, over this node's endpoint. The ticket must be one that
+    /// peer minted: its node id has to match.
+    pub async fn download_from_peer(
+        &self,
+        endpoint_id: &str,
+        ticket: &str,
+        output_dir: std::path::PathBuf,
+        app_handle: AppHandle,
+        cancel_rx: tokio::sync::oneshot::Receiver<()>,
+    ) -> anyhow::Result<ReceiveResult> {
+        let peer = EndpointId::from_str(endpoint_id)?;
+        let ticket = iroh_blobs::ticket::BlobTicket::from_str(ticket)?;
+        anyhow::ensure!(
+            ticket.addr().id == peer,
+            "the share is not served by {} (it may run an older version)",
+            short_remote(endpoint_id)
+        );
+        let endpoint = self.runtime.lock().await.endpoint.clone();
+        crate::receive::download(&endpoint, ticket, output_dir, app_handle, cancel_rx).await
     }
 
     /// Immediate pairing code from local identity, carrying our home relay URL
@@ -2238,6 +2284,7 @@ async fn build_runtime(
     relay_mode: RelayMode,
     discovery_mode: DiscoveryModeOption,
     home_relay_url: Arc<std::sync::RwLock<Option<String>>>,
+    shares: Arc<ShareRegistry>,
 ) -> anyhow::Result<NodeRuntime> {
 
     let hook = PairedOnlyHook {
@@ -2277,7 +2324,7 @@ async fn build_runtime(
         .secret_key(identity.secret_key.clone())
         .relay_mode(relay_mode.clone())
         .hooks(hook)
-        .alpns(vec![CONTROL_ALPN.to_vec()])
+        .alpns(vec![CONTROL_ALPN.to_vec(), iroh_blobs::ALPN.to_vec()])
         .bind()
         .await?;
 
@@ -2303,6 +2350,7 @@ async fn build_runtime(
 
     let router = Router::builder(endpoint.clone())
         .accept(CONTROL_ALPN, control)
+        .accept(iroh_blobs::ALPN, shares.protocol())
         .spawn();
 
     let mark_network_ready = {

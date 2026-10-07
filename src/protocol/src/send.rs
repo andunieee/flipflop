@@ -2,120 +2,29 @@ use crate::progress::{
     EmitThrottle, ShareProgress, SpeedMeter, TransferClock, PROGRESS_MIN_BYTES, PROGRESS_MIN_SECS,
     SPEED_WINDOW_SECS,
 };
-use crate::time_compat::{sleep, timeout, Duration, Instant};
-use crate::types::{apply_options, AddrInfoOptions, AppHandle, FileMetadata};
-use iroh::protocol::{AcceptError, ProtocolHandler};
-use iroh::{endpoint::RelayMode, Endpoint};
-use iroh_blobs::{
-    api::TempTag,
-    provider::events::ProviderMessage,
-    ticket::BlobTicket,
-    BlobFormat, BlobsProtocol,
-};
+use crate::time_compat::{sleep, Duration, Instant};
+use crate::types::AppHandle;
+use iroh::EndpointId;
+use iroh_blobs::protocol::ChunkRangesSeq;
+use iroh_blobs::provider::events::RequestUpdate;
 use n0_future::{task::AbortOnDropHandle, StreamExt};
-use std::io::ErrorKind;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-// To avoid encoding thumbnail into ticket causing excessively long tickets, we use a custom metadata protocol to
-// send metadata seprately from the file data. After the receive end sticks the ticket, a seprate connection will
-// be made to fetch the metadata.
-pub const METADATA_ALPN: &[u8] = b"sendme/metadata/1";
-
-#[derive(Debug, Clone)]
-pub struct MetadataProtocol {
-    pub metadata: Option<FileMetadata>,
-}
-
-impl ProtocolHandler for MetadataProtocol {
-    /// # Description
-    /// Handles incoming connections on the metadata protocol.
-    /// It reads a metadata request marker (1 byte) from client, responds with a length-prefixed JSON metadata payload, and waits for the client to close the connection before finishing.
-    async fn accept(&self, connection: iroh::endpoint::Connection) -> Result<(), AcceptError> {
-        let (mut send_stream, mut recv_stream) =
-            match timeout(Duration::from_secs(30), connection.accept_bi()).await {
-                Ok(Ok(streams)) => streams,
-                Ok(Err(err)) => return Err(err.into()),
-                Err(_) => {
-                    tracing::debug!("metadata accept_bi timeout (benign)");
-                    return Ok(());
-                }
-            };
-
-        tracing::info!("metadata protocol bi stream accepted");
-
-        let mut req = [0u8; 1];
-        timeout(Duration::from_secs(10), recv_stream.read_exact(&mut req))
-            .await
-            .map_err(|_| {
-                AcceptError::from_err(std::io::Error::new(
-                    ErrorKind::TimedOut,
-                    "metadata request read timeout",
-                ))
-            })?
-            .map_err(AcceptError::from_err)?;
-
-        // Validate request marker (1 means metadata request)
-        if req[0] != 1 {
-            return Err(AcceptError::from_err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!("invalid metadata request marker: {}", req[0]),
-            )));
-        }
-
-        tracing::debug!("metadata request marker received");
-
-        let payload = self.metadata.clone().ok_or_else(|| {
-            AcceptError::from_err(std::io::Error::new(
-                ErrorKind::NotFound,
-                "metadata unavailable",
-            ))
-        })?;
-
-        let meta_bytes = serde_json::to_vec(&payload).map_err(AcceptError::from_err)?;
-        const MAX_METADATA_BYTES: usize = 8 * 1024 * 1024;
-        if meta_bytes.len() > MAX_METADATA_BYTES {
-            return Err(AcceptError::from_err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!("metadata payload too large: {} bytes", meta_bytes.len()),
-            )));
-        }
-        let len_prefix = (meta_bytes.len() as u32).to_be_bytes();
-
-        // Send 4 bytes of length prefix followed by the JSON metadata
-        timeout(Duration::from_secs(10), send_stream.write_all(&len_prefix))
-            .await
-            .map_err(|_| {
-                AcceptError::from_err(std::io::Error::new(
-                    ErrorKind::TimedOut,
-                    "metadata length write timeout",
-                ))
-            })?
-            .map_err(AcceptError::from_err)?;
-        timeout(Duration::from_secs(20), send_stream.write_all(&meta_bytes))
-            .await
-            .map_err(|_| {
-                AcceptError::from_err(std::io::Error::new(
-                    ErrorKind::TimedOut,
-                    "metadata body write timeout",
-                ))
-            })?
-            .map_err(AcceptError::from_err)?;
-
-        send_stream.finish().map_err(AcceptError::from_err)?;
-
-        // Wait for the client to close its receive stream (which means it got the data).
-        // This prevents tearing down the QUIC connection before the data buffers are flushed.
-        // We give it 30s which is more than the client's read timeout.
-        let mut eof_buf = [0u8; 1];
-        let _ = timeout(Duration::from_secs(30), recv_stream.read(&mut eof_buf)).await;
-
-        tracing::info!(bytes = meta_bytes.len(), "metadata sent");
-
-        Ok(())
-    }
+/// What a share's progress tracker hears from the blob provider, already
+/// narrowed down to that one share.
+pub enum ShareEvent {
+    /// A peer opened a connection to fetch this share.
+    PeerConnected(EndpointId),
+    /// A get request for this share; `updates` streams its transfer events.
+    /// Dropping `updates` aborts the transfer at its next chunk.
+    Request {
+        connection_id: u64,
+        request_id: u64,
+        ranges: ChunkRangesSeq,
+        updates: irpc::channel::mpsc::Receiver<RequestUpdate>,
+    },
 }
 
 fn emit_event(app_handle: &AppHandle, event_name: &str) {
@@ -153,157 +62,21 @@ fn emit_active_connection_count(app_handle: &AppHandle, count: usize) {
     }
 }
 
-/// Upper bound on waiting for the relay before minting a ticket.
-const RELAY_WAIT: Duration = Duration::from_secs(30);
-/// How long to hold out for the relay once LAN addresses are known.
-const LAN_ONLY_GRACE: Duration = Duration::from_secs(3);
-
-/// Waits until the endpoint's address is worth putting in a ticket: the relay
-/// is connected, or (after a short grace) it has direct IP addresses the
-/// ticket will carry. Never fails, so a device without internet can still
-/// share with a LAN peer.
-async fn wait_for_ticket_addrs(
-    endpoint: &Endpoint,
-    relay_mode: &RelayMode,
-    ticket_type: AddrInfoOptions,
-) {
-    if matches!(relay_mode, RelayMode::Disabled) {
-        return;
-    }
-    let ticket_has_ip_addrs = matches!(
-        ticket_type,
-        AddrInfoOptions::RelayAndAddresses | AddrInfoOptions::Addresses
-    );
-    let has_direct_addrs = async {
-        if !ticket_has_ip_addrs {
-            return std::future::pending().await;
-        }
-        sleep(LAN_ONLY_GRACE).await;
-        while !endpoint
-            .addr()
-            .addrs
-            .iter()
-            .any(|addr| matches!(addr, iroh::TransportAddr::Ip(_)))
-        {
-            sleep(Duration::from_millis(100)).await;
-        }
-        tracing::info!("relay not reachable yet; sharing with direct addresses only");
-    };
-    let ready = n0_future::future::race(endpoint.online(), has_direct_addrs);
-    if timeout(RELAY_WAIT, ready).await.is_err() {
-        tracing::warn!("relay not reachable; sharing ticket may be unusable");
-    }
-}
-
-/// Shared send orchestration after blobs are imported into the store.
-pub struct ShareSessionOutcome<S> {
-    pub ticket: String,
-    pub hash: String,
-    pub size: u64,
-    pub entry_type: String,
-    pub router: Option<iroh::protocol::Router>,
-    pub temp_tag: TempTag,
-    pub store: S,
-    pub progress_handle: AbortOnDropHandle<anyhow::Result<()>>,
-    pub cleanup_dir: Option<PathBuf>,
-    /// Peers that pulled the entire payload. A broadcast share serves many,
-    /// and the count is the only way a history row can describe the session
-    /// rather than just its first peer.
-    pub completed_peers: Arc<AtomicUsize>,
-}
-
-pub async fn run_share_session<S>(
-    endpoint: Endpoint,
-    store: S,
-    blobs: BlobsProtocol,
-    temp_tag: TempTag,
+/// Spawns the task that turns a share's [`ShareEvent`]s into progress events
+/// on `app_handle`. Aborting the task drops every request's update stream,
+/// which aborts the transfers still running.
+pub fn spawn_share_progress(
+    events: mpsc::Receiver<ShareEvent>,
+    app_handle: AppHandle,
     size: u64,
-    metadata: Option<FileMetadata>,
-    ticket_type: AddrInfoOptions,
-    app_handle: &AppHandle,
-    entry_type: String,
-    relay_mode: RelayMode,
-    cleanup_dir: Option<PathBuf>,
-    progress_rx: mpsc::Receiver<ProviderMessage>,
-) -> anyhow::Result<ShareSessionOutcome<S>>
-where
-    S: Send + Sync + 'static,
-{
-    let completed_peers = Arc::new(AtomicUsize::new(0));
-    let progress_handle = n0_future::task::spawn(show_provide_progress_with_logging(
-        progress_rx,
-        app_handle.clone(),
+    completed_peers: Arc<AtomicUsize>,
+) -> AbortOnDropHandle<anyhow::Result<()>> {
+    AbortOnDropHandle::new(n0_future::task::spawn(show_provide_progress_with_logging(
+        events,
+        app_handle,
         size,
-        completed_peers.clone(),
-    ));
-
-    let router = iroh::protocol::Router::builder(endpoint)
-        .accept(iroh_blobs::ALPN, blobs)
-        .accept(METADATA_ALPN, MetadataProtocol { metadata })
-        .spawn();
-
-    wait_for_ticket_addrs(router.endpoint(), &relay_mode, ticket_type).await;
-
-    let hash = temp_tag.hash();
-
-    let mut addr = router.endpoint().addr();
-    apply_options(&mut addr, ticket_type);
-
-    let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
-
-    Ok(ShareSessionOutcome {
-        ticket: ticket.to_string(),
-        hash: hash.to_hex().to_string(),
-        size,
-        entry_type,
-        router: Some(router),
-        temp_tag,
-        store,
-        progress_handle: AbortOnDropHandle::new(progress_handle),
-        cleanup_dir,
         completed_peers,
-    })
-}
-
-/// Build a share ticket on an already-online endpoint (node-owned router handles ALPNs).
-pub async fn run_share_on_endpoint(
-    endpoint: &Endpoint,
-    temp_tag: TempTag,
-    size: u64,
-    ticket_type: AddrInfoOptions,
-    app_handle: &AppHandle,
-    entry_type: String,
-    relay_mode: RelayMode,
-    cleanup_dir: Option<PathBuf>,
-    progress_rx: mpsc::Receiver<ProviderMessage>,
-) -> anyhow::Result<ShareSessionOutcome<()>> {
-    let completed_peers = Arc::new(AtomicUsize::new(0));
-    let progress_handle = n0_future::task::spawn(show_provide_progress_with_logging(
-        progress_rx,
-        app_handle.clone(),
-        size,
-        completed_peers.clone(),
-    ));
-
-    wait_for_ticket_addrs(endpoint, &relay_mode, ticket_type).await;
-
-    let hash = temp_tag.hash();
-    let mut addr = endpoint.addr();
-    apply_options(&mut addr, ticket_type);
-    let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
-
-    Ok(ShareSessionOutcome {
-        ticket: ticket.to_string(),
-        hash: hash.to_hex().to_string(),
-        size,
-        entry_type,
-        router: None,
-        temp_tag,
-        store: (),
-        progress_handle: AbortOnDropHandle::new(progress_handle),
-        cleanup_dir,
-        completed_peers,
-    })
+    )))
 }
 
 /// Range specs used by receivers before the main payload download (hash-seq + child sizes).
@@ -387,7 +160,7 @@ fn emit_transfer_completed(app_handle: &AppHandle, session: &SessionProgress) {
 }
 
 async fn show_provide_progress_with_logging(
-    mut recv: mpsc::Receiver<iroh_blobs::provider::events::ProviderMessage>,
+    mut recv: mpsc::Receiver<ShareEvent>,
     app_handle: AppHandle,
     total_collection_size: u64,
     completed_requests: Arc<AtomicUsize>,
@@ -417,26 +190,20 @@ async fn show_provide_progress_with_logging(
                 };
 
                 match item {
-                    iroh_blobs::provider::events::ProviderMessage::ClientConnectedNotify(msg) => {
-                        if let Some(endpoint_id) = msg.endpoint_id {
-                            let payload = serde_json::json!({
-                                "endpoint_id": endpoint_id.to_string(),
-                            });
-                            if let Some(handle) = &app_handle {
-                                let _ = handle.emit_event_with_payload(
-                                    "share-peer-connected",
-                                    &payload.to_string(),
-                                );
-                            }
+                    ShareEvent::PeerConnected(endpoint_id) => {
+                        let payload = serde_json::json!({
+                            "endpoint_id": endpoint_id.to_string(),
+                        });
+                        if let Some(handle) = &app_handle {
+                            let _ = handle.emit_event_with_payload(
+                                "share-peer-connected",
+                                &payload.to_string(),
+                            );
                         }
                     }
-                    iroh_blobs::provider::events::ProviderMessage::ConnectionClosed(_msg) => {
-                    }
-                    iroh_blobs::provider::events::ProviderMessage::GetRequestReceivedNotify(msg) => {
-                        let is_sizes_probe_request = is_sizes_probe_request(&msg.request.ranges);
+                    ShareEvent::Request { connection_id, request_id, ranges, updates } => {
+                        let is_sizes_probe_request = is_sizes_probe_request(&ranges);
 
-                        let connection_id = msg.connection_id;
-                        let request_id = msg.request_id;
                         let key = (connection_id, request_id);
 
                         if !is_sizes_probe_request {
@@ -455,7 +222,7 @@ async fn show_provide_progress_with_logging(
                         let last_request_time_task = last_request_time.clone();
                         let total_collection_size_task = total_collection_size;
 
-                        let mut rx = msg.rx;
+                        let mut rx = updates;
                         tasks.push(async move {
                             if is_sizes_probe_request {
                                 while let Ok(Some(_)) = rx.recv().await {}
@@ -467,7 +234,7 @@ async fn show_provide_progress_with_logging(
 
                             while let Ok(Some(update)) = rx.recv().await {
                                 match update {
-                                    iroh_blobs::provider::events::RequestUpdate::Started(m) => {
+                                    RequestUpdate::Started(m) => {
                                         let active_count = {
                                             let mut session = session_task.lock().await;
                                             let at_secs = session.now_secs();
@@ -486,7 +253,7 @@ async fn show_provide_progress_with_logging(
                                             transfer_started = true;
                                         }
                                     }
-                                    iroh_blobs::provider::events::RequestUpdate::Progress(m) => {
+                                    RequestUpdate::Progress(m) => {
                                         if !transfer_started {
                                             let active_count = {
                                                 let mut session = session_task.lock().await;
@@ -512,7 +279,7 @@ async fn show_provide_progress_with_logging(
                                             emit_session_progress(&app_handle_task, &session, at_secs);
                                         }
                                     }
-                                    iroh_blobs::provider::events::RequestUpdate::Completed(_m) => {
+                                    RequestUpdate::Completed(_m) => {
                                         if transfer_started && !request_completed {
                                             let (bytes_sent, active_count) = {
                                                 let mut session = session_task.lock().await;
@@ -590,7 +357,7 @@ async fn show_provide_progress_with_logging(
                                             }
                                         }
                                     }
-                                    iroh_blobs::provider::events::RequestUpdate::Aborted(_m) => {
+                                    RequestUpdate::Aborted(_m) => {
                                         tracing::warn!("Request aborted: conn {} req {}",
                                             connection_id, request_id);
                                         if transfer_started && !request_completed {
@@ -685,8 +452,6 @@ async fn show_provide_progress_with_logging(
                                 }
                             }
                         });
-                    }
-                    _ => {
                     }
                 }
             }

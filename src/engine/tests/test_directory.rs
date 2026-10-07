@@ -1,10 +1,10 @@
 mod common;
 
 use common::TestFixture;
-use engine::{download, start_share, ReceiveOptions, SendOptions};
 
 #[tokio::test]
 async fn e2e_directory_roundtrip() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source_dir = fixture.create_dir_with_files(
         "my_folder",
@@ -15,22 +15,14 @@ async fn e2e_directory_roundtrip() {
     );
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source_dir, SendOptions::default(), None, None)
+    let share = pair.share(vec![source_dir], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     assert_eq!(share.entry_type, "directory");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -47,6 +39,7 @@ async fn e2e_directory_roundtrip() {
 
 #[tokio::test]
 async fn e2e_directory_with_deep_nesting() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source_dir = fixture.create_dir_with_files(
         "deep",
@@ -59,20 +52,12 @@ async fn e2e_directory_with_deep_nesting() {
     );
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source_dir, SendOptions::default(), None, None)
+    let share = pair.share(vec![source_dir], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 

@@ -7,10 +7,7 @@ use std::time::Duration;
 
 use common::{wait_until, MockEventEmitter, TestFixture};
 use engine::identity_store::identity_key_path;
-use engine::{
-    AddrInfoOptions, Discoverability, DiscoveryModeOption, NodeService, PairingStatus,
-    ReceiveOptions, SendOptions,
-};
+use engine::{Discoverability, DiscoveryModeOption, NodeService, PairingStatus};
 use iroh::endpoint::RelayMode;
 use iroh::SecretKey;
 
@@ -90,22 +87,16 @@ async fn e2e_paired_transfer_flow() {
     })
     .await;
 
-    // --- send: exactly what gui-slint start_send does ---
+    // --- send: exactly what the app's start_send does ---
     let sender_emitter = MockEventEmitter::new();
-    let share = engine::start_share_items(
-        vec![source],
-        SendOptions {
-            relay_mode: engine::RelayModeOption::Default,
-            discovery_mode: DiscoveryModeOption::Default,
-            ticket_type: AddrInfoOptions::RelayAndAddresses,
-            magic_ipv4_addr: None,
-            magic_ipv6_addr: None,
-        },
-        &Some(sender_emitter.clone() as std::sync::Arc<dyn engine::EventEmitter>),
-        None,
-    )
-    .await
-    .expect("start_share_items");
+    let share = host
+        .share_with_peer(
+            &joiner_id,
+            vec![source],
+            Some(sender_emitter.clone() as std::sync::Arc<dyn engine::EventEmitter>),
+        )
+        .await
+        .expect("share_with_peer");
     println!("share ticket minted, size {}", share.size);
 
     // deliver exactly like invite_paired_device
@@ -141,15 +132,10 @@ async fn e2e_paired_transfer_flow() {
     let (_cancel_tx, cancel_rx) = common::no_cancel();
     let result = tokio::time::timeout(
         Duration::from_secs(30),
-        engine::download(
-            blob_ticket,
-            ReceiveOptions {
-                output_dir: Some(recv_dir.clone()),
-                relay_mode: engine::RelayModeOption::Default,
-                discovery_mode: DiscoveryModeOption::Default,
-                magic_ipv4_addr: None,
-                magic_ipv6_addr: None,
-            },
+        joiner.download_from_peer(
+            &remote_id,
+            &blob_ticket,
+            recv_dir.clone(),
             Some(receiver_emitter.clone()),
             cancel_rx,
         ),

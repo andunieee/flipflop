@@ -16,24 +16,6 @@ pub trait EventEmitter {
 /// Optional callback surface for transfer progress (Tauri events or JS callbacks).
 pub type AppHandle = Option<Arc<dyn EventEmitter>>;
 
-#[derive(Debug, Default)]
-pub struct SendOptions {
-    pub relay_mode: RelayModeOption,
-    pub discovery_mode: DiscoveryModeOption,
-    pub ticket_type: AddrInfoOptions,
-    pub magic_ipv4_addr: Option<std::net::SocketAddrV4>,
-    pub magic_ipv6_addr: Option<std::net::SocketAddrV6>,
-}
-
-#[derive(Debug, Default)]
-pub struct ReceiveOptions {
-    pub output_dir: Option<std::path::PathBuf>,
-    pub relay_mode: RelayModeOption,
-    pub discovery_mode: DiscoveryModeOption,
-    pub magic_ipv4_addr: Option<std::net::SocketAddrV4>,
-    pub magic_ipv6_addr: Option<std::net::SocketAddrV6>,
-}
-
 #[derive(Clone, Debug)]
 pub enum RelayModeOption {
     Disabled,

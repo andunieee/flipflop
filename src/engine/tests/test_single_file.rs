@@ -1,23 +1,18 @@
 mod common;
 
 use common::{MockEventEmitter, TestFixture};
-use engine::{download, start_share, ReceiveOptions, SendOptions};
 
 #[tokio::test]
 async fn e2e_single_text_file_roundtrip() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_file("hello.txt", b"Hello from DashBeam E2E test!");
     let recv_dir = fixture.output_dir();
 
     let sender_emitter = MockEventEmitter::new();
-    let share = start_share(
-        source,
-        SendOptions::default(),
-        Some(sender_emitter.clone()),
-        None,
-    )
+    let share = pair.share(vec![source], Some(sender_emitter.clone()))
     .await
-    .expect("start_share should succeed");
+    .expect("share should succeed");
 
     assert!(!share.ticket.is_empty(), "ticket should not be empty");
     assert!(share.size > 0, "shared size should be > 0");
@@ -25,15 +20,7 @@ async fn e2e_single_text_file_roundtrip() {
 
     let receiver_emitter = MockEventEmitter::new();
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    let result = download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    let result = pair.download(&share.ticket, recv_dir.clone(), Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -59,25 +46,18 @@ async fn e2e_single_text_file_roundtrip() {
 
 #[tokio::test]
 async fn e2e_binary_file_roundtrip() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let binary_data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
     let source = fixture.create_file("data.bin", &binary_data);
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -90,24 +70,17 @@ async fn e2e_binary_file_roundtrip() {
 
 #[tokio::test]
 async fn e2e_empty_file_roundtrip() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_file("empty.txt", b"");
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 
