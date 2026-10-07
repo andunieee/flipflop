@@ -250,3 +250,66 @@ async fn members_find_each_other_through_the_group() {
         n.shutdown().await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tabs_are_shared_and_apps_reach_everyone() {
+    let (a, da) = node("alice").await;
+    let (b, db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    // Apps are fetched whatever the files settings.
+    b.set_group_settings(&gid, Some(false), None, None);
+    let tabs = |c: &Core| -> Vec<(String, bool)> {
+        c.group_view(&gid)
+            .unwrap()
+            .tabs
+            .iter()
+            .map(|t| (t.title.clone(), t.on))
+            .collect()
+    };
+
+    a.set_tab(&gid, "texts", false).unwrap();
+    assert!(a.set_tab(&gid, "nope", false).is_err());
+    until("bob sees texts hidden", || {
+        tabs(&b)
+            == [("Files", true), ("Texts", false), ("Scratchpad", true)]
+                .map(|(t, on)| (t.to_owned(), on))
+    })
+    .await;
+
+    let wasm = b"\0asm\x01\0\0\0".to_vec();
+    let src = da.path().join("chess.wasm");
+    std::fs::write(&src, &wasm).unwrap();
+    assert!(
+        a.add_app(&gid, da.path().join("missing.wasm"), None)
+            .await
+            .is_err()
+    );
+    let not_wasm = da.path().join("notes.wasm");
+    std::fs::write(&not_wasm, b"hello").unwrap();
+    assert!(a.add_app(&gid, not_wasm, None).await.is_err());
+    let id = a.add_app(&gid, src, None).await.unwrap();
+
+    until("bob fetched the app", || {
+        b.group_view(&gid).unwrap().tabs.iter().any(|t| {
+            t.id == id && t.on && t.title == "chess" && t.app.as_ref().is_some_and(|a| a.ready)
+        })
+    })
+    .await;
+    let hash = blake3::hash(&wasm).to_hex().to_string();
+    assert_eq!(
+        std::fs::read(db.path().join("apps").join(format!("{hash}.wasm"))).unwrap(),
+        wasm
+    );
+    // An app's file is not one of the group's files.
+    assert!(a.group_view(&gid).unwrap().files.is_empty());
+    assert!(b.group_view(&gid).unwrap().files.is_empty());
+
+    b.set_tab(&gid, &id, false).unwrap();
+    until("alice sees the app hidden", || {
+        tabs(&a).last() == Some(&("chess".to_owned(), false))
+    })
+    .await;
+
+    a.shutdown().await;
+    b.shutdown().await;
+}

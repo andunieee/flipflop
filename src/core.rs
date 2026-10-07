@@ -4,6 +4,7 @@
 
 mod guest;
 mod sharing;
+mod tabs;
 mod unseen;
 
 use std::{
@@ -35,7 +36,7 @@ use crate::{
 
 pub use crate::state::MemberState;
 pub use guest::{GUEST_ALPN, GuestInfo, GuestPerson, is_guest};
-pub use sharing::{DocMember, FileView, GroupView, TextView};
+pub use sharing::{AppView, DocMember, FileView, GroupView, TabView, TextView};
 pub use unseen::Unseen;
 
 pub const ALPN: &[u8] = b"flipflop/0";

@@ -6,6 +6,9 @@
 //! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, stopped_at, downloaded: { peer id -> ts }, hosts: { peer id -> ts } }
 //! - `texts`:   `<millis>-<rand>` -> { from, name, text, ts }
 //! - `scratch`: a text object everyone edits.
+//! - `tabs`:    tab id -> { on }: which tabs the group shows, as any member set them. The ids are
+//!   [`BUILTIN_TABS`] and apps' ids; an app's tab also holds { kind: "app", name, file, hash, size,
+//!   from, ts }, `file` being the offer of its wasm in `files`.
 //! - `apps`:    app id -> the app's own section, which only the app writes (see [`crate::apps`]).
 //!
 //! Entry keys start with the creation time, so key order is chronological.
@@ -40,6 +43,31 @@ pub struct FileOffer {
     pub downloaded: BTreeMap<String, i64>,
     /// Peers (other than the offerer) that also serve the bytes. Each only writes its own entry.
     pub hosts: BTreeSet<String>,
+}
+
+/// The tabs every group has, in the order they show; the apps' tabs follow, oldest first.
+pub const BUILTIN_TABS: [&str; 3] = ["files", "texts", "pad"];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tab {
+    /// One of [`BUILTIN_TABS`], or an app's id (also its section in `apps`).
+    pub id: String,
+    /// The group shows it. Built-in tabs do until someone hides them.
+    pub on: bool,
+    pub app: Option<AppTab>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppTab {
+    pub name: String,
+    /// The offer of its wasm in `files`.
+    pub file: String,
+    /// blake3 of the wasm, hex.
+    pub hash: String,
+    pub size: u64,
+    /// Who added it.
+    pub from: String,
+    pub ts: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +131,7 @@ fn genesis() -> AutoCommit {
     }
     doc.commit_with(CommitOptions::default().with_time(0));
     // A change of its own, so documents made before apps existed can take it on in [`GroupDoc::load`].
+    doc.put_object(ROOT, "tabs", ObjType::Map).expect("genesis");
     doc.put_object(ROOT, "apps", ObjType::Map).expect("genesis");
     doc.commit_with(CommitOptions::default().with_time(0));
     doc
@@ -371,6 +400,85 @@ impl GroupDoc {
         true
     }
 
+    // ---- tabs -------------------------------------------------------------------------
+
+    fn tab_obj(&self, id: &str) -> Option<ObjId> {
+        match self.doc.get(self.obj("tabs"), id) {
+            Ok(Some((Value::Object(ObjType::Map), obj))) => Some(obj),
+            _ => None,
+        }
+    }
+
+    /// The built-in tabs, then the apps' oldest first.
+    pub fn tabs(&self) -> Vec<Tab> {
+        let builtin = BUILTIN_TABS.iter().map(|id| Tab {
+            id: id.to_string(),
+            on: self.tab_obj(id).is_none_or(|t| self.bool_of(&t, "on")),
+            app: None,
+        });
+        let apps = self
+            .entries(&self.obj("tabs"))
+            .into_iter()
+            .filter(|(id, t)| {
+                !BUILTIN_TABS.contains(&id.as_str()) && self.str_of(t, "kind") == "app"
+            })
+            .map(|(id, t)| Tab {
+                id,
+                on: self.bool_of(&t, "on"),
+                app: Some(AppTab {
+                    name: self.str_of(&t, "name"),
+                    file: self.str_of(&t, "file"),
+                    hash: self.str_of(&t, "hash"),
+                    size: self.int_of(&t, "size").max(0) as u64,
+                    from: self.str_of(&t, "from"),
+                    ts: self.int_of(&t, "ts"),
+                }),
+            });
+        builtin.chain(apps).collect()
+    }
+
+    /// Show or hide a tab. Returns whether there is such a tab.
+    pub fn set_tab(&mut self, id: &str, on: bool) -> bool {
+        let tab = match self.tab_obj(id) {
+            Some(tab) => tab,
+            // A built-in tab's entry is made the first time someone touches it.
+            None if BUILTIN_TABS.contains(&id) => self
+                .doc
+                .put_object(self.obj("tabs"), id, ObjType::Map)
+                .expect("put tab"),
+            None => return false,
+        };
+        if self.bool_of(&tab, "on") != on || self.doc.get(&tab, "on").ok().flatten().is_none() {
+            self.doc.put(&tab, "on", on).expect("put tab");
+        }
+        true
+    }
+
+    /// Add an app's tab, shown, for the wasm on offer as `file`. Returns the app's id.
+    pub fn add_app_tab(
+        &mut self,
+        me: &str,
+        name: &str,
+        file: &str,
+        hash: &str,
+        size: u64,
+    ) -> String {
+        let id = entry_key();
+        let t = self
+            .doc
+            .put_object(self.obj("tabs"), id.as_str(), ObjType::Map)
+            .expect("put tab");
+        self.doc.put(&t, "kind", "app").unwrap();
+        self.doc.put(&t, "name", name).unwrap();
+        self.doc.put(&t, "file", file).unwrap();
+        self.doc.put(&t, "hash", hash).unwrap();
+        self.doc.put(&t, "size", size as i64).unwrap();
+        self.doc.put(&t, "from", me).unwrap();
+        self.doc.put(&t, "ts", now_ms()).unwrap();
+        self.doc.put(&t, "on", true).unwrap();
+        id
+    }
+
     // ---- apps -------------------------------------------------------------------------
 
     /// The app's section, made if it is not there yet. Every peer makes it with the identical change
@@ -571,6 +679,39 @@ mod tests {
         sync(&mut a, &mut b);
         assert!(b.app_section("chess").is_some());
         assert_eq!(a.heads(), b.heads());
+    }
+
+    #[test]
+    fn tabs_are_shared() {
+        let (mut a, mut b) = (GroupDoc::new(), GroupDoc::new());
+        let on = |d: &GroupDoc| {
+            d.tabs()
+                .iter()
+                .map(|t| (t.id.clone(), t.on))
+                .collect::<Vec<_>>()
+        };
+        assert!(a.tabs().iter().all(|t| t.on && t.app.is_none()));
+        assert!(a.set_tab("texts", false));
+        assert!(!a.set_tab("nope", false));
+        let id = b.add_app_tab("bob", "chess.wasm", "f1", "abcd", 10);
+        sync(&mut a, &mut b);
+        assert_eq!(on(&a), on(&b));
+        assert_eq!(
+            on(&a),
+            [
+                ("files", true),
+                ("texts", false),
+                ("pad", true),
+                (id.as_str(), true)
+            ]
+            .map(|(id, on)| (id.to_owned(), on))
+        );
+        a.set_tab(&id, false);
+        b.set_tab("texts", true);
+        sync(&mut a, &mut b);
+        assert_eq!(on(&b)[1..], on(&a)[1..]);
+        assert!(!b.tabs()[3].on && b.tabs()[1].on);
+        assert_eq!(b.tabs()[3].app.as_ref().unwrap().file, "f1");
     }
 
     #[test]

@@ -16,7 +16,7 @@ class Nav(val backend: Backend) {
     /** "home" | "groups" | "group" | "peers" | "add" | "settings" */
     var page by mutableStateOf("home")
         private set
-    /** "files" | "texts" | "pad" | "apps" | "info" */
+    /** "files" | "texts" | "pad" | an app's id | "info" */
     var groupTab by mutableStateOf("files")
     var edit by mutableStateOf<Edit?>(null)
     var apps by mutableStateOf<List<AppRow>>(emptyList())

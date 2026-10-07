@@ -20,7 +20,7 @@ Rust peer-to-peer app (desktop and Android) with a Kotlin Multiplatform (Compose
 
 ## What a group does
 
-Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs`) that members sync over their iroh connections (`src/core/sharing.rs`). It holds the member list, the file offers, the texts and the scratchpad. Documents live in `groups/<id>.am` next to `state.json`.
+Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs`) that members sync over their iroh connections (`src/core/sharing.rs`). It holds the member list, the file offers, the texts, the scratchpad, the group's tabs and the apps' data. Documents live in `groups/<id>.am` next to `state.json`.
 
 - **Files**: an offer is an entry in the document (name, size, blake3 hash, who offered it, who has downloaded it). The bytes stay on the offerer's device and are sent straight to whoever downloads them, verified against the hash. Per group, on each device:
   - *Download every file automatically* (default **on**): new offers are fetched as soon as the offerer is reachable. Turn it off to get a Download button instead.
@@ -28,7 +28,8 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
   - On Android there are three pickers: any file, photos and videos, and installed apps (the app's APK). Downloads end up in `Download/flipflop`.
 - **Texts**: not a chat, a feed of pasted links, codes and snippets, each labelled with the name of the device that sent it. Links get an Open button; everything has Copy; you can delete your own.
 - **Scratchpad**: one big plain-text document everybody can edit; concurrent edits merge, and your cursor stays put when someone else edits.
-- **Apps**: placeholder. Planned: WebAssembly apps shared in the group, run on every device and rendered with a hypereffect.dev interface.
+- **Tabs**: Files, Texts and Scratchpad, plus one per app. Which ones show is part of the document, so it is the same for every member, and anyone can switch them in the group's settings.
+- **Apps**: a WebAssembly file added from the group's settings becomes a tab. Every member's device fetches it while its tab is on (whatever the download settings; it is not listed with the files), keeps it in `apps/<hash>.wasm` and serves it to the others. The runtime (`src/apps.rs`) gives each app its own section of the document, read and written by path in CBOR, and tells it what changed as patches. Not yet: running apps in the app and showing their hypereffect.dev interface.
 
 ## Guest links
 
