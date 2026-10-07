@@ -1,30 +1,22 @@
 mod common;
 
 use common::{MockEventEmitter, TestFixture};
-use engine::{download, start_share, ReceiveOptions, SendOptions};
 
 #[tokio::test]
 async fn e2e_large_file_integrity() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_large_file("large.bin", 10_000_000);
     let recv_dir = fixture.output_dir();
 
-    let share = start_share(source.clone(), SendOptions::default(), None, None)
+    let share = pair.share(vec![source.clone()], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     assert_eq!(share.size, 10_000_000);
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -46,26 +38,19 @@ async fn e2e_large_file_integrity() {
 
 #[tokio::test]
 async fn e2e_progress_events_emitted() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_large_file("progress.bin", 5_000_000);
     let recv_dir = fixture.output_dir();
 
     let receiver_emitter = MockEventEmitter::new();
 
-    let share = start_share(source, SendOptions::default(), None, None)
+    let share = pair.share(vec![source], None)
         .await
-        .expect("start_share should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed");
 

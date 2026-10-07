@@ -1,7 +1,8 @@
 #![allow(dead_code, unused_imports)]
 
 use engine::{
-    DeviceInfo, Discoverability, DiscoveryModeOption, EventEmitter, NearbyDevice, NodeService,
+    AppHandle, DeviceInfo, Discoverability, DiscoveryModeOption, EventEmitter, NearbyDevice,
+    NodeService, NodeShare, ReceiveResult,
 };
 use iroh::endpoint::RelayMode;
 use std::path::PathBuf;
@@ -75,7 +76,7 @@ impl EventEmitter for MockEventEmitter {
 }
 
 /// Returns a cancel sender/receiver pair where the sender is never triggered.
-/// Pass the receiver to [`engine::download`] for tests that don't need cancellation.
+/// Pass the receiver to [`TransferPair::download`] for tests that don't need cancellation.
 /// Keep the returned sender alive (binding it with `_`) until after `download` returns.
 pub fn no_cancel() -> (
     tokio::sync::oneshot::Sender<()>,
@@ -364,4 +365,89 @@ pub async fn spawn_paired_nodes() -> (TestNode, TestNode) {
     .await;
 
     (host, joiner)
+}
+
+/// A sender and a receiver node, paired with each other, for transfer tests.
+/// Relay is off: transfers run over the direct addresses the ticket carries,
+/// so these tests need no internet.
+pub struct TransferPair {
+    pub sender: TestNode,
+    pub receiver: TestNode,
+}
+
+pub async fn spawn_transfer_pair() -> TransferPair {
+    let sender = spawn_offline_node("sender").await;
+    let receiver = spawn_offline_node("receiver").await;
+    sender
+        .remember_paired_device_for_tests(&receiver.endpoint_id())
+        .await
+        .expect("sender remembers receiver");
+    receiver
+        .remember_paired_device_for_tests(&sender.endpoint_id())
+        .await
+        .expect("receiver remembers sender");
+    TransferPair { sender, receiver }
+}
+
+async fn spawn_offline_node(display_name: &str) -> TestNode {
+    let dir = tempfile::tempdir().expect("node temp dir");
+    let emitter = MockEventEmitter::new();
+    let service = tokio::time::timeout(
+        NODE_START_TIMEOUT,
+        NodeService::start(
+            dir.path(),
+            RelayMode::Disabled,
+            DiscoveryModeOption::Default,
+            Discoverability::Off,
+            Some(emitter.clone()),
+        ),
+    )
+    .await
+    .expect("node start timed out")
+    .expect("node start failed");
+    service
+        .set_device_display_name(display_name)
+        .expect("set display name");
+
+    TestNode {
+        service,
+        events: emitter,
+        _dir: dir,
+    }
+}
+
+fn app_handle(emitter: Option<Arc<MockEventEmitter>>) -> AppHandle {
+    emitter.map(|e| e as Arc<dyn EventEmitter>)
+}
+
+impl TransferPair {
+    /// Shares `paths` from the sender to the receiver.
+    pub async fn share(
+        &self,
+        paths: Vec<PathBuf>,
+        emitter: Option<Arc<MockEventEmitter>>,
+    ) -> anyhow::Result<NodeShare> {
+        self.sender
+            .share_with_peer(&self.receiver.endpoint_id(), paths, app_handle(emitter))
+            .await
+    }
+
+    /// Downloads `ticket` from the sender into `output_dir`.
+    pub async fn download(
+        &self,
+        ticket: &str,
+        output_dir: PathBuf,
+        emitter: Option<Arc<MockEventEmitter>>,
+        cancel_rx: tokio::sync::oneshot::Receiver<()>,
+    ) -> anyhow::Result<ReceiveResult> {
+        self.receiver
+            .download_from_peer(
+                &self.sender.endpoint_id(),
+                ticket,
+                output_dir,
+                app_handle(emitter),
+                cancel_rx,
+            )
+            .await
+    }
 }

@@ -5,7 +5,6 @@
 mod common;
 
 use common::{MockEventEmitter, TestFixture};
-use engine::{download, start_share, ReceiveOptions, SendOptions};
 
 /// `<bytes>:<total>:<speed x1000>`
 fn parse_progress(payload: &str) -> (u64, u64, f64) {
@@ -42,6 +41,7 @@ async fn wait_for_event(emitter: &MockEventEmitter, name: &str) {
 
 #[tokio::test]
 async fn e2e_sender_and_receiver_report_the_same_transfer_size() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source_dir = fixture.create_dir_with_files(
         "share_me",
@@ -57,25 +57,12 @@ async fn e2e_sender_and_receiver_report_the_same_transfer_size() {
     let sender_emitter = MockEventEmitter::new();
     let receiver_emitter = MockEventEmitter::new();
 
-    let share = start_share(
-        source_dir,
-        SendOptions::default(),
-        Some(sender_emitter.clone()),
-        None,
-    )
+    let share = pair.share(vec![source_dir], Some(sender_emitter.clone()))
     .await
-    .expect("start_share should succeed");
+    .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -108,6 +95,7 @@ async fn e2e_sender_and_receiver_report_the_same_transfer_size() {
 
 #[tokio::test]
 async fn e2e_progress_never_moves_backwards() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_large_file("steady.bin", 3_000_000);
     let recv_dir = fixture.output_dir();
@@ -115,25 +103,12 @@ async fn e2e_progress_never_moves_backwards() {
     let sender_emitter = MockEventEmitter::new();
     let receiver_emitter = MockEventEmitter::new();
 
-    let share = start_share(
-        source,
-        SendOptions::default(),
-        Some(sender_emitter.clone()),
-        None,
-    )
+    let share = pair.share(vec![source], Some(sender_emitter.clone()))
     .await
-    .expect("start_share should succeed");
+    .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir, Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -161,6 +136,7 @@ async fn e2e_progress_never_moves_backwards() {
 
 #[tokio::test]
 async fn e2e_completion_events_carry_a_wire_duration() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let source = fixture.create_large_file("timed.bin", 2_000_000);
     let recv_dir = fixture.output_dir();
@@ -168,25 +144,12 @@ async fn e2e_completion_events_carry_a_wire_duration() {
     let sender_emitter = MockEventEmitter::new();
     let receiver_emitter = MockEventEmitter::new();
 
-    let share = start_share(
-        source,
-        SendOptions::default(),
-        Some(sender_emitter.clone()),
-        None,
-    )
+    let share = pair.share(vec![source], Some(sender_emitter.clone()))
     .await
-    .expect("start_share should succeed");
+    .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir, Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -221,6 +184,7 @@ async fn e2e_completion_events_carry_a_wire_duration() {
 
 #[tokio::test]
 async fn e2e_a_small_fast_transfer_still_reports_a_duration() {
+    let pair = common::spawn_transfer_pair().await;
     // A single-write payload used to report 0ms, which the success screen
     // renders as "NA" for duration and average speed.
     let fixture = TestFixture::new();
@@ -230,25 +194,12 @@ async fn e2e_a_small_fast_transfer_still_reports_a_duration() {
     let sender_emitter = MockEventEmitter::new();
     let receiver_emitter = MockEventEmitter::new();
 
-    let share = start_share(
-        source,
-        SendOptions::default(),
-        Some(sender_emitter.clone()),
-        None,
-    )
+    let share = pair.share(vec![source], Some(sender_emitter.clone()))
     .await
-    .expect("start_share should succeed");
+    .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir),
-            ..Default::default()
-        },
-        Some(receiver_emitter.clone()),
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir, Some(receiver_emitter.clone()), cancel_rx)
     .await
     .expect("download should succeed");
 

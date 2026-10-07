@@ -14,9 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use engine::{
-    resolve_relay_mode_with_fallback, sanitize_folder_name, start_share_items, AddrInfoOptions,
-    AppHandle, DiscoveryModeOption, EventEmitter, NodeService, PairedDeviceInfo, ReceiveOptions,
-    RelayModeOption, SendOptions, TransferDirection, TransferPeer, TransferStatus,
+    sanitize_folder_name, AppHandle, EventEmitter, NodeService, NodeShare, PairedDeviceInfo,
+    TransferDirection, TransferPeer, TransferStatus,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
@@ -25,7 +24,6 @@ use crate::emitter::apply_transfer_event;
 use crate::format::fmt_bytes;
 use crate::platform::{self, toast, toast_later};
 use crate::recorder::{Ctx, Recorder};
-use crate::settings::Settings;
 use crate::{android, AppWindow, Logic, OutboxRow, State, TransferRow};
 
 /// Cross-thread transfer bookkeeping, shared through `AppCtx`.
@@ -58,7 +56,8 @@ impl Transfers {
 }
 
 struct ShareHandle {
-    send_result: engine::SendResult,
+    /// Served from the node's endpoint until this handle drops.
+    _share: NodeShare,
     recorder: Arc<Recorder>,
     peer_name: String,
     /// Android share-sheet files this share serves; deleted once no open
@@ -67,18 +66,6 @@ struct ShareHandle {
     /// Private dir holding a pasted text's file; removed when the handle
     /// drops (end of `shutdown_share`).
     _cleanup: RemoveDirOnDrop,
-}
-
-impl ShareHandle {
-    async fn stop(&self) {
-        match tokio::time::timeout(Duration::from_secs(2), self.send_result.router.shutdown()).await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!("router shutdown error: {e}"),
-            Err(_) => tracing::warn!("router shutdown timed out after 2s"),
-        }
-        self.send_result.router.endpoint().close().await;
-    }
 }
 
 // ------------------------------------------------------ row model (UI thread)
@@ -253,23 +240,6 @@ impl EventEmitter for TransferEmitter {
         self.emit(event_name, Some(payload));
         Ok(())
     }
-}
-
-/// Resolve the configured relay (with public fallback when selected) and
-/// discovery mode for a transfer. Mirrors the Tauri shell: custom relays are
-/// probed, and a strict-but-unreachable relay fails the transfer.
-async fn resolve_network(
-    settings: &Arc<Mutex<Settings>>,
-) -> Result<(RelayModeOption, DiscoveryModeOption), String> {
-    let (arg, discovery_mode) = {
-        let guard = settings.lock().unwrap();
-        (guard.relay_config_arg(), guard.discovery_mode())
-    };
-    let (relay_mode, fell_back) = resolve_relay_mode_with_fallback(Some(arg)).await?;
-    if fell_back {
-        tracing::warn!("custom relay unreachable; fell back to public relays");
-    }
-    Ok((relay_mode, discovery_mode))
 }
 
 // --------------------------------------------------------------------- send
@@ -540,40 +510,17 @@ fn start_send(
         };
         let app_handle: AppHandle = Some(Arc::new(emitter));
 
-        let (relay_mode, discovery_mode) = match resolve_network(&ctx.settings).await {
-            Ok(v) => v,
+        let share = match node.share_with_peer(&peer_id, paths, app_handle).await {
+            Ok(share) => share,
             Err(e) => {
+                tracing::warn!(%peer_id, "send: share setup failed: {e:#}");
                 forget_stopped(&ctx, &key).await;
-                return fail(&weak, &key, format!("Could not configure network: {e}"));
-            }
-        };
-        let options = SendOptions {
-            relay_mode,
-            discovery_mode,
-            ticket_type: AddrInfoOptions::RelayAndAddresses,
-            magic_ipv4_addr: None,
-            magic_ipv6_addr: None,
-        };
-        let share = match tokio::time::timeout(
-            Duration::from_secs(60),
-            start_share_items(paths, options, &app_handle, Some(metadata)),
-        )
-        .await
-        {
-            Ok(Ok(share)) => share,
-            failed => {
-                let error = match failed {
-                    Ok(Err(e)) => format!("{e:#}"),
-                    _ => "timed out".to_string(),
-                };
-                tracing::warn!(%peer_id, "send: share setup failed: {error}");
-                forget_stopped(&ctx, &key).await;
-                return fail(&weak, &key, format!("Could not start share: {error}"));
+                return fail(&weak, &key, format!("Could not start share: {e:#}"));
             }
         };
         let ticket = share.ticket.clone();
         let handle = ShareHandle {
-            send_result: share,
+            _share: share,
             recorder,
             peer_name: peer_name.clone(),
             staged,
@@ -635,17 +582,18 @@ async fn forget_stopped(ctx: &AppCtx, key: &str) {
     ctx.transfers.shares.lock().await.stopped.remove(key);
 }
 
-/// Close the share's endpoint. Its share-sheet files are deleted once the
-/// peer has them (`sent`); otherwise they go back to the queue for a retry.
+/// Stop serving the share. Its share-sheet files are deleted once the peer
+/// has them (`sent`); otherwise they go back to the queue for a retry.
 async fn shutdown_share(ctx: &AppCtx, handle: ShareHandle, sent: bool) {
-    handle.stop().await;
-    if handle.staged.is_empty() {
+    let staged = handle.staged.clone();
+    drop(handle);
+    if staged.is_empty() {
         return;
     }
     if sent {
-        android::clear_outbox(&handle.staged);
+        android::clear_outbox(&staged);
     }
-    release(ctx, &handle.staged);
+    release(ctx, &staged);
 }
 
 // ---------------------------------------------------- share-sheet queue
@@ -729,7 +677,7 @@ pub(crate) fn refresh_outbox(ctx: &AppCtx) {
 
 /// The peer has the files: close the share and settle the row.
 async fn finish_send(ctx: AppCtx, key: String) {
-    // Let the last acknowledgements flush before tearing the endpoint down.
+    // Let the last acknowledgements flush before closing the share.
     tokio::time::sleep(Duration::from_secs(1)).await;
     let Some(handle) = take_share(&ctx, &key).await else {
         return;
@@ -907,17 +855,6 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
             tracing::warn!(%id, "receive: accept handshake failed: {e}");
             return give_up(format!("Could not accept files from {peer_name}: {e}"));
         }
-        let (relay_mode, discovery_mode) = match resolve_network(&ctx.settings).await {
-            Ok(v) => v,
-            Err(e) => return give_up(format!("Could not configure network: {e}")),
-        };
-        let options = ReceiveOptions {
-            output_dir: Some(save_dir.clone()),
-            relay_mode,
-            discovery_mode,
-            magic_ipv4_addr: None,
-            magic_ipv6_addr: None,
-        };
         let recorder = Arc::new(Recorder::new(
             ctx.history.clone(),
             TransferDirection::Receive,
@@ -949,7 +886,9 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
         toast_later(&weak, format!("{peer_name} is sending you files"), false);
         post_update(&weak, &key, |row| row.status = "Connecting…".into());
 
-        let result = engine::download(invite.ticket, options, app_handle, cancel_rx).await;
+        let result = node
+            .download_from_peer(&id, &invite.ticket, save_dir.clone(), app_handle, cancel_rx)
+            .await;
         let cancelled = ctx
             .transfers
             .recv_cancels

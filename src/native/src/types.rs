@@ -1,6 +1,4 @@
 use std::path::PathBuf;
-use iroh_blobs::api::TempTag;
-use n0_future::task::AbortOnDropHandle;
 
 #[derive(Debug)]
 pub struct AutoCleanupDir {
@@ -39,27 +37,6 @@ impl Drop for AutoCleanupDir {
             }
             Err(_) => remove(),
         }
-    }
-}
-
-pub struct SendResult {
-    pub ticket: String,
-    pub hash: String,
-    pub size: u64,
-    pub entry_type: String,
-    pub router: iroh::protocol::Router,
-    pub temp_tag: TempTag,
-    pub _progress_handle: AbortOnDropHandle<anyhow::Result<()>>,
-    pub _store: iroh_blobs::store::fs::FsStore,
-    pub blobs_data_dir: AutoCleanupDir,
-    pub completed_peers: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl SendResult {
-    /// Peers that pulled the entire payload during this share session.
-    pub fn completed_peers(&self) -> usize {
-        self.completed_peers
-            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

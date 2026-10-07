@@ -1,37 +1,24 @@
 mod common;
 
 use common::TestFixture;
-use engine::{download, start_share_items, ReceiveOptions, SendOptions};
 
 #[tokio::test]
 async fn e2e_multi_file_roundtrip() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let file_a = fixture.create_file("doc.pdf", &vec![0xAA; 5000]);
     let file_b = fixture.create_file("photo.jpg", &vec![0xBB; 3000]);
     let file_c = fixture.create_file("notes.txt", b"some notes here");
     let recv_dir = fixture.output_dir();
 
-    let share = start_share_items(
-        vec![file_a, file_b, file_c],
-        SendOptions::default(),
-        &None,
-        None,
-    )
+    let share = pair.share(vec![file_a, file_b, file_c], None)
     .await
-    .expect("start_share_items should succeed");
+    .expect("share should succeed");
 
     assert_eq!(share.entry_type, "collection");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 
@@ -53,6 +40,7 @@ async fn e2e_multi_file_roundtrip() {
 
 #[tokio::test]
 async fn e2e_mixed_files_and_dirs() {
+    let pair = common::spawn_transfer_pair().await;
     let fixture = TestFixture::new();
     let single_file = fixture.create_file("standalone.txt", b"I am standalone");
     let dir = fixture.create_dir_with_files(
@@ -64,20 +52,12 @@ async fn e2e_mixed_files_and_dirs() {
     );
     let recv_dir = fixture.output_dir();
 
-    let share = start_share_items(vec![single_file, dir], SendOptions::default(), &None, None)
+    let share = pair.share(vec![single_file, dir], None)
         .await
-        .expect("start_share_items should succeed");
+        .expect("share should succeed");
 
     let (_cancel_tx, cancel_rx) = common::no_cancel();
-    download(
-        share.ticket.clone(),
-        ReceiveOptions {
-            output_dir: Some(recv_dir.clone()),
-            ..Default::default()
-        },
-        None,
-        cancel_rx,
-    )
+    pair.download(&share.ticket, recv_dir.clone(), None, cancel_rx)
     .await
     .expect("download should succeed");
 
