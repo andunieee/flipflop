@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine::{
+use crate::engine::{
     sanitize_folder_name, AppHandle, EventEmitter, NodeService, NodeShare, PairedDeviceInfo,
     TransferDirection, TransferPeer, TransferStatus,
 };
@@ -276,21 +276,21 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
-fn path_type_of(paths: &[PathBuf]) -> Option<engine::TransferPathType> {
+fn path_type_of(paths: &[PathBuf]) -> Option<crate::engine::TransferPathType> {
     match paths {
-        [only] if only.is_dir() => Some(engine::TransferPathType::Directory),
-        [_] => Some(engine::TransferPathType::File),
+        [only] if only.is_dir() => Some(crate::engine::TransferPathType::Directory),
+        [_] => Some(crate::engine::TransferPathType::File),
         _ => None,
     }
 }
 
-fn metadata_for(paths: &[PathBuf]) -> engine::FileMetadata {
+fn metadata_for(paths: &[PathBuf]) -> crate::engine::FileMetadata {
     let mime_type = match paths {
         [only] if only.is_dir() => "inode/directory",
         [_] => "application/octet-stream",
         _ => "application/x-iroh-collection",
     };
-    engine::FileMetadata {
+    crate::engine::FileMetadata {
         file_name: paths
             .first()
             .map(|p| path_name(p))
@@ -411,7 +411,7 @@ fn write_paste_file(text: &str) -> std::io::Result<(PathBuf, PathBuf)> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    let dir = engine::storage::temp_dir().join(format!(".tm-paste-{nanos:x}"));
+    let dir = crate::engine::storage::temp_dir().join(format!(".tm-paste-{nanos:x}"));
     std::fs::create_dir_all(&dir)?;
     let file = dir.join(PASTE_FILE_NAME);
     std::fs::write(&file, text)?;
@@ -764,11 +764,11 @@ fn partial_store_path(ticket: &str) -> Option<String> {
     let ticket = iroh_blobs::ticket::BlobTicket::from_str(ticket).ok()?;
     let dir = format!(
         "{}{}",
-        engine::storage::RECV_DIR_PREFIX,
+        crate::engine::storage::RECV_DIR_PREFIX,
         ticket.hash().to_hex()
     );
     Some(
-        engine::storage::temp_dir()
+        crate::engine::storage::temp_dir()
             .join(dir)
             .to_string_lossy()
             .into_owned(),
@@ -1237,7 +1237,7 @@ mod tests {
         assert_eq!(dir_size(&dir.join("missing")), 0);
         assert!(matches!(
             path_type_of(std::slice::from_ref(&dir)),
-            Some(engine::TransferPathType::Directory)
+            Some(crate::engine::TransferPathType::Directory)
         ));
         let both = [dir.join("a"), dir.join("sub")];
         assert!(path_type_of(&both).is_none());

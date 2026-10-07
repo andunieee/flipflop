@@ -1,7 +1,7 @@
 //! Transfer-history recording driven by the same engine events the UI sees.
 //! A slim re-implementation of the Tauri shell's `HistoryRecordingEmitter`.
 
-use engine::{
+use crate::engine::{
     unix_now_ms, TransferDirection, TransferHistoryStore, TransferPathType, TransferPeer,
     TransferRecord, TransferStatus,
 };
