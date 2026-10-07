@@ -537,12 +537,13 @@ fn start_node(ctx: &AppCtx) {
         }
         let relay_mode: iroh::endpoint::RelayMode = relay.into();
         let emitter: AppHandle = Some(Arc::new(MainEmitter::new(queue)));
-        match NodeService::start(
+        match NodeService::start_with_bluetooth(
             &data_dir,
             relay_mode,
             discovery_mode,
             discoverability,
             emitter,
+            crate::android::bluetooth_hub(),
         )
         .await
         {
