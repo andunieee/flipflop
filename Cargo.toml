@@ -1,6 +1,6 @@
 [package]
 name = "tunnelmanager-slint"
-version = "0.1.0"
+version = "0.0.2"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Slint-based GUI for TunnelManager, using the engine crate directly (desktop + Android)"
