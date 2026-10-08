@@ -1,11 +1,13 @@
 name: Release
 
 # Builds every package when a "v" tag is pushed (or by hand, to just check they build):
-#   linux   : .deb, .rpm, .AppImage and a .tar.gz of the portable app (x86_64)
+#   linux   : .deb, .rpm, .AppImage, .flatpak, an Arch .pkg.tar.zst and a .tar.gz of the portable app (x86_64)
 #   windows : .msi installer and a portable .zip (x86_64)
 #   macos   : .dmg (Apple Silicon, unsigned)
 #   android : .apk (signed with the FLIPFLOP_* secrets when set, with the debug key otherwise)
 # The desktop packages bundle their own Java runtime and the release libflipflop.
+# After the GitHub release, the Arch package goes to the AUR (flipflop-bin) and the .apk to Zapstore; each is skipped,
+# with a warning, until its secrets are set (see "Publishing" in the README).
 
 on:
   push:
@@ -67,6 +69,82 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux
+          path: dist/
+
+  # The portable app from the linux job, in the freedesktop runtime (packaging/flatpak).
+  flatpak:
+    name: flatpak (x86_64)
+    needs: linux
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: linux
+      - name: Stage the portable app
+        id: stage
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          cp linux/flipflop-linux-x86_64-v${version}.tar.gz packaging/flatpak/flipflop.tar.gz
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: flipflop-linux-x86_64-v${{ steps.stage.outputs.version }}.flatpak
+          manifest-path: packaging/flatpak/dev.flipflop.app.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          arch: x86_64
+          upload-artifact: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: flipflop-linux-x86_64-v${{ steps.stage.outputs.version }}.flatpak
+
+  # The .deb from the linux job, repackaged for Arch (packaging/aur/pkgbuild.sh, the same PKGBUILD the AUR gets).
+  # Signed when the GPG_PRIVATE_KEY (base64 of an exported secret key) and GPG_KEY_ID secrets are set.
+  arch:
+    name: arch (x86_64)
+    needs: linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: linux
+
+      - name: Build the .pkg.tar.zst
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          mkdir -p pkgbuild dist
+          cp "linux/flipflop-linux-amd64-v${version}.deb" "pkgbuild/flipflop-${version}.deb"
+          packaging/aur/pkgbuild.sh "$version" "$(sha256sum pkgbuild/*.deb | cut -d' ' -f1)" > pkgbuild/PKGBUILD
+          cp packaging/aur/flipflop-bin.install pkgbuild/
+          docker run --rm -v "$PWD/pkgbuild":/pkg archlinux:latest bash -c '
+            set -e
+            pacman -Sy --noconfirm --needed base-devel
+            useradd -m builder
+            chown -R builder:builder /pkg
+            su builder -c "cd /pkg && makepkg --nodeps --noconfirm --noprogressbar"
+          '
+          cp pkgbuild/flipflop-bin-${version}-1-x86_64.pkg.tar.zst "dist/flipflop-linux-x86_64-v${version}.pkg.tar.zst"
+
+      - name: Sign
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          [ -n "$GPG_PRIVATE_KEY" ] || { echo "::warning::GPG_PRIVATE_KEY is not set, the Arch package is not signed"; exit 0; }
+          echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+          gpg --batch --yes --local-user "$GPG_KEY_ID" --detach-sign --no-armor dist/*.pkg.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
           path: dist/
 
   windows:
@@ -183,7 +261,7 @@ jobs:
           path: dist/
 
   release:
-    needs: [linux, windows, macos, android]
+    needs: [linux, flatpak, arch, windows, macos, android]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -201,10 +279,69 @@ jobs:
           cat > "$NOTES" <<'EOF'
           Every desktop package bundles its own Java runtime.
 
-          - **linux**: `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE), `.AppImage` (any distro, needs FUSE: or run it with `--appimage-extract-and-run`) or `.tar.gz` (unpack and run `flipflop/bin/flipflop`). Bluetooth needs BlueZ.
+          - **linux**: `.flatpak` (`flatpak install --user flipflop-*.flatpak`), `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE), `.pkg.tar.zst` (Arch, or `flipflop-bin` from the AUR), `.AppImage` (any distro, needs FUSE: or run it with `--appimage-extract-and-run`; `--install-desktop-entry` adds it to the menu) or `.tar.gz` (unpack and run `flipflop/bin/flipflop`). Bluetooth needs BlueZ.
           - **windows**: the `-setup-` `.msi` (per user, no admin rights), or extract the `.zip` and run `flipflop\flipflop.exe`. Unsigned: SmartScreen asks "Run anyway".
           - **macos**: Apple Silicon `.dmg`, unsigned: first launch right-click > Open, or `xattr -dr com.apple.quarantine /Applications/flipflop.app`.
-          - **android**: the `.apk` (Android 7+). Allow installing from unknown sources.
+          - **android**: the `.apk` (Android 7+), or from [Zapstore](https://zapstore.dev). Allow installing from unknown sources.
           EOF
           gh release create "$TAG" --verify-tag --generate-notes --notes-file "$NOTES"
           gh release upload "$TAG" "$FLAT"/* --clobber
+
+  # Pushes the PKGBUILD of flipflop-bin to the AUR. Needs AUR_SSH_PRIVATE_KEY: the private half of an SSH key added to
+  # your AUR account (https://aur.archlinux.org/account). The first push creates the package.
+  aur:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the PKGBUILD
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$KEY" ] || { echo "::warning::AUR_SSH_PRIVATE_KEY is not set, not publishing to the AUR"; exit 0; }
+          version="${TAG#v}"
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "flipflop-linux-amd64-${TAG}.deb" --dir deb
+          mkdir -p aur
+          packaging/aur/pkgbuild.sh "$version" "$(sha256sum deb/*.deb | cut -d' ' -f1)" > aur/PKGBUILD
+          cp packaging/aur/flipflop-bin.install aur/
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        if: steps.stage.outputs.version != ''
+        with:
+          pkgname: flipflop-bin
+          pkgbuild: aur/PKGBUILD
+          assets: aur/flipflop-bin.install
+          commit_username: andunie
+          commit_email: andunie@cassis.cash
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "upgpkg: flipflop-bin ${{ steps.stage.outputs.version }}-1"
+
+  # Publishes the release's .apk to Zapstore (zapstore.yaml). Needs ZAPSTORE_SIGN_WITH: the nsec (or a bunker:// URL)
+  # of the Nostr key that publishes it. Zapstore ties the app to its signing certificate, so set the FLIPFLOP_KEYSTORE_*
+  # secrets first: a debug-signed .apk would bind it to the runner's throwaway key.
+  zapstore:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish
+        env:
+          SIGN_WITH: ${{ secrets.ZAPSTORE_SIGN_WITH }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -n "$SIGN_WITH" ] || { echo "::warning::ZAPSTORE_SIGN_WITH is not set, not publishing to Zapstore"; exit 0; }
+          url=$(curl -fsSL https://api.github.com/repos/zapstore/zsp/releases/latest \
+            | grep browser_download_url | grep linux-amd64 | cut -d'"' -f4)
+          curl -fsSL "$url" -o "$RUNNER_TEMP/zsp"
+          chmod +x "$RUNNER_TEMP/zsp"
+          "$RUNNER_TEMP/zsp" publish -quiet -skip-certificate-linking zapstore.yaml

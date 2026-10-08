@@ -8,3 +8,4 @@ kmp/androidApp/blew-kt/
 kmp/local.properties
 *.jks
 *.keystore
+/packaging/flatpak/flipflop.tar.gz

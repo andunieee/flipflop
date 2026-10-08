@@ -43,6 +43,30 @@ rpm:
 appimage:
     packaging/linux/appimage.sh
 
+# .flatpak in dist/, made from the portable app (needs flatpak-builder; the freedesktop 25.08 runtime comes from flathub)
+flatpak:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+    (cd kmp && ./gradlew :desktopApp:createDistributable)
+    tar -czf packaging/flatpak/flipflop.tar.gz -C kmp/desktopApp/build/compose/binaries/main/app flipflop
+    flatpak-builder --user --force-clean --install-deps-from=flathub --state-dir=dist/flatpak-state \
+        --repo=dist/flatpak-repo dist/flatpak-build packaging/flatpak/dev.flipflop.app.yml
+    flatpak build-bundle dist/flatpak-repo "dist/flipflop-linux-x86_64-v${version}.flatpak" dev.flipflop.app
+
+# Arch .pkg.tar.zst in dist/, from the .deb (needs makepkg)
+arch: deb
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+    dir=$(mktemp -d)
+    cp kmp/desktopApp/build/compose/binaries/main/deb/*.deb "$dir/flipflop-${version}.deb"
+    packaging/aur/pkgbuild.sh "$version" "$(sha256sum "$dir"/*.deb | cut -d' ' -f1)" > "$dir/PKGBUILD"
+    cp packaging/aur/flipflop-bin.install "$dir/"
+    (cd "$dir" && makepkg --nodeps --noconfirm)
+    mkdir -p dist
+    mv "$dir"/flipflop-bin-*.pkg.tar.zst dist/
+
 # portable app folder (with its own Java runtime) in kmp/desktopApp/build/compose/binaries/main/app
 portable:
     cd kmp && ./gradlew :desktopApp:createDistributable

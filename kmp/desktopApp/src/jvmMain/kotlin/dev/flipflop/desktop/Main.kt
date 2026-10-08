@@ -29,7 +29,16 @@ private fun pointJnaAtBundledLibrary() {
     System.getProperty("compose.application.resources.dir")?.let { System.setProperty("jna.library.path", it) }
 }
 
-fun main() {
+fun main(args: Array<String>) {
+    if ("--install-desktop-entry" in args) {
+        try {
+            installDesktopEntry()
+        } catch (e: Exception) {
+            System.err.println("Could not install the desktop entry: ${e.message}")
+            kotlin.system.exitProcess(1)
+        }
+        return
+    }
     pointJnaAtBundledLibrary()
     val backend = startBackend(dataDir())
     application {

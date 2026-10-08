@@ -77,6 +77,16 @@ tasks.matching { it.name == "createDistributable" || it.name == "createReleaseDi
     }
 }
 
+// The menu entry and icons that `--install-desktop-entry` writes (DesktopEntry.kt), as resources under desktop-entry/.
+val desktopEntry = tasks.register<Sync>("desktopEntry") {
+    into(layout.buildDirectory.dir("generated/desktopEntry"))
+    into("desktop-entry") {
+        from(repo.resolve("packaging/linux/dev.flipflop.app.desktop"))
+        into("icons") { from(repo.resolve("packaging/icons")) }
+    }
+}
+kotlin.sourceSets.getByName("jvmMain").resources.srcDir(desktopEntry)
+
 // JNA finds the debug Rust library here when running from Gradle (a packaged app bundles the release one).
 tasks.matching { it.name == "run" }.configureEach {
     (this as JavaExec).jvmArgs("-Djna.library.path=$cargoTarget/debug")

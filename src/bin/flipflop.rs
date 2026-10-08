@@ -72,10 +72,17 @@ fn open_gui(dir: &Path, given: Option<PathBuf>) -> Result<()> {
         );
         return Ok(());
     }
-    let Some(exe) = gui_exe() else {
-        bail!("flipflop-gui not found: install the desktop app, or put flipflop-gui in your PATH");
+    let mut cmd = match gui_exe() {
+        Some(exe) => std::process::Command::new(exe),
+        None if flatpak_installed() => {
+            let mut cmd = std::process::Command::new("flatpak");
+            cmd.args(["run", FLATPAK_ID]);
+            cmd
+        }
+        None => bail!(
+            "flipflop-gui not found: install the desktop app, or put flipflop-gui in your PATH"
+        ),
     };
-    let mut cmd = std::process::Command::new(&exe);
     if let Some(d) = given {
         cmd.env("FLIPFLOP_DIR", d);
     }
@@ -86,12 +93,25 @@ fn open_gui(dir: &Path, given: Option<PathBuf>) -> Result<()> {
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     cmd.spawn()
-        .map_err(|e| anyhow::anyhow!("starting {}: {e}", exe.display()))?;
+        .map_err(|e| anyhow::anyhow!("starting {}: {e}", cmd.get_program().to_string_lossy()))?;
     Ok(())
 }
 
+/// The Flatpak's id (packaging/flatpak), which keeps the identity in the same dir as this client.
+const FLATPAK_ID: &str = "dev.flipflop.app";
+
+fn flatpak_installed() -> bool {
+    cfg!(target_os = "linux")
+        && std::process::Command::new("flatpak")
+            .args(["info", FLATPAK_ID])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+}
+
 /// The GUI launcher: `flipflop-gui` in PATH or next to this binary, else the installed app (whose
-/// launcher is named flipflop, like its shortcuts).
+/// launcher is named flipflop, like its shortcuts). The Flatpak is tried after these.
 fn gui_exe() -> Option<PathBuf> {
     let name = if cfg!(windows) {
         "flipflop-gui.exe"

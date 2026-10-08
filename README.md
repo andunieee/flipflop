@@ -46,7 +46,7 @@ The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that 
 
 ## CLI
 
-`flipflop` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process runs a node on a `--dir`. If the GUI (or a `serve`) already has it, the CLI checks the lock, finds the Unix socket (`ipc.sock` in the dir; a named pipe on Windows, untested) and sends the command there; the GUI runs it and the output comes back. Relative file paths are resolved in the CLI's working directory. `--downloads` is ignored in that case. Give one of them its own `FLIPFLOP_DIR` to keep two identities. `serve` keeps a node running (downloading, serving files) so offers stay available. `flipflop gui` (or `flipflop open`) starts the desktop app on the same `--dir`: `flipflop-gui` from `PATH` or next to `flipflop`, else the installed app (`/opt/flipflop`, `/Applications/flipflop.app`, `%LOCALAPPDATA%\flipflop`). On Linux and macOS the app ships a `bin/flipflop-gui` link to its launcher (the app and its shortcuts are still called flipflop), so `ln -s /opt/flipflop/bin/flipflop-gui ~/.local/bin/` puts it in `PATH` without taking the `flipflop` name.
+`flipflop` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process runs a node on a `--dir`. If the GUI (or a `serve`) already has it, the CLI checks the lock, finds the Unix socket (`ipc.sock` in the dir; a named pipe on Windows, untested) and sends the command there; the GUI runs it and the output comes back. Relative file paths are resolved in the CLI's working directory. `--downloads` is ignored in that case. Give one of them its own `FLIPFLOP_DIR` to keep two identities. `serve` keeps a node running (downloading, serving files) so offers stay available. `flipflop gui` (or `flipflop open`) starts the desktop app on the same `--dir`: `flipflop-gui` from `PATH` or next to `flipflop`, else the installed app (`/opt/flipflop`, `/Applications/flipflop.app`, `%LOCALAPPDATA%\flipflop`, then the Flatpak). On Linux and macOS the app ships a `bin/flipflop-gui` link to its launcher (the app and its shortcuts are still called flipflop), so `ln -s /opt/flipflop/bin/flipflop-gui ~/.local/bin/` puts it in `PATH` without taking the `flipflop` name.
 
     flipflop id                                  # id, name, ticket
     flipflop peers                               # nearby peers and contacts
@@ -74,15 +74,45 @@ library itself (host for desktop, `cargo-ndk` for Android).
 
 ## Install
 
-Grab the file for your system from the [latest release](https://github.com/andunieee/flipflop/releases/latest). Each desktop package carries its own Java runtime.
+Grab the file for your system from the [latest release](https://github.com/andunieee/flipflop/releases/latest), or use the commands below, which all download the latest one. Each desktop package carries its own Java runtime.
 
 <details>
 <summary>Linux</summary>
 
-- **Debian / Ubuntu**: `sudo apt install ./flipflop-linux-amd64-v*.deb`
-- **Fedora / openSUSE**: `sudo dnf install ./flipflop-linux-x86_64-v*.rpm`
-- **AppImage** (any distro): `chmod +x flipflop-linux-x86_64-v*.AppImage && ./flipflop-linux-x86_64-v*.AppImage`. Needs FUSE, or run it with `--appimage-extract-and-run`.
-- **Portable** `.tar.gz`: `tar xzf flipflop-linux-x86_64-v*.tar.gz && ./flipflop/bin/flipflop`
+**Flatpak** (any distro), `.flatpak`, installs it for your user. It keeps its identity in `~/.local/share/flipflop`, like the command line client, and `flipflop gui` finds it:
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*\.flatpak')" -o /tmp/flipflop.flatpak && flatpak install --user -y /tmp/flipflop.flatpak
+```
+
+**Debian / Ubuntu**, `.deb`:
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*\.deb')" -o /tmp/flipflop.deb && sudo apt install /tmp/flipflop.deb
+```
+
+**Fedora / openSUSE**, `.rpm`:
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*\.rpm')" -o /tmp/flipflop.rpm && sudo dnf install /tmp/flipflop.rpm
+```
+
+**Arch**, from the [AUR](https://aur.archlinux.org/packages/flipflop-bin) with your AUR helper:
+```
+yay -S flipflop-bin
+```
+or the `.pkg.tar.zst` from the release:
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*\.pkg\.tar\.zst"' | tr -d '"')" -o /tmp/flipflop.pkg.tar.zst && sudo pacman -U /tmp/flipflop.pkg.tar.zst
+```
+
+**AppImage**, saves it to `~/.local/bin` and runs it with `--install-desktop-entry`, which adds flipflop to the application menu for your user:
+```
+mkdir -p ~/.local/bin && curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*\.AppImage')" -o ~/.local/bin/flipflop.AppImage && chmod +x ~/.local/bin/flipflop.AppImage && ~/.local/bin/flipflop.AppImage --install-desktop-entry
+```
+It needs FUSE (otherwise run it with `--appimage-extract-and-run`).
+
+**Portable** (`.tar.gz`), unpacks it to `~/.local/lib/flipflop`, puts `flipflop-gui` in `~/.local/bin` and adds it to the menu with the same flag:
+```
+mkdir -p ~/.local/lib ~/.local/bin && curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*linux-x86_64[^"]*\.tar\.gz')" | tar -xz -C ~/.local/lib && ln -sf ~/.local/lib/flipflop/bin/flipflop-gui ~/.local/bin/ && ~/.local/bin/flipflop-gui --install-desktop-entry
+```
 
 Bluetooth needs BlueZ (`bluetoothd`) and libdbus.
 </details>
@@ -90,19 +120,47 @@ Bluetooth needs BlueZ (`bluetoothd`) and libdbus.
 <details>
 <summary>Windows</summary>
 
-Run the `flipflop-windows-x64-setup-v*.msi`: it installs for your user (no admin rights), adds a Start menu entry and an uninstaller. Or extract the `.zip` and run `flipflop\flipflop.exe`. The app is unsigned, so SmartScreen shows "Windows protected your PC": More info → Run anyway.
+**Manually**: download the `windows-x64-setup-` `.msi` from the [releases page](https://github.com/andunieee/flipflop/releases) and run it. It installs for your user (no admin rights) and adds a Start menu entry and an uninstaller.
+
+**One-liner** (PowerShell), does the same: downloads the installer and runs it.
+```
+$u=(irm https://api.github.com/repos/andunieee/flipflop/releases/latest).assets.browser_download_url -match 'windows-x64-setup-v'; iwr $u -OutFile $env:TEMP\flipflop-setup.msi; Start-Process $env:TEMP\flipflop-setup.msi
+```
+
+**No installer** (PowerShell): downloads the `.zip` and unzips it to `%LOCALAPPDATA%\flipflop` (where `flipflop gui` looks for it). No Start menu entry.
+```
+$u=((irm https://api.github.com/repos/andunieee/flipflop/releases/latest).assets.browser_download_url -match 'windows-x64-v.*\.zip$')[0]; iwr $u -OutFile $env:TEMP\flipflop.zip; Expand-Archive -Force $env:TEMP\flipflop.zip $env:LOCALAPPDATA; & $env:LOCALAPPDATA\flipflop\flipflop.exe
+```
+
+The app is unsigned, so SmartScreen shows "Windows protected your PC": More info → Run anyway.
 </details>
 
 <details>
 <summary>macOS</summary>
 
-Apple Silicon only. Open `flipflop-macos-arm64-v*.dmg` and drag flipflop to Applications. The app is unsigned: on first launch right-click it and choose Open, or run `xattr -dr com.apple.quarantine /Applications/flipflop.app`.
+Apple Silicon only, and the app is unsigned.
+
+**Manually**: open the `macos-arm64` `.dmg` and drag flipflop to Applications. On first launch right-click it and choose Open, or run `xattr -dr com.apple.quarantine /Applications/flipflop.app`.
+
+**One-liner** (Terminal), copies the app out of the `.dmg` into `/Applications` (a download made with `curl` is not quarantined, so it opens straight away):
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*\.dmg')" -o /tmp/flipflop.dmg && hdiutil attach -nobrowse -mountpoint /tmp/flipflop-dmg /tmp/flipflop.dmg && ditto /tmp/flipflop-dmg/flipflop.app /Applications/flipflop.app; hdiutil detach /tmp/flipflop-dmg
+```
 </details>
 
 <details>
 <summary>Android</summary>
 
-Android 7+. Download `flipflop-android-v*.apk`, open it and allow installing from this source. Or, with a phone connected over `adb`: `adb install flipflop-android-v*.apk`.
+Android 7+.
+
+**Zapstore**: install [Zapstore](https://zapstore.dev) and search for flipflop. It keeps the app up to date.
+
+**Manually**: download the `.apk`, open it and allow installing from this source.
+
+**With adb**, on a phone connected over `adb`:
+```
+curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/latest | grep -o 'https://[^"]*\.apk')" -o /tmp/flipflop.apk && adb install /tmp/flipflop.apk
+```
 </details>
 
 ## Building the packages
@@ -114,6 +172,8 @@ Android 7+. Download `flipflop-android-v*.apk`, open it and allow installing fro
 | `.deb` | Linux | `just deb` | `dpkg`, `fakeroot` |
 | `.rpm` | Linux | `just rpm` | `rpmbuild` (`rpm` / `rpm-build`) |
 | `.AppImage` | Linux | `just appimage` (→ `dist/`) | `curl` (fetches appimagetool), FUSE or `APPIMAGE_EXTRACT_AND_RUN=1` |
+| `.flatpak` | Linux | `just flatpak` (→ `dist/`) | `flatpak-builder` (fetches the freedesktop 25.08 runtime from flathub) |
+| `.pkg.tar.zst` | Arch | `just arch` (→ `dist/`) | what `.deb` needs, `makepkg` |
 | portable folder / `.tar.gz` | any desktop | `just portable` | |
 | `.msi` | Windows | `just msi` | [WiX 3](https://wixtoolset.org/docs/wix3/) in `PATH` |
 | `.dmg` | macOS | `just dmg` | Xcode command line tools |
@@ -122,6 +182,16 @@ Android 7+. Download `flipflop-android-v*.apk`, open it and allow installing fro
 Linux also needs libdbus, libv4l and libclang development headers to compile the Rust library (`libdbus-1-dev libv4l-dev libclang-dev` on Debian).
 
 Android release APKs are signed with the debug key unless you set `FLIPFLOP_KEYSTORE` (path to a `.jks`), `FLIPFLOP_KEYSTORE_PASSWORD` and optionally `FLIPFLOP_KEY_PASSWORD`, as environment variables or gradle properties. In CI, store the base64 of the keystore in the `FLIPFLOP_KEYSTORE_B64` secret and the password as the `FLIPFLOP_KEYSTORE_PASSWORD` secret (plus `FLIPFLOP_KEY_PASSWORD` if the key has its own). The key alias is always `flipflop`; create the keystore with `keytool -genkeypair -v -keystore flipflop.jks -alias flipflop -keyalg RSA -keysize 2048 -validity 10000`. Use one key for good: Android refuses to update an app signed with a different one.
+
+The Flatpak is not built from source: it wraps the portable app (with its Java runtime) in the freedesktop runtime (`packaging/flatpak`), since Gradle and cargo would need every dependency vendored to build offline in flatpak-builder. The Arch package is the `.deb` repackaged by `packaging/aur/pkgbuild.sh`, which is also the PKGBUILD the AUR gets. The AppImage and the portable app take `--install-desktop-entry`, which writes `dev.flipflop.app.desktop` and the icons to `~/.local/share` with `Exec` pointing at the AppImage (or the launcher).
+
+### Publishing
+
+After the GitHub release the workflow publishes to two stores. Each job only warns and skips while its secret is missing:
+
+- **AUR** (`flipflop-bin`): `AUR_SSH_PRIVATE_KEY`, the private half of an SSH key added to your [AUR account](https://aur.archlinux.org/account). The first push creates the package.
+- **Zapstore** (`zapstore.yaml`): `ZAPSTORE_SIGN_WITH`, the `nsec` (or a `bunker://` URL) of the Nostr key that publishes it. Zapstore ties the app to its signing certificate, so set the Android keystore secrets above before the first one.
+- The Arch `.pkg.tar.zst` on the release is signed when `GPG_PRIVATE_KEY` (base64 of `gpg --export-secret-keys`) and `GPG_KEY_ID` are set.
 
 On macOS and Windows the packages are not code-signed or notarized. To do so, add `signing { }` / `notarization { }` to `nativeDistributions.macOS` in `kmp/desktopApp/build.gradle.kts` ([docs](https://github.com/JetBrains/compose-multiplatform/blob/master/tutorials/Signing_and_notarization_on_macOS/README.md)) and sign the `.msi` with `signtool`.
 
