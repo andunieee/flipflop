@@ -149,6 +149,17 @@ impl PairedConnectionManager {
         self.respawn_connect_task(key, device).await;
     }
 
+    /// [`Self::nudge_reconnect`] for every paired device: the network
+    /// changed, so whatever made the last dials fail may be gone.
+    pub async fn nudge_all(&self) {
+        let Ok(devices) = self.paired_store.list() else {
+            return;
+        };
+        for device in devices {
+            self.nudge_reconnect(&device.endpoint_id).await;
+        }
+    }
+
     /// Test-only: the old nudge behaviour — abort and re-dial even when a live
     /// session exists. Used to simulate an unfixed peer flapping its outbound.
     #[doc(hidden)]
