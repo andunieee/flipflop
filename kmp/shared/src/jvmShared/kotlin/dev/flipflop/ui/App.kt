@@ -57,6 +57,7 @@ import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import uniffi.flipflop.GroupRow
+import uniffi.flipflop.PeerRow
 import uniffi.flipflop.UiState
 
 /** The whole app, over a running [Backend]. */
@@ -132,6 +133,7 @@ private fun Shell(s: UiState, nav: Nav) {
 
         nav.edit?.let { EditDialog(it, nav) }
         if (nav.appPickerOpen) AppPicker(nav)
+        backend.share?.let { SharePicker(s, it, nav) }
     }
 }
 
@@ -353,6 +355,58 @@ private fun AppPicker(nav: Nav) {
                     }
                 }
                 if (nav.apps.isEmpty()) HintText("No apps found.", center = true)
+            }
+        }
+    }
+}
+
+/** A group or a paired peer's page, as a place to share to. */
+private class Target(val id: String, val title: String, val detail: String, val online: Boolean, val peer: Boolean)
+
+/** Where to send what another app shared with us (Android): online groups and peers first, fully offline ones last. */
+@Composable
+private fun SharePicker(s: UiState, share: Share, nav: Nav) {
+    val c = Theme.c
+    val d = Theme.d
+    val peers = s.peers.filter { it.groupId.isNotEmpty() }.map { p: PeerRow ->
+        Target(p.groupId, p.title, if (p.connected) "Paired peer · connected" else "Paired peer · offline", p.connected, true)
+    }
+    val groups = s.groups.map { g: GroupRow -> Target(g.id, g.title, g.summary, g.online, false) }
+    // Stable: peers before groups within each half, each in its usual order.
+    val targets = (peers + groups).sortedBy { !it.online }
+    val what = listOfNotNull(
+        if (share.text.isNotEmpty()) "a text" else null,
+        when (share.files) { 0 -> null; 1 -> "a file"; else -> "${share.files} files" },
+    ).joinToString(" and ")
+    Scrim({ nav.backend.share = null }) {
+        Column(
+            Modifier.fillMaxSize().padding(top = 80.dp).clip(RoundedCornerShape(topStart = d.radiusLg, topEnd = d.radiusLg)).background(c.windowBg)
+                .clickable(remember { MutableInteractionSource() }, null) {}.windowInsetsPadding(WindowInsets.safeDrawing).padding(d.pagePadding),
+            verticalArrangement = Arrangement.spacedBy(d.space3),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Txt("Share $what", d.fontXl, c.textStrong, 700)
+                    if (share.text.isNotEmpty()) Txt(share.text, d.fontSm, c.textMuted, elide = true)
+                }
+                IconButton(Icons.close) { nav.backend.share = null }
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(d.space2)) {
+                targets.forEach { t ->
+                    ClickCard({ nav.shareTo(t.id) }, border = if (t.peer) c.peerBorder else c.groupBorder, borderWidth = 2.dp) {
+                        Row(Modifier.padding(d.space3), horizontalArrangement = Arrangement.spacedBy(d.space3), verticalAlignment = Alignment.CenterVertically) {
+                            Dot(t.online, 10.dp, offline = c.error)
+                            Icon(if (t.peer) Icons.person else Icons.groups, tint = c.textMuted)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Txt(t.title, d.fontMd, c.textStrong, 650, elide = true)
+                                Txt(t.detail, d.fontXs, c.textMuted, elide = true)
+                            }
+                        }
+                    }
+                }
+                if (targets.isEmpty()) {
+                    HintText(if (s.nodeReady) "No groups or paired peers yet. Create a group or pair with a peer first." else "Starting…", center = true)
+                }
             }
         }
     }

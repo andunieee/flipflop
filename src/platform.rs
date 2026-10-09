@@ -186,12 +186,15 @@ mod android {
         serde_json::from_str::<Vec<(String, String, String)>>(&json).unwrap_or_default()
     }
 
-    type FileHandler = Box<dyn Fn(String, String, String) + Send + Sync>;
+    type FileHandler = Box<dyn Fn(String, String, String, String) + Send + Sync>;
     static FILE_HANDLER: OnceLock<FileHandler> = OnceLock::new();
 
-    /// Called with `(kind, path, name)` for each file the user picked. `path` is a `content://` URI
-    /// (shared where it is; `name` is its display name) or an app-storage copy (`name` empty).
-    pub fn set_file_handler(handler: impl Fn(String, String, String) + Send + Sync + 'static) {
+    /// Called with `(kind, path, name, group)` for each file the user picked or another app shared.
+    /// `path` is a `content://` URI (shared where it is; `name` is its display name) or an
+    /// app-storage copy (`name` empty); `group` is the group it goes to ("" = the open one).
+    pub fn set_file_handler(
+        handler: impl Fn(String, String, String, String) + Send + Sync + 'static,
+    ) {
         let _ = FILE_HANDLER.set(Box::new(handler));
     }
 
@@ -202,14 +205,16 @@ mod android {
         kind: JString,
         path: JString,
         name: JString,
+        group: JString,
     ) {
-        let (kind, path, name) = (
+        let (kind, path, name, group) = (
             jstr(&mut env, &kind),
             jstr(&mut env, &path),
             jstr(&mut env, &name),
+            jstr(&mut env, &group),
         );
         if let Some(handler) = FILE_HANDLER.get() {
-            handler(kind, path, name);
+            handler(kind, path, name, group);
         }
     }
 

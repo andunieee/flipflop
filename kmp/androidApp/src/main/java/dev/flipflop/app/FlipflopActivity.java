@@ -93,8 +93,11 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
     /** Hands the JVM and this activity to the Rust side; must come before anything else. */
     private static native void nativeInit(android.app.Activity activity);
     private static native void nativeQrScanned(String text);
-    /** `path`: a file path, or a content:// URI kept in place (then `name` is its display name). */
-    private static native void nativeFilePicked(String kind, String path, String name);
+    /**
+     * `path`: a file path, or a content:// URI kept in place (then `name` is its display name).
+     * `group`: the group it goes to, "" for the open one.
+     */
+    private static native void nativeFilePicked(String kind, String path, String name, String group);
     private static native void nativeBlePeer(String address, String json);
     private static native void nativeBleLost(String address);
     private static native void nativeBleStatus(String text);
@@ -189,12 +192,23 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
         } else if (data.getData() != null) {
             uris.add(data.getData());
         }
+        stage(uris, kind, "");
+    }
+
+    /** Files another app shared with us, offered to `group`; photos and videos count as media. */
+    protected void stageShared(List<Uri> uris, String group) {
+        stage(uris, null, group);
+    }
+
+    /** `kind` null: from each file's type. */
+    private void stage(List<Uri> uris, String kind, String group) {
         new Thread(() -> {
             for (Uri uri : uris) {
                 try {
+                    String k = kind != null ? kind : kindOf(uri);
                     String name = displayName(uri);
                     if (keepInPlace(uri)) {
-                        nativeFilePicked(kind, uri.toString(), name);
+                        nativeFilePicked(k, uri.toString(), name, group);
                         continue;
                     }
                     File dir = new File(getFilesDir(), "staged/" + System.nanoTime());
@@ -204,12 +218,20 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
                          OutputStream os = new FileOutputStream(out)) {
                         copy(in, os);
                     }
-                    nativeFilePicked(kind, out.getAbsolutePath(), "");
+                    nativeFilePicked(k, out.getAbsolutePath(), "", group);
                 } catch (Exception e) {
                     Log.w(TAG, "could not read " + uri, e);
                 }
             }
         }, "flipflop-stage").start();
+    }
+
+    private String kindOf(Uri uri) {
+        String mime = getContentResolver().getType(uri);
+        if (mime == null) return "file";
+        if (mime.startsWith("image/") || mime.startsWith("video/")) return "media";
+        if (mime.equals("application/vnd.android.package-archive")) return "apk";
+        return "file";
     }
 
     /** Is this a regular, seekable file we may keep reading later? Takes the permission if so. */

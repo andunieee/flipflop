@@ -160,8 +160,8 @@ fun Divider() {
 }
 
 @Composable
-fun Dot(online: Boolean, size: Dp = 8.dp) {
-    Box(Modifier.size(size).clip(CircleShape).background(if (online) Theme.c.online else Theme.c.offline))
+fun Dot(online: Boolean, size: Dp = 8.dp, offline: Color = Theme.c.offline) {
+    Box(Modifier.size(size).clip(CircleShape).background(if (online) Theme.c.online else offline))
 }
 
 /** Pill with a tinted background. tone: "ok" | "error" | "warn" | "muted" | "active" */

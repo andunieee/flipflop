@@ -569,10 +569,13 @@ impl App {
                     qr.connect_ticket(&core, text);
                 }
             });
-            // A picked file is offered to whichever group is open.
+            // A picked file is offered to whichever group is open, a shared one to the group chosen for it.
             let files = inner.clone();
-            crate::platform::set_file_handler(move |kind, path, name| {
-                let (Some(core), Some(gid)) = (files.core(), files.open_group_id()) else {
+            crate::platform::set_file_handler(move |kind, path, name, group| {
+                let gid = Some(group)
+                    .filter(|g| !g.is_empty())
+                    .or_else(|| files.open_group_id());
+                let (Some(core), Some(gid)) = (files.core(), gid) else {
                     return;
                 };
                 if kind == "wasm" {

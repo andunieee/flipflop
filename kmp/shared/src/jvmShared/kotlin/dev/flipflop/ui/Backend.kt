@@ -14,6 +14,12 @@ import uniffi.flipflop.UiState
 import uniffi.flipflop.isTouch
 import java.io.File
 
+/**
+ * Text and/or [files] files another app shared with us (Android), waiting for the user to pick a group
+ * or peer; [deliver] sends them to that group once it is open.
+ */
+class Share(val text: String, val files: Int, val deliver: (group: String) -> Unit)
+
 /** The Rust node and what it tells us, as flows the UI observes. */
 class Backend(dataDir: String) {
     private val _state = MutableStateFlow<UiState?>(null)
@@ -34,6 +40,9 @@ class Backend(dataDir: String) {
     private val themeFile = File(dataDir, "theme")
 
     private var _theme by mutableStateOf(runCatching { themeFile.readText().trim() }.getOrDefault("").ifEmpty { "system" })
+
+    /** What was shared with us, until it goes somewhere (or the user cancels). */
+    var share by mutableStateOf<Share?>(null)
 
     /** "system" | "light" | "dark"; kept in the data dir. */
     var theme: String

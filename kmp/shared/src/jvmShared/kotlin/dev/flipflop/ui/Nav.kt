@@ -60,9 +60,18 @@ class Nav(val backend: Backend) {
         go("group")
     }
 
+    /** Send what was shared with us to this group (or paired peer's page), and show it there. */
+    fun shareTo(groupId: String) {
+        val share = backend.share ?: return
+        backend.share = null
+        openGroup(groupId, if (share.files > 0) "files" else "texts")
+        share.deliver(groupId)
+    }
+
     /** Android Back: dialog → scan → group → Home. Returns false when nothing is left to close. */
     fun back(scanning: Boolean): Boolean {
         when {
+            backend.share != null -> backend.share = null
             appPickerOpen -> appPickerOpen = false
             edit != null -> edit = null
             scanning -> app.cancelScan()
