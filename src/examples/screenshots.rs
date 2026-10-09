@@ -14,7 +14,7 @@ use slint::platform::software_renderer::{
 };
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, ModelRc, PhysicalSize, VecModel};
-use tunnelmanager_slint::{AppWindow, HistoryRow, OutboxRow, PeerRow, State, TransferRow};
+use flipflop::{AppWindow, HistoryRow, OutboxRow, PeerRow, State, TransferRow};
 
 struct Headless(Rc<MinimalSoftwareWindow>);
 
@@ -49,7 +49,7 @@ fn history(title: &str, send: bool, status: &str, tone: &str, size: &str) -> His
         detail: if send {
             ""
         } else {
-            "/home/me/Downloads/tunnelmanager/Studio Mac"
+            "/home/me/Downloads/flipflop/my-phone"
         }
         .into(),
         date: "2026-10-03 14:12".into(),
@@ -62,34 +62,34 @@ fn history(title: &str, send: bool, status: &str, tone: &str, size: &str) -> His
 
 fn populate(state: &State<'_>) {
     let mut peers = vec![
-        peer("a", "Studio Mac", "SM", true),
-        peer("b", "Pixel 8", "P", true),
-        peer("c", "Living Room TV", "LR", false),
-        peer("d", "work-laptop", "W", false),
+        peer("a", "my-phone", "MP", true),
+        peer("b", "Anna's phone", "AP", true),
+        peer("c", "parents", "P", true),
+        peer("d", "Work laptop", "WL", false),
     ];
-    peers[0].sending = true;
-    peers[1].receiving = true;
+    peers[0].receiving = true;
+    peers[0].detail = "phone · android · 3f9a12c0".into();
     state.set_peers(model(peers));
-    state.set_presence_label("2 of 4 online".into());
-    state.set_my_name("andunie's desktop".into());
-    state.set_name_input("andunie's desktop".into());
+    state.set_presence_label("3 of 4 online".into());
+    state.set_my_name("Office desktop".into());
+    state.set_name_input("Office desktop".into());
     state.set_node_ready(true);
     state.set_selected_id("a".into());
-    state.set_selected_name("Studio Mac".into());
-    state.set_selected_initials("SM".into());
-    state.set_selected_detail("desktop · macos · 3f9a12c0".into());
+    state.set_selected_name("my-phone".into());
+    state.set_selected_initials("MP".into());
+    state.set_selected_detail("phone · android · 3f9a12c0".into());
     state.set_selected_online(true);
-    state.set_selected_sending(true);
+    state.set_selected_sending(false);
 
-    let sending = TransferRow {
-        key: "send-1".into(),
+    let photos = TransferRow {
+        key: "recv-1".into(),
         peer_id: "a".into(),
-        sending: true,
+        sending: false,
         active: true,
-        title: "holiday-photos".into(),
-        progress: 0.42,
-        progress_label: "42% · 1.2 GB of 2.9 GB".into(),
-        speed: "38.5 MB/s".into(),
+        title: "18 photos".into(),
+        progress: 0.64,
+        progress_label: "64% · 54 MB of 84 MB".into(),
+        speed: "11.2 MB/s".into(),
         status: "Transferring…".into(),
         ..Default::default()
     };
@@ -101,7 +101,7 @@ fn populate(state: &State<'_>) {
         title: "text".into(),
         progress: 1.0,
         status: "Saved".into(),
-        text: "https://example.com/articles/how-tunnels-work".into(),
+        text: "https://cozykitchen.example/recipes/lemon-ricotta-pancakes".into(),
         is_link: true,
         ..Default::default()
     };
@@ -110,33 +110,32 @@ fn populate(state: &State<'_>) {
         peer_id: "a".into(),
         sending: false,
         active: false,
-        title: "3 items".into(),
+        title: "boarding-pass.pdf".into(),
         progress: 1.0,
         progress_label: "100%".into(),
-        status: "Saved to /home/me/Downloads/tunnelmanager/Studio Mac".into(),
-        note: "2 files renamed to avoid overwriting".into(),
+        status: "Saved to /home/me/Downloads/flipflop/myphone".into(),
         ..Default::default()
     };
     state.set_transfers(model(vec![
-        sending.clone(),
+        photos.clone(),
         pasted.clone(),
         received.clone(),
     ]));
-    state.set_visible_transfers(model(vec![sending, pasted, received]));
+    state.set_visible_transfers(model(vec![photos, pasted, received]));
     state.set_paste_input("Door code is 4711 — see you at 8!".into());
 
     state.set_history(model(vec![
-        history("quarterly-report.pdf", true, "Completed", "ok", "2.4 MB"),
+        history("slides-final.pdf", true, "Completed", "ok", "2.4 MB"),
         HistoryRow {
             title: "Pasted text".into(),
-            detail: "tunnelmanager-paste.txt".into(),
+            detail: "flipflop-paste.txt".into(),
             preview: "Door code is 4471, the spare key is under the blue pot by the back steps — feed the cat twice a day".into(),
             ..history("paste", false, "Completed", "ok", "96 B")
         },
-        history("holiday-photos", false, "Interrupted", "warn", "2.9 GB"),
-        history("project-archive.tar.zst", true, "Failed", "error", "820 MB"),
-        history("notes.md", false, "Cancelled", "muted", "4.1 KB"),
-        history("song.flac", false, "Completed", "ok", "38.0 MB"),
+        history("beach-video.mp4", false, "Interrupted", "warn", "1.1 GB"),
+        history("tax-return-2025.zip", true, "Failed", "error", "48 MB"),
+        history("shopping-list.txt", false, "Cancelled", "muted", "1.2 KB"),
+        history("voice-memo.m4a", false, "Completed", "ok", "6.0 MB"),
     ]));
 
     state.set_suggestions(model(vec![
@@ -209,7 +208,7 @@ fn main() {
     }
 
     state.set_page("peer".into());
-    state.set_toast_text("Files from Studio Mac saved".into());
+    state.set_toast_text("Files from my-phone saved".into());
     render(&window, desktop, &out.join("toast.ppm"));
     state.set_toast_text("".into());
 

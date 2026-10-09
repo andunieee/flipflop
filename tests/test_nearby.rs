@@ -5,7 +5,7 @@
 mod common;
 
 use common::TestNode;
-use tunnelmanager_slint::engine::{Discoverability, DiscoveryModeOption, PairingStatus};
+use flipflop::engine::{Discoverability, DiscoveryModeOption, PairingStatus};
 use iroh::endpoint::{Connection, RelayMode};
 use std::time::Duration;
 

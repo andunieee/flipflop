@@ -1,4 +1,4 @@
-package dev.tunnelmanager.slint;
+package com.flipflop.app;
 
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
@@ -55,8 +55,8 @@ import java.util.concurrent.TimeUnit;
  * src/android.rs).
  */
 public final class BluetoothLink {
-    private static final String TAG = "tunnelmanager-bt";
-    /** The service every TunnelManager device advertises. */
+    private static final String TAG = "flipflop-bt";
+    /** The service every flipflop device advertises. */
     private static final ParcelUuid SERVICE =
             new ParcelUuid(UUID.fromString("16db0b95-cf03-4873-b43b-9d9d2b807981"));
     /** Must match PEER_TAG_LEN in bluetooth.rs. */

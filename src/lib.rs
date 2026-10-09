@@ -1,8 +1,8 @@
 //! Shared UI + logic for the Slint frontend.
 //!
-//! The same code builds as the desktop binary (`tunnelmanager-slint`) and as
+//! The same code builds as the desktop binary (`flipflop`) and as
 //! the cdylib loaded by the Android `NativeActivity` (see `android.rs` and
-//! the README's Android section).
+//! docs/development.md, Android section).
 
 pub mod android;
 pub mod app;

@@ -130,11 +130,11 @@ impl Settings {
     }
 
     /// Root received files are saved under: `downloads_base()` plus the
-    /// app-owned "tunnelmanager" subfolder, so received files never mix with
+    /// app-owned "flipflop" subfolder, so received files never mix with
     /// unrelated downloads; the per-peer subfolder is joined by the receive
     /// flow on top of this.
     pub fn downloads_path(&self) -> Option<std::path::PathBuf> {
-        Some(self.downloads_base()?.join("tunnelmanager"))
+        Some(self.downloads_base()?.join("flipflop"))
     }
 }
 
@@ -227,6 +227,6 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(s.downloads_base(), Some("/data/in".into()));
-        assert_eq!(s.downloads_path(), Some("/data/in/tunnelmanager".into()));
+        assert_eq!(s.downloads_path(), Some("/data/in/flipflop".into()));
     }
 }

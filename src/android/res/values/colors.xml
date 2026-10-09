@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Matches Theme.window-bg / Theme.sidebar-bg in ui/components.slint. -->
-    <color name="window_bg">#111318</color>
-    <color name="bar_bg">#15171e</color>
+    <color name="window_bg">#f4faff</color>
+    <color name="bar_bg">#ffffff</color>
 </resources>

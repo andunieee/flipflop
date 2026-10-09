@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
-use tunnelmanager_slint::engine::{
+use flipflop::engine::{
     AppHandle, DeviceInfo, Discoverability, DiscoveryModeOption, EventEmitter, NearbyDevice,
     NodeService, NodeShare, ReceiveResult,
 };

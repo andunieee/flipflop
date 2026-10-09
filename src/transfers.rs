@@ -319,7 +319,7 @@ fn items_title(first_name: &str, count: usize) -> String {
 /// Pasted text travels as a single file with this name; a receiver that
 /// sees exactly this file shows its text instead of a file row. Other
 /// clients just get an ordinary text file.
-pub(crate) const PASTE_FILE_NAME: &str = "tunnelmanager-paste.txt";
+pub(crate) const PASTE_FILE_NAME: &str = "flipflop-paste.txt";
 /// Bigger "pastes" stay plain files.
 const PASTE_MAX_BYTES: u64 = 256 * 1024;
 
@@ -1079,7 +1079,7 @@ pub(crate) fn register(ctx: &AppCtx) {
                     if platform::TOUCH {
                         toast_later(
                             &ctx.weak,
-                            "Share files to TunnelManager from any app first, then send them here.",
+                            "Share files to flipflop from any app first, then send them here.",
                             false,
                         );
                     }
@@ -1202,11 +1202,11 @@ mod tests {
     fn received_paste_is_read_from_its_saved_name() {
         let dir = std::env::temp_dir().join(format!("tm-slint-paste-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let renamed = dir.join("tunnelmanager-paste (1).txt");
+        let renamed = dir.join("flipflop-paste (1).txt");
         std::fs::write(&renamed, "hello").unwrap();
 
         let mut received = Received::default();
-        received.note("receive-file-names", Some(r#"["tunnelmanager-paste.txt"]"#));
+        received.note("receive-file-names", Some(r#"["flipflop-paste.txt"]"#));
         let conflicts = serde_json::json!([{
             "original": dir.join(PASTE_FILE_NAME),
             "resolved": renamed,

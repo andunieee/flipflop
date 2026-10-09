@@ -83,16 +83,16 @@ jobs:
           ANDROID_BUILD_TOOLS_VERSION: 35.0.0
           CARGO_APK_RELEASE_KEYSTORE: ${{ runner.temp }}/release.jks
           CARGO_APK_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-        run: cargo apk build --release --lib -p tunnelmanager-slint
+        run: cargo apk build --release --lib -p flipflop
 
       - name: Verify APK signature
         run: |
           # NOTE: target/release/apk also holds an unsigned *-unaligned.apk
           # intermediate (plus .idsig sidecar) — verify the exact signed APK.
-          apk=target/release/apk/tunnelmanager-slint.apk
+          apk=target/release/apk/flipflop.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
           mkdir dist
-          cp "$apk" "dist/tunnelmanager-${{ steps.version.outputs.name }}.apk"
+          cp "$apk" "dist/flipflop-${{ steps.version.outputs.name }}.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -164,16 +164,16 @@ jobs:
         shell: bash
         run: |
           mkdir dist
-          tar -czf "dist/tunnelmanager-${{ steps.version.outputs.name }}-${{ matrix.slug }}.tar.gz" \
-            -C "target/${{ matrix.target }}/release" tunnelmanager-slint
+          tar -czf "dist/flipflop-${{ steps.version.outputs.name }}-${{ matrix.slug }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" flipflop
 
       - name: Package (windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           mkdir dist
-          Compress-Archive -Path "target/${{ matrix.target }}/release/tunnelmanager-slint.exe" `
-            -DestinationPath "dist/tunnelmanager-${{ steps.version.outputs.name }}-${{ matrix.slug }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/flipflop.exe" `
+            -DestinationPath "dist/flipflop-${{ steps.version.outputs.name }}-${{ matrix.slug }}.zip"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4

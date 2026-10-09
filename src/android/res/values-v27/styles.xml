@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- API 27+ can also draw dark navigation-bar icons. -->
     <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
         <item name="android:windowBackground">@drawable/launch_background</item>
         <item name="android:statusBarColor">@color/window_bg</item>
         <item name="android:navigationBarColor">@color/bar_bg</item>
-        <!-- light bars: dark status icons -->
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>
