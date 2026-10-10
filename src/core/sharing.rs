@@ -71,6 +71,8 @@ pub struct FileView {
     pub hosts: Vec<String>,
     /// We serve it too.
     pub hosting: bool,
+    /// We stopped sharing it, and the file is still where it was: it can be offered again.
+    pub can_reoffer: bool,
     /// Someone who has it is online: the offerer or a host (we ourselves excluded).
     pub source_online: bool,
 }
@@ -306,6 +308,7 @@ impl Core {
                 .into_iter()
                 .partition(|s| s.group == gid);
             st.shares = keep;
+            st.stopped_shares.retain(|s| s.group != gid);
             gone
         });
         self.release_sources(gone);
@@ -407,6 +410,13 @@ impl Core {
                 .map(|r| (r.file.clone(), r.path.clone()))
                 .collect()
         };
+        let reofferable: HashSet<String> = self.with_state(|st| {
+            st.stopped_shares
+                .iter()
+                .filter(|s| s.group == gid && s.path.exists())
+                .map(|s| s.file.clone())
+                .collect()
+        });
         let transfers = self.0.sharing.transfers.lock().unwrap();
         let name_of = |id: &str| {
             members
@@ -462,6 +472,7 @@ impl Core {
                         .map(|id| name_of(id))
                         .collect(),
                     hosting: f.hosts.contains(&me),
+                    can_reoffer: mine && f.stopped && reofferable.contains(&f.id),
                     source_online: online.contains(&f.from)
                         || f.hosts.iter().any(|h| *h != me && online.contains(h)),
                 }
@@ -761,18 +772,7 @@ impl Core {
                 .map(|n| n.to_string_lossy().into_owned())
                 .context("that path has no file name")?,
         };
-        let hashing = path.clone();
-        let (hash, size) = tokio::task::spawn_blocking(move || -> Result<(String, u64)> {
-            let mut file = open_source(&hashing)
-                .with_context(|| format!("cannot read {}", hashing.display()))?;
-            if !file.metadata()?.is_file() {
-                bail!("{} is not a file", hashing.display());
-            }
-            let mut hasher = blake3::Hasher::new();
-            let size = std::io::copy(&mut file, &mut hasher)?;
-            Ok((hasher.finalize().to_hex().to_string(), size))
-        })
-        .await??;
+        let (hash, size) = hash_source(path.clone()).await?;
         let (me, my_name) = (self.me(), self.name());
         let fid = self.with_doc(gid, |d| {
             d.offer_file(&me, &my_name, &name, size, &hash, kind)
@@ -824,24 +824,68 @@ impl Core {
         self.require_group(gid)?;
         let me = self.me();
         // A guest's upload is offered in their name, but we are the one serving it.
-        if !self.with_doc(gid, |d| {
-            d.file(file).is_some_and(|f| {
-                f.from == me || (super::guest::is_guest(&f.from) && f.hosts.contains(&me))
-            })
-        }) {
+        let Some(mine) = self.with_doc(gid, |d| d.file(file)).and_then(|f| {
+            if f.from == me {
+                Some(true)
+            } else {
+                (super::guest::is_guest(&f.from) && f.hosts.contains(&me)).then_some(false)
+            }
+        }) else {
             bail!("you are not sharing that file");
-        }
+        };
         self.with_doc(gid, |d| d.stop_file(file));
         let gone = self.with_state(|st| {
             let (gone, keep) = std::mem::take(&mut st.shares)
                 .into_iter()
                 .partition::<Vec<_>, _>(|s| s.group == gid && s.file == file);
             st.shares = keep;
+            if mine {
+                st.stopped_shares
+                    .extend(gone.iter().filter(|s| !s.staged).cloned());
+            }
             gone
         });
         self.release_sources(gone);
         self.doc_changed(gid, false);
         Ok(())
+    }
+
+    /// Offer one of our stopped files again, if it is still where it was. Unchanged, the same entry
+    /// comes back; changed, it is offered anew. Returns the file's id.
+    pub async fn reoffer_file(&self, gid: &str, fid: &str) -> Result<String> {
+        self.require_group(gid)?;
+        let offer = self
+            .with_doc(gid, |d| d.file(fid))
+            .filter(|f| f.from == self.me())
+            .context("you did not share that file")?;
+        if !offer.stopped {
+            bail!("it is still shared");
+        }
+        let share = self
+            .with_state(|st| {
+                st.stopped_shares
+                    .iter()
+                    .find(|s| s.group == gid && s.file == fid)
+                    .cloned()
+            })
+            .context("where that file was is not known anymore")?;
+        if !share.path.exists() {
+            bail!("{} is not there anymore", share.path.display());
+        }
+        let (hash, size) = hash_source(share.path.clone()).await?;
+        self.with_state(|st| {
+            st.stopped_shares
+                .retain(|s| !(s.group == gid && s.file == fid))
+        });
+        if hash != offer.hash || size != offer.size {
+            return self
+                .offer_file(gid, share.path, Some(offer.name), &offer.kind, false)
+                .await;
+        }
+        self.with_doc(gid, |d| d.unstop_file(fid));
+        self.with_state(|st| st.shares.push(share));
+        self.doc_changed(gid, false);
+        Ok(fid.to_owned())
     }
 
     /// Serve a file we downloaded to the rest of the group too, so it stays available when the
@@ -1260,6 +1304,21 @@ impl Core {
 /// Does the peer on this connection answer? A connection to a peer that restarted looks alive
 /// until QUIC's idle timeout, so ask.
 /// Open what a share points at: a file path, or on Android a `content://` URI the user picked.
+/// blake3 (hex) and size of the file at `path`.
+async fn hash_source(path: PathBuf) -> Result<(String, u64)> {
+    tokio::task::spawn_blocking(move || -> Result<(String, u64)> {
+        let mut file =
+            open_source(&path).with_context(|| format!("cannot read {}", path.display()))?;
+        if !file.metadata()?.is_file() {
+            bail!("{} is not a file", path.display());
+        }
+        let mut hasher = blake3::Hasher::new();
+        let size = std::io::copy(&mut file, &mut hasher)?;
+        Ok((hasher.finalize().to_hex().to_string(), size))
+    })
+    .await?
+}
+
 pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(target_os = "android")]
     if path.to_str().is_some_and(|p| p.starts_with("content://")) {

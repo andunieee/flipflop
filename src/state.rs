@@ -147,6 +147,9 @@ pub struct State {
     pub pair_ignored: Vec<String>,
     #[serde(default)]
     pub shares: Vec<Share>,
+    /// Files of ours we stopped offering (not staged copies): where they were, to offer them again.
+    #[serde(default)]
+    pub stopped_shares: Vec<Share>,
     /// Files we downloaded: where each one went.
     #[serde(default)]
     pub received: Vec<Share>,

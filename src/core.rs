@@ -411,6 +411,7 @@ impl Core {
                 paired_us: store.state.paired_us.clone(),
                 pair_ignored: store.state.pair_ignored.clone(),
                 shares: Vec::new(),
+                stopped_shares: Vec::new(),
                 received: Vec::new(),
             }
         };

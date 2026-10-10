@@ -276,6 +276,14 @@ impl GroupDoc {
         }
     }
 
+    /// Offer a stopped file again.
+    pub fn unstop_file(&mut self, id: &str) {
+        if let Some(f) = self.file_obj(id) {
+            let _ = self.doc.put(&f, "stopped", false);
+            let _ = self.doc.delete(&f, "stopped_at");
+        }
+    }
+
     pub fn mark_downloaded(&mut self, id: &str, me: &str) {
         let Some(f) = self.file_obj(id) else { return };
         if let Ok(Some((Value::Object(_), d))) = self.doc.get(&f, "downloaded") {

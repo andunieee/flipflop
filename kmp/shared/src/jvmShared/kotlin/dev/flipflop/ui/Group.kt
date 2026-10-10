@@ -86,6 +86,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
                 if (f.canHost) SecondaryButton("Host it too", icon = Icons.share) { app.hostFile(f.id, true) }
                 if (f.hosting) SecondaryButton("Stop hosting") { app.hostFile(f.id, false) }
                 if (f.mine && !f.stopped) DangerButton("Stop sharing") { app.stopFile(f.id) }
+                if (f.canReoffer) SecondaryButton("Share again", icon = Icons.share) { app.reofferFile(f.id) }
             }
         }
     }

@@ -210,6 +210,31 @@ async fn manual_download_and_manual_stop() {
         "only the sharer stops sharing"
     );
 
+    // offered again: the same entry is back, and downloadable
+    assert!(a.group_view(&gid).unwrap().files[0].can_reoffer);
+    assert!(b.group_view(&gid).unwrap().files[0].can_reoffer == false);
+    assert_eq!(a.reoffer_file(&gid, &fid2).await.unwrap(), fid2);
+    until("offered again", || {
+        !b.group_view(&gid).unwrap().files[0].stopped
+    })
+    .await;
+    assert_eq!(b.group_view(&gid).unwrap().files.len(), 2);
+    let path2 = b.download_file(&gid, &fid2).await.unwrap();
+    assert_eq!(std::fs::read(&path2).unwrap(), b"%PDF-fake");
+
+    // changed in the meantime: offered as a new file
+    a.stop_file(&gid, &fid2).unwrap();
+    std::fs::write(da.path().join("report.pdf"), b"%PDF-fake v2").unwrap();
+    let fid3 = a.reoffer_file(&gid, &fid2).await.unwrap();
+    assert_ne!(fid3, fid2);
+    assert!(!a.group_view(&gid).unwrap().files[1].can_reoffer);
+
+    // gone: cannot be offered again
+    a.stop_file(&gid, &fid3).unwrap();
+    std::fs::remove_file(da.path().join("report.pdf")).unwrap();
+    assert!(!a.group_view(&gid).unwrap().files[0].can_reoffer);
+    assert!(a.reoffer_file(&gid, &fid3).await.is_err());
+
     a.shutdown().await;
     b.shutdown().await;
 }

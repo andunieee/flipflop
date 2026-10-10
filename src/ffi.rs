@@ -125,6 +125,8 @@ pub struct FileRow {
     pub hosting: bool,
     /// "Also from Bob, Carol"
     pub hosts: String,
+    /// We stopped sharing it and it is still where it was.
+    pub can_reoffer: bool,
 }
 
 /// One of the group's tabs: built-in ("files", "texts", "pad") or an app.
@@ -954,6 +956,21 @@ impl App {
         }
     }
 
+    /// Offer a file we stopped sharing again.
+    pub fn reoffer_file(&self, id: String) {
+        let _g = self.inner.enter();
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
+        let this = self.inner.clone();
+        self.inner.rt.spawn(async move {
+            match core.reoffer_file(&gid, &id).await {
+                Ok(_) => this.notice("Offered to the group again"),
+                Err(err) => this.notice(format!("{err:#}")),
+            }
+        });
+    }
+
     /// Serve a downloaded file to the group too (`on`), or stop.
     pub fn host_file(&self, id: String, on: bool) {
         let _g = self.inner.enter();
@@ -1319,6 +1336,7 @@ fn build_state(shared: &Shared) -> UiState {
                 } else {
                     format!("Also from {}", f.hosts.join(", "))
                 },
+                can_reoffer: f.can_reoffer,
             }
         })
         .collect();
