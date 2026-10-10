@@ -26,7 +26,7 @@ jobs:
 
       - name: Stamp Cargo version
         run: |
-          sed -i.bak 's/^version = "0\.1\.0"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
+          sed -i.bak 's/^version = "[^"]*"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
           rm -f Cargo.toml.bak
           grep -q "^version = \"${{ steps.version.outputs.name }}\"$" Cargo.toml
 
@@ -137,8 +137,9 @@ jobs:
       - name: Stamp Cargo version
         shell: bash
         run: |
-          sed -i.bak 's/^version = "0\.1\.0"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
+          sed -i.bak 's/^version = "[^"]*"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
           rm -f Cargo.toml.bak
+          grep -q "^version = \"${{ steps.version.outputs.name }}\"$" Cargo.toml
 
       - name: Install Linux build deps
         if: runner.os == 'Linux'
