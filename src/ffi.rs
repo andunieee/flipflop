@@ -115,6 +115,8 @@ pub struct FileRow {
     pub progress_label: String,
     /// "2 of 3 have it"
     pub audience: String,
+    /// Badge tone for `audience`: "ok" all have it, "warn" some, "error" none.
+    pub audience_tone: String,
     pub saved_to: String,
     pub error: String,
     /// We downloaded it and could serve it to the others too.
@@ -1298,6 +1300,12 @@ fn build_state(shared: &Shared) -> UiState {
                 } else {
                     format!("{} of {} have it", f.downloaded_by.len(), f.audience)
                 },
+                audience_tone: match f.downloaded_by.len() {
+                    0 => "error",
+                    n if n >= f.audience => "ok",
+                    _ => "warn",
+                }
+                .into(),
                 saved_to: f
                     .saved_to
                     .as_ref()

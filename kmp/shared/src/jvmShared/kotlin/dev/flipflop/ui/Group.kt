@@ -58,7 +58,6 @@ private fun FileCard(f: FileRow, nav: Nav) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Txt(f.name, d.fontMd, if (f.stopped) c.textMuted else c.textStrong, 650)
                     Txt(f.size + " · " + f.meta, d.fontSm, c.textMuted)
-                    if (f.audience.isNotEmpty()) Txt(f.audience, d.fontSm, c.textMuted)
                     if (f.hosts.isNotEmpty()) Txt(f.hosts, d.fontSm, c.textMuted)
                 }
             }
@@ -71,7 +70,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
             if (f.error.isNotEmpty() && !f.downloading) Txt(f.error, d.fontSm, c.error)
             if (f.savedTo.isNotEmpty() && !f.mine) Txt("Saved to " + f.savedTo, d.fontXs, c.textFaint)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.space2, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(d.space2)) {
                     when {
                         f.stopped -> Badge("Not shared anymore", "muted")
                         f.mine -> Badge("Sharing", "active")
@@ -80,6 +79,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
                         f.downloading -> Badge("Downloading", "active")
                         !f.canDownload -> Badge("Sender offline", "warn")
                     }
+                    if (f.audience.isNotEmpty()) Badge(f.audience, f.audienceTone)
                 }
                 if (f.canDownload) PrimaryButton(if (f.error.isNotEmpty()) "Retry" else "Download", icon = Icons.arrowDown) { app.downloadFile(f.id) }
                 if (f.savedTo.isNotEmpty()) SecondaryButton("Open", icon = Icons.open) { app.openFile(f.savedTo) }
