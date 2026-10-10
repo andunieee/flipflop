@@ -63,6 +63,8 @@ pub struct Peer {
     pub paired_us: bool,
     /// Both paired: the implied group of the two of us.
     pub pair_group: Option<String>,
+    /// They paired with us, we have not, and the user dismissed the request.
+    pub pair_ignored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -407,6 +409,7 @@ impl Core {
                 replies: Vec::new(),
                 forgotten: Vec::new(),
                 paired_us: store.state.paired_us.clone(),
+                pair_ignored: store.state.pair_ignored.clone(),
                 shares: Vec::new(),
                 received: Vec::new(),
             }
@@ -428,7 +431,8 @@ impl Core {
             let paired = contact(id).is_some_and(|c| c.paired);
             let paired_us = state.paired_us.contains(&id.to_string());
             let group = (paired && paired_us).then(|| pair_group_id(&self.id(), id));
-            (paired, paired_us, group)
+            let ignored = state.pair_ignored.contains(&id.to_string());
+            (paired, paired_us, group, ignored)
         };
 
         let mut list: Vec<Peer> = {
@@ -436,7 +440,7 @@ impl Core {
             let mut list: Vec<Peer> = peers
                 .iter()
                 .map(|(id, p)| {
-                    let (paired, paired_us, pair_group) = pairing(id);
+                    let (paired, paired_us, pair_group, pair_ignored) = pairing(id);
                     Peer {
                         id: *id,
                         name: remote_name(id),
@@ -448,6 +452,7 @@ impl Core {
                         paired,
                         paired_us,
                         pair_group,
+                        pair_ignored,
                     }
                 })
                 .collect();
@@ -457,7 +462,7 @@ impl Core {
                     continue;
                 };
                 if !peers.contains_key(&id) {
-                    let (paired, paired_us, pair_group) = pairing(&id);
+                    let (paired, paired_us, pair_group, pair_ignored) = pairing(&id);
                     list.push(Peer {
                         id,
                         name: remote_name(&id),
@@ -469,6 +474,7 @@ impl Core {
                         paired,
                         paired_us,
                         pair_group,
+                        pair_ignored,
                     });
                 }
             }
@@ -855,7 +861,9 @@ impl Core {
     pub fn pair(&self, id: EndpointId) {
         self.remember_unconnected(id);
         self.with_state(|st| {
-            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == id.to_string()) {
+            let key = id.to_string();
+            st.pair_ignored.retain(|p| *p != key);
+            if let Some(c) = st.contacts.iter_mut().find(|c| c.id == key) {
                 c.paired = true;
             }
         });
@@ -872,6 +880,16 @@ impl Core {
         });
         self.tell(id, Msg::Unpair);
         self.sync_pair_group(id);
+    }
+
+    /// Dismiss a pair request: it stops showing on Home until they unpair and ask again.
+    pub fn ignore_pair(&self, id: EndpointId) {
+        self.with_state(|st| {
+            let key = id.to_string();
+            if !st.pair_ignored.contains(&key) {
+                st.pair_ignored.push(key);
+            }
+        });
     }
 
     fn is_paired(&self, id: EndpointId) -> bool {
@@ -893,6 +911,8 @@ impl Core {
                 st.paired_us.retain(|p| *p != key);
                 if paired {
                     st.paired_us.push(key);
+                } else {
+                    st.pair_ignored.retain(|p| *p != key);
                 }
             });
         }

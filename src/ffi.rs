@@ -41,6 +41,8 @@ pub struct PeerRow {
     pub paired_us: bool,
     /// Both paired: the id of the implied group (the peer's page), else "".
     pub group_id: String,
+    /// They paired with us and we have not answered: shown on Home.
+    pub pair_request: bool,
 }
 
 #[derive(Clone, Default, uniffi::Record)]
@@ -722,6 +724,13 @@ impl App {
         }
     }
 
+    pub fn ignore_pair(&self, id: String) {
+        let _g = self.inner.enter();
+        if let (Some(core), Ok(id)) = (self.inner.core(), id.parse::<EndpointId>()) {
+            core.ignore_pair(id);
+        }
+    }
+
     pub fn unpair_peer(&self, id: String) {
         let _g = self.inner.enter();
         if let (Some(core), Ok(id)) = (self.inner.core(), id.parse::<EndpointId>()) {
@@ -1059,6 +1068,7 @@ fn peer_row(p: &Peer) -> PeerRow {
         paired: p.paired,
         paired_us: p.paired_us,
         group_id: p.pair_group.clone().unwrap_or_default(),
+        pair_request: p.paired_us && !p.paired && !p.pair_ignored,
     }
 }
 

@@ -226,7 +226,7 @@ private fun Sidebar(s: UiState, nav: Nav) {
                 }
             }
             Box(Modifier.height(Theme.d.space3))
-            SideButton("Home", Icons.inbox, nav.page == "home", s.home.size + s.invites.size) { nav.go("home") }
+            SideButton("Home", Icons.inbox, nav.page == "home", s.home.size + s.invites.size + s.peers.count { it.pairRequest }) { nav.go("home") }
             Row(Modifier.padding(start = Theme.d.space3), verticalAlignment = Alignment.CenterVertically) {
                 Overline("GROUPS", Modifier.weight(1f))
                 IconButton(Icons.addPeer, tint = Theme.c.accentText, size = 28.dp) { nav.newGroup() }
@@ -270,7 +270,7 @@ private fun BottomNav(s: UiState, nav: Nav) {
     Column(Modifier.fillMaxWidth().background(Theme.c.windowBg)) {
         Divider()
         Row(Modifier.fillMaxWidth().height(64.dp)) {
-            RowScopeTab(Modifier.weight(1f), "Home", Icons.inbox, nav.page == "home", s.home.size + s.invites.size) {
+            RowScopeTab(Modifier.weight(1f), "Home", Icons.inbox, nav.page == "home", s.home.size + s.invites.size + s.peers.count { it.pairRequest }) {
                 if (nav.page == "group") nav.backend.app.openGroup(null)
                 nav.go("home")
             }

@@ -79,6 +79,23 @@ private fun InviteCard(invite: InviteRow, nav: Nav) {
     }
 }
 
+/** A peer that paired with us, waiting for us to pair back. */
+@Composable
+private fun PairRequestCard(peer: PeerRow, nav: Nav) {
+    val c = Theme.c
+    Card(background = c.accentSoft, border = c.accentText.copy(alpha = 0.4f)) {
+        Column(Modifier.padding(Theme.d.cardPadding), verticalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
+            Txt("Wants to pair with you" + if (peer.connected) "" else " · offline", Theme.d.fontSm, c.textMuted, elide = true)
+            Txt(peer.title, Theme.d.fontLg, c.textStrong, 700, elide = true)
+            Txt((if (peer.subtitle.isNotEmpty()) peer.subtitle + " · " else "") + peer.short, Theme.d.fontXs, c.textFaint, elide = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
+                PrimaryButton("Pair", icon = Icons.addPeer) { nav.backend.app.pairPeer(peer.id) }
+                SecondaryButton("Ignore") { nav.backend.app.ignorePair(peer.id) }
+            }
+        }
+    }
+}
+
 @Composable
 private fun HomeCard(item: HomeRow, nav: Nav) {
     ClickCard({ nav.openGroup(item.groupId, item.tab) }) {
@@ -111,6 +128,8 @@ fun HomePage(s: UiState, nav: Nav) {
             if (s.home.isNotEmpty()) SecondaryButton("Mark all as seen") { nav.backend.app.markAllSeen() }
         }
     }) {
+        val requests = s.peers.filter { it.pairRequest }
+        requests.forEach { PairRequestCard(it, nav) }
         s.invites.forEach { InviteCard(it, nav) }
         if (s.home.isNotEmpty()) Overline("NEW")
         s.home.forEach { HomeCard(it, nav) }
@@ -119,7 +138,7 @@ fun HomePage(s: UiState, nav: Nav) {
         if (peers.isNotEmpty() || groups.isNotEmpty()) Overline("ONLINE NOW")
         peers.forEach { OnlinePeerCard(it, nav) }
         groups.forEach { GroupCard(it, nav, onHome = true) }
-        if (s.home.isEmpty() && s.invites.isEmpty() && peers.isEmpty() && groups.isEmpty()) {
+        if (s.home.isEmpty() && s.invites.isEmpty() && requests.isEmpty() && peers.isEmpty() && groups.isEmpty()) {
             HintText("All caught up. New files, texts and members of your groups show up here.", center = true)
         }
     }

@@ -264,3 +264,36 @@ async fn unseen_news_per_group_until_looked_at() {
     b.shutdown().await;
     a.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ignored_pair_request_returns_after_unpair_and_pair() {
+    let (a, alog, _da) = node("i-alice").await;
+    let (b, _blog, _db) = node("i-bob").await;
+    until("alice ticket", || !a.ticket().is_empty()).await;
+    b.connect_ticket(&a.ticket()).await.unwrap();
+    until("alice hears bob paired", || {
+        peer(&alog, &b).is_some_and(|p| p.paired_us && !p.pair_ignored)
+    })
+    .await;
+
+    // Alice dismisses the request; it stays dismissed while Bob keeps pairing.
+    a.ignore_pair(b.id());
+    until("ignored", || {
+        peer(&alog, &b).is_some_and(|p| p.paired_us && p.pair_ignored)
+    })
+    .await;
+
+    // Bob unpairs and asks again: the request is back.
+    b.unpair(a.id());
+    until("bob unpaired", || {
+        peer(&alog, &b).is_some_and(|p| !p.paired_us && !p.pair_ignored)
+    })
+    .await;
+    b.pair(a.id());
+    until("asked again", || {
+        peer(&alog, &b).is_some_and(|p| p.paired_us && !p.pair_ignored)
+    })
+    .await;
+    a.shutdown().await;
+    b.shutdown().await;
+}

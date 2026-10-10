@@ -141,6 +141,10 @@ pub struct State {
     /// Peers that told us they paired with us.
     #[serde(default)]
     pub paired_us: Vec<String>,
+    /// Pair requests (from `paired_us`) the user dismissed: no longer shown on Home. Cleared when
+    /// the peer unpairs, so a later request shows again.
+    #[serde(default)]
+    pub pair_ignored: Vec<String>,
     #[serde(default)]
     pub shares: Vec<Share>,
     /// Files we downloaded: where each one went.
