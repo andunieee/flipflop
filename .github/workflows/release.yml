@@ -176,6 +176,23 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/flipflop.exe" `
             -DestinationPath "dist/flipflop-${{ steps.version.outputs.name }}-${{ matrix.slug }}.zip"
 
+      # TODO(signing): unsigned builds trigger SmartScreen. Sign
+      # target/<target>/release/flipflop.exe in a step before "Package
+      # (windows)", and the setup .exe after this one (SignPath, Azure
+      # Trusted Signing or signtool with a certificate).
+
+      - name: Build installer (windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DAppVersion=${{ steps.version.outputs.name }}" `
+            "/DSourceExe=$PWD\target\${{ matrix.target }}\release\flipflop.exe" `
+            "/DOutputDir=$PWD\dist" `
+            windows\flipflop.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:

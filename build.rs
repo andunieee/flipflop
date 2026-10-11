@@ -13,6 +13,22 @@ fn main() {
     {
         build_java_helpers();
     }
+
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed_windows_icon();
+    }
+}
+
+/// Give flipflop.exe its icon in Explorer, the taskbar and the installer's
+/// shortcuts. Version info comes from Cargo.toml.
+#[cfg(windows)]
+fn embed_windows_icon() {
+    println!("cargo:rerun-if-changed=windows/flipflop.ico");
+    winresource::WindowsResource::new()
+        .set_icon("windows/flipflop.ico")
+        .compile()
+        .expect("failed to embed Windows resources");
 }
 
 /// Compile `src/android/java` into `$OUT_DIR/classes.dex`, which src/android.rs
