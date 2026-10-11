@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 fn main() {
-    // The app is light-only: pin the std-widgets to the light Fluent variant so
-    // LineEdit/ComboBox/CheckBox don't follow a dark system theme.
-    let config = slint_build::CompilerConfiguration::new().with_style("fluent-light".into());
+    // Plain Fluent (not a -light/-dark variant) so the std-widgets can switch
+    // color scheme at runtime along with `Theme` (see the Appearance setting).
+    let config = slint_build::CompilerConfiguration::new().with_style("fluent".into());
     slint_build::compile_with_config("src/ui/app-window.slint", config)
         .expect("failed to compile Slint UI");
 

@@ -1,5 +1,5 @@
 import { State } from "globals.slint";
-import { ScrollView as StdScrollView } from "std-widgets.slint";
+import { ScrollView as StdScrollView, Palette } from "std-widgets.slint";
 
 // The fluent style's ScrollView only scrolls by wheel (drag-pan is off, as
 // on desktop), so a finger drag would never move it. Pages use this one.
@@ -8,45 +8,56 @@ export component ScrollView inherits StdScrollView {
 }
 
 // App-wide palette and metrics. Centralized so everything stays consistent.
+// Every color has a light and a dark value, picked by `dark`.
 export global Theme {
-    // surfaces: white cards on a pale sky ramp
-    out property <color> window-bg: #f4faff;
-    out property <color> sidebar-bg: #e6f3fd;
-    out property <color> card-bg: #ffffff;
-    out property <color> card-bg-hover: #f0f7ff;
-    out property <color> inset-bg: #f2f8fd;
-    out property <color> border: #d6e7f5;
-    out property <color> border-strong: #b8d4ec;
+    // Follows the std-widgets palette, which `AppWindow` forces to the user's
+    // choice. With "System" it is `unknown` (the widgets then follow the OS on
+    // their own), so read the OS choice off the palette's own background.
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark
+        || (Palette.color-scheme == ColorScheme.unknown && Palette.background == #1c1c1c);
 
-    // text: deep navy, softening to sky-grey
-    out property <color> text-strong: #10304a;
-    out property <color> text: #2c4a63;
-    out property <color> text-muted: #66819a;
-    out property <color> text-faint: #95acc0;
+    // surfaces: white cards on a pale sky ramp / night-sky navy
+    out property <color> window-bg: dark ? #0e1824 : #f4faff;
+    out property <color> sidebar-bg: dark ? #0a131c : #e6f3fd;
+    out property <color> card-bg: dark ? #15222f : #ffffff;
+    out property <color> card-bg-hover: dark ? #1a2a3a : #f0f7ff;
+    out property <color> inset-bg: dark ? #111c28 : #f2f8fd;
+    out property <color> border: dark ? #223446 : #d6e7f5;
+    out property <color> border-strong: dark ? #2e4660 : #b8d4ec;
+    out property <color> shadow: dark ? #00000080 : #1e5a8a40;
+
+    // text: deep navy, softening to sky-grey (inverted in dark)
+    out property <color> text-strong: dark ? #e8f2fb : #10304a;
+    out property <color> text: dark ? #c2d3e2 : #2c4a63;
+    out property <color> text-muted: dark ? #8aa1b6 : #66819a;
+    out property <color> text-faint: dark ? #5d7489 : #95acc0;
 
     // accents: sunny sky blue
     out property <color> accent: #1e8cf0;
     out property <color> accent-hover: #3a9ff5;
     out property <color> accent-press: #1774cc;
-    out property <color> accent-soft: #dbeeff;
-    out property <color> accent-text: #1366b8;
+    out property <color> accent-soft: dark ? #12324f : #dbeeff;
+    out property <color> accent-border: dark ? #23578a : #a8d2fa;
+    out property <color> accent-text: dark ? #6db8ff : #1366b8;
 
-    // status (dark enough to read as text on white)
-    out property <color> online: #22b55a;
-    out property <color> offline: #c2d2df;
-    out property <color> warn: #e08a00;
-    out property <color> warn-soft: #fff1d6;
-    out property <color> info: #0b8fd6;
-    out property <color> info-soft: #dcf2fd;
-    out property <color> error: #e5484d;
-    out property <color> error-soft: #ffe5e5;
-    out property <color> success: #179c4a;
-    out property <color> success-soft: #dcf6e5;
+    // status (dark enough to read as text on the card background)
+    out property <color> online: dark ? #2fcb68 : #22b55a;
+    out property <color> offline: dark ? #3a4d60 : #c2d2df;
+    out property <color> warn: dark ? #f0a32a : #e08a00;
+    out property <color> warn-soft: dark ? #3a2b0e : #fff1d6;
+    out property <color> info: dark ? #3fb2f0 : #0b8fd6;
+    out property <color> info-soft: dark ? #0f3047 : #dcf2fd;
+    out property <color> error: dark ? #f2676b : #e5484d;
+    out property <color> error-soft: dark ? #3b1a1e : #ffe5e5;
+    out property <color> error-soft-press: dark ? #4d2026 : #ffd0d1;
+    out property <color> error-border: dark ? #7a3036 : #f7b8ba;
+    out property <color> success: dark ? #3acb70 : #179c4a;
+    out property <color> success-soft: dark ? #123423 : #dcf6e5;
 
     // interactive neutrals
-    out property <color> chip-bg: #e8f2fb;
-    out property <color> chip-bg-hover: #d9e9f7;
-    out property <color> chip-bg-press: #c9dff2;
+    out property <color> chip-bg: dark ? #1c2b3b : #e8f2fb;
+    out property <color> chip-bg-hover: dark ? #243649 : #d9e9f7;
+    out property <color> chip-bg-press: dark ? #2c4157 : #c9dff2;
 
     // radii
     out property <length> radius-sm: 6px;
@@ -426,7 +437,7 @@ export component DangerButton inherits ButtonBase {
     in property <bool> solid: false;
     fill: root.solid ? #e5484d : transparent;
     fill-hover: root.solid ? #ef5b60 : Theme.error-soft;
-    fill-press: root.solid ? #c93b40 : #ffd0d1;
+    fill-press: root.solid ? #c93b40 : Theme.error-soft-press;
     ink: root.solid ? white : Theme.error;
 }
 
@@ -442,7 +453,7 @@ export component IconButton inherits Rectangle {
     height: Theme.control-height;
     border-radius: self.height / 2;
     background: !root.enabled ? transparent
-        : touch.pressed ? (root.danger ? #ffd0d1 : Theme.chip-bg-hover)
+        : touch.pressed ? (root.danger ? Theme.error-soft-press : Theme.chip-bg-hover)
         : touch.has-hover ? (root.danger ? Theme.error-soft : Theme.chip-bg)
         : transparent;
     opacity: root.enabled ? 1.0 : 0.45;

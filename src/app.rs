@@ -358,6 +358,12 @@ fn settings_from_state(state: &State<'_>) -> Settings {
             _ => "everyone",
         }
         .to_string(),
+        theme: match state.get_theme() {
+            1 => "light",
+            2 => "dark",
+            _ => "system",
+        }
+        .to_string(),
     }
 }
 
@@ -396,6 +402,11 @@ fn settings_into_state(state: &State<'_>, s: &Settings) {
         _ => 0,
     });
     state.set_history_enabled(s.history_enabled);
+    state.set_theme(match s.theme.as_str() {
+        "light" => 1,
+        "dark" => 2,
+        _ => 0,
+    });
 }
 
 // --------------------------------------------------- node event routing
