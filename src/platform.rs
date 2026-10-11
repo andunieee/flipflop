@@ -224,6 +224,11 @@ pub fn init_logging() {
         .without_time()
         .with_writer(android::Logcat)
         .init();
+    // Windows consoles (conhost) print ANSI colour codes as garbage unless VT
+    // mode is switched on, so log in plain text there.
     #[cfg(not(target_os = "android"))]
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(!cfg!(windows))
+        .init();
 }
