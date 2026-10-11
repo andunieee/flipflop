@@ -582,6 +582,9 @@ impl Core {
         if offer.stopped {
             bail!("no longer shared");
         }
+        if offer.kind == super::sharing::FOLDER_KIND {
+            bail!("folders cannot be downloaded from the browser");
+        }
         let store = self.0.store.lock().unwrap();
         let path = store
             .state

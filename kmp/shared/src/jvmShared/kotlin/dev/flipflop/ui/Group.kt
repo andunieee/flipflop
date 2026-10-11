@@ -51,7 +51,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
         Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
             Row(horizontalArrangement = Arrangement.spacedBy(d.space3)) {
                 IconTile(
-                    if (f.kind == 1) Icons.image else if (f.kind == 2) Icons.apps else Icons.file,
+                    when (f.kind) { 1 -> Icons.image; 2 -> Icons.apps; 3 -> Icons.folder; else -> Icons.file },
                     tint = if (f.stopped) c.chipBg else c.accentSoft,
                     ink = if (f.stopped) c.textFaint else c.accentText,
                 )
@@ -102,6 +102,7 @@ private fun FilesTab(s: UiState, nav: Nav) {
                     PrimaryButton("File", Modifier.weight(1f), Icons.file) { nav.pick("file") }
                     SecondaryButton("Media", Modifier.weight(1f), Icons.image) { nav.pick("media") }
                     if (nav.backend.touch) SecondaryButton("App", Modifier.weight(1f), Icons.apps) { nav.pick("app") }
+                    else SecondaryButton("Folder", Modifier.weight(1f), Icons.folder) { nav.pick("folder") }
                 }
             }
         }

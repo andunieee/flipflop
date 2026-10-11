@@ -338,3 +338,48 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
     a.shutdown().await;
     b.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn folders_arrive_whole() {
+    let (a, da) = node("alice").await;
+    let (b, _db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+
+    let src = da.path().join("photos");
+    std::fs::create_dir_all(src.join("2026/october")).unwrap();
+    std::fs::create_dir_all(src.join("empty")).unwrap();
+    let big: Vec<u8> = (0..200_000u32).flat_map(|i| i.to_le_bytes()).collect();
+    std::fs::write(src.join("2026/october/big.bin"), &big).unwrap();
+    std::fs::write(src.join("readme.txt"), b"hello").unwrap();
+    std::fs::write(src.join("zero"), b"").unwrap();
+    let fid = a.offer_file(&gid, src, None, "file", false).await.unwrap();
+
+    until("bob downloaded it", || {
+        b.group_view(&gid)
+            .unwrap()
+            .files
+            .first()
+            .is_some_and(|f| f.have)
+    })
+    .await;
+    let view = b.group_view(&gid).unwrap();
+    let f = &view.files[0];
+    assert_eq!((f.id.as_str(), f.kind.as_str()), (fid.as_str(), "folder"));
+    assert_eq!(f.size, big.len() as u64 + 5);
+    let saved = f.saved_to.clone().unwrap();
+    assert_eq!(saved.file_name().unwrap(), "photos");
+    assert_eq!(
+        std::fs::read(saved.join("2026/october/big.bin")).unwrap(),
+        big
+    );
+    assert_eq!(std::fs::read(saved.join("readme.txt")).unwrap(), b"hello");
+    assert_eq!(std::fs::read(saved.join("zero")).unwrap(), b"");
+    assert!(saved.join("empty").is_dir());
+    assert!(
+        !saved.with_file_name(format!(".{fid}.part")).exists(),
+        "no leftovers"
+    );
+
+    a.shutdown().await;
+    b.shutdown().await;
+}

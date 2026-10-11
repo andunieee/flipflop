@@ -24,6 +24,7 @@ object Icons {
     val chevronDown = Res.drawable.ic_chevron_down
     val arrowDown = Res.drawable.ic_arrow_down
     val file = Res.drawable.ic_file
+    val folder = Res.drawable.ic_folder
     val image = Res.drawable.ic_image
     val apps = Res.drawable.ic_apps
     val clipboard = Res.drawable.ic_clipboard

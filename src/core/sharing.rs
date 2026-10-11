@@ -5,7 +5,10 @@
 //! Wire formats, next to the JSON control messages of [`super`]:
 //! - sync: a uni stream holding `[SYNC_TAG, 16 raw group id bytes, automerge sync message]`;
 //! - download: a bi stream; the downloader sends `{"group", "file"}` as JSON and the offerer answers
-//!   `[status u8][length u64 BE][bytes…]` (status 0 = ok, 1 = refused).
+//!   `[status u8][length u64 BE][zstd stream of the bytes…]` (status 0 = ok, 1 = refused; the
+//!   length is the uncompressed one). A folder's uncompressed bytes are
+//!   `[listing length u32 BE][listing JSON][each file's bytes, in listing order]`, and its offer's
+//!   hash is the blake3 of exactly those bytes (see [`Listing`]).
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -15,12 +18,16 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use async_compression::{
+    Level,
+    tokio::bufread::{ZstdDecoder, ZstdEncoder},
+};
 use iroh::{
     EndpointId,
     endpoint::{Connection, RecvStream, SendStream},
 };
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use super::{Core, Event, parse_gid, tabs::APP_KIND};
 use crate::{
@@ -30,6 +37,9 @@ use crate::{
 
 pub(super) const SYNC_TAG: u8 = 1;
 const CHUNK: usize = 64 * 1024;
+/// An offer that is a whole folder.
+pub const FOLDER_KIND: &str = "folder";
+const MAX_LISTING_BYTES: usize = 64 << 20;
 const MAX_TEXT_BYTES: usize = 256 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(15);
 
@@ -773,6 +783,7 @@ impl Core {
                 .context("that path has no file name")?,
         };
         let (hash, size) = hash_source(path.clone()).await?;
+        let kind = if path.is_dir() { FOLDER_KIND } else { kind };
         let (me, my_name) = (self.me(), self.name());
         let fid = self.with_doc(gid, |d| {
             d.offer_file(&me, &my_name, &name, size, &hash, kind)
@@ -1024,10 +1035,14 @@ impl Core {
                 Ok(path)
             }
             Ok(path) => {
-                // On Android this moves the file to the public Downloads folder.
-                let path =
+                // On Android this moves the file to the public Downloads folder (not folders: they
+                // stay in the app's download folder).
+                let path = if offer.kind == FOLDER_KIND {
+                    path
+                } else {
                     tokio::task::spawn_blocking(move || crate::platform::file_received(&path))
-                        .await?;
+                        .await?
+                };
                 self.with_state(|st| {
                     st.received.push(Share {
                         group: gid.to_owned(),
@@ -1114,51 +1129,153 @@ impl Core {
         }
 
         let part = dir.join(format!(".{fid}.part"));
-        let result = async {
-            let mut out = tokio::fs::File::create(&part).await?;
-            let mut hasher = blake3::Hasher::new();
-            let mut buf = vec![0u8; CHUNK];
-            let (mut done, mut shown) = (0u64, Instant::now());
-            while let Some(n) = rx
-                .read(&mut buf)
-                .await
-                .map_err(|e| anyhow!("connection lost: {e}"))?
-            {
-                hasher.update(&buf[..n]);
-                out.write_all(&buf[..n]).await?;
-                done += n as u64;
-                if let Some(t) = self
-                    .0
-                    .sharing
-                    .transfers
-                    .lock()
-                    .unwrap()
-                    .get_mut(&(gid.to_owned(), fid.to_owned()))
-                {
-                    t.done = done;
-                }
-                if shown.elapsed() > Duration::from_millis(200) {
-                    shown = Instant::now();
-                    self.publish_group(gid, false);
-                }
-            }
-            out.flush().await?;
-            if done != len {
-                bail!("connection lost after {done} of {len} bytes");
-            }
-            if hasher.finalize().to_hex().as_str() != offer.hash {
-                bail!("the file arrived corrupted");
-            }
-            Ok(())
+        let mut body = ZstdDecoder::new(BufReader::new(&mut rx));
+        let folder = offer.kind == FOLDER_KIND;
+        let result = if folder {
+            self.receive_folder(gid, fid, &mut body, &part, len).await
+        } else {
+            self.receive_file(gid, fid, &mut body, &part, len).await
         }
-        .await;
+        .and_then(|hash| {
+            (hash == offer.hash)
+                .then_some(())
+                .context("the file arrived corrupted")
+        });
         if let Err(err) = result {
-            let _ = tokio::fs::remove_file(&part).await;
+            let _ = if folder {
+                tokio::fs::remove_dir_all(&part).await
+            } else {
+                tokio::fs::remove_file(&part).await
+            };
             return Err(err);
         }
         let target = target.unwrap_or_else(|| unique_path(&dir, &offer.name));
         tokio::fs::rename(&part, &target).await?;
         Ok(target)
+    }
+
+    /// Writes the (decompressed) bytes of a file to `part`; returns their hash.
+    async fn receive_file(
+        &self,
+        gid: &str,
+        fid: &str,
+        body: &mut (impl AsyncRead + Unpin),
+        part: &Path,
+        len: u64,
+    ) -> Result<String> {
+        let mut out = tokio::fs::File::create(part).await?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buf = vec![0u8; CHUNK];
+        let (mut done, mut shown) = (0u64, Instant::now());
+        loop {
+            let n = body
+                .read(&mut buf)
+                .await
+                .map_err(|e| anyhow!("connection lost: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            if done + n as u64 > len {
+                bail!("the sender sent more than the file holds");
+            }
+            hasher.update(&buf[..n]);
+            out.write_all(&buf[..n]).await?;
+            done += n as u64;
+            self.progressed(gid, fid, done, &mut shown);
+        }
+        out.flush().await?;
+        if done != len {
+            bail!("connection lost after {done} of {len} bytes");
+        }
+        Ok(hasher.finalize().to_hex().to_string())
+    }
+
+    /// Unpacks the (decompressed) bytes of a folder into the folder `part`; returns their hash.
+    async fn receive_folder(
+        &self,
+        gid: &str,
+        fid: &str,
+        body: &mut (impl AsyncRead + Unpin),
+        part: &Path,
+        len: u64,
+    ) -> Result<String> {
+        let lost = |e: std::io::Error| anyhow!("connection lost: {e}");
+        let mut hasher = blake3::Hasher::new();
+        let mut head = [0u8; 4];
+        body.read_exact(&mut head).await.map_err(lost)?;
+        let n = u32::from_be_bytes(head) as usize;
+        if n > MAX_LISTING_BYTES {
+            bail!("the folder's listing is too big");
+        }
+        let mut raw = vec![0u8; n];
+        body.read_exact(&mut raw).await.map_err(lost)?;
+        hasher.update(&head);
+        hasher.update(&raw);
+        let listing: Listing = serde_json::from_slice(&raw).context("bad folder listing")?;
+        let total = listing
+            .files
+            .iter()
+            .try_fold(0u64, |sum, (_, size)| sum.checked_add(*size));
+        if total != Some(len) {
+            bail!("the folder changed on the sender's side");
+        }
+
+        let _ = tokio::fs::remove_dir_all(part).await;
+        tokio::fs::create_dir_all(part).await?;
+        for dir in &listing.dirs {
+            tokio::fs::create_dir_all(part.join(safe_relative(dir)?)).await?;
+        }
+        let mut buf = vec![0u8; CHUNK];
+        let (mut done, mut shown) = (0u64, Instant::now());
+        for (rel, size) in &listing.files {
+            let path = part.join(safe_relative(rel)?);
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            // `create_new`: a name listed twice must not write over (or through) the first one.
+            let mut out = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .await
+                .with_context(|| format!("cannot create {rel}"))?;
+            let mut left = *size;
+            while left > 0 {
+                let want = left.min(CHUNK as u64) as usize;
+                let n = body.read(&mut buf[..want]).await.map_err(lost)?;
+                if n == 0 {
+                    bail!("connection lost after {done} of {len} bytes");
+                }
+                hasher.update(&buf[..n]);
+                out.write_all(&buf[..n]).await?;
+                left -= n as u64;
+                done += n as u64;
+                self.progressed(gid, fid, done, &mut shown);
+            }
+            out.flush().await?;
+        }
+        if body.read(&mut buf).await.map_err(lost)? != 0 {
+            bail!("the sender sent more than the folder holds");
+        }
+        Ok(hasher.finalize().to_hex().to_string())
+    }
+
+    /// A download got to `done` bytes: show it (at most every 200 ms).
+    fn progressed(&self, gid: &str, fid: &str, done: u64, shown: &mut Instant) {
+        if let Some(t) = self
+            .0
+            .sharing
+            .transfers
+            .lock()
+            .unwrap()
+            .get_mut(&(gid.to_owned(), fid.to_owned()))
+        {
+            t.done = done;
+        }
+        if shown.elapsed() > Duration::from_millis(200) {
+            *shown = Instant::now();
+            self.publish_group(gid, false);
+        }
     }
 
     /// The other side of [`Core::fetch`].
@@ -1208,7 +1325,10 @@ impl Core {
             .find(|s| s.group == request.group && s.file == request.file)
             .map(|s| s.path.clone())
             .context("not shared here")?;
-        let mut file = tokio::fs::File::from_std(
+        if offer.kind == FOLDER_KIND {
+            return serve_folder(path, offer.size, tx).await;
+        }
+        let file = tokio::fs::File::from_std(
             tokio::task::spawn_blocking(move || open_source(&path)).await??,
         );
         let len = file.metadata().await?.len();
@@ -1218,15 +1338,8 @@ impl Core {
         let mut header = vec![0u8];
         header.extend_from_slice(&len.to_be_bytes());
         tx.write_all(&header).await?;
-        let mut buf = vec![0u8; CHUNK];
-        loop {
-            use tokio::io::AsyncReadExt;
-            let n = file.read(&mut buf).await?;
-            if n == 0 {
-                break;
-            }
-            tx.write_all(&buf[..n]).await?;
-        }
+        let mut body = ZstdEncoder::with_quality(BufReader::new(file), Level::Precise(1));
+        tokio::io::copy(&mut body, tx).await?;
         Ok(())
     }
 
@@ -1304,9 +1417,12 @@ impl Core {
 /// Does the peer on this connection answer? A connection to a peer that restarted looks alive
 /// until QUIC's idle timeout, so ask.
 /// Open what a share points at: a file path, or on Android a `content://` URI the user picked.
-/// blake3 (hex) and size of the file at `path`.
+/// blake3 (hex) and size of the file at `path`; for a folder, of the bytes it travels as.
 async fn hash_source(path: PathBuf) -> Result<(String, u64)> {
     tokio::task::spawn_blocking(move || -> Result<(String, u64)> {
+        if path.is_dir() {
+            return hash_folder(&path);
+        }
         let mut file =
             open_source(&path).with_context(|| format!("cannot read {}", path.display()))?;
         if !file.metadata()?.is_file() {
@@ -1317,6 +1433,113 @@ async fn hash_source(path: PathBuf) -> Result<(String, u64)> {
         Ok((hasher.finalize().to_hex().to_string(), size))
     })
     .await?
+}
+
+/// What a shared folder holds, in the order its files travel: its directories (so empty ones come
+/// along too) and its files, as `/`-separated paths relative to the folder. Symlinks and special
+/// files are left out.
+#[derive(Serialize, Deserialize, Default)]
+struct Listing {
+    dirs: Vec<String>,
+    files: Vec<(String, u64)>,
+}
+
+impl Listing {
+    /// The `[length u32 BE][JSON]` a folder's bytes start with.
+    fn encode(&self) -> Vec<u8> {
+        let json = serde_json::to_vec(self).expect("listing serializes");
+        let mut out = (json.len() as u32).to_be_bytes().to_vec();
+        out.extend(json);
+        out
+    }
+}
+
+/// Lists the folder at `root`, sorted; also returns where each listed file is.
+fn walk_folder(root: &Path) -> Result<(Listing, Vec<PathBuf>)> {
+    let (mut dirs, mut files) = (Vec::new(), Vec::new());
+    let mut todo = vec![(root.to_owned(), String::new())];
+    while let Some((dir, rel)) = todo.pop() {
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("cannot read {}", dir.display()))?
+        {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name
+                .to_str()
+                .with_context(|| format!("{} has an unreadable name", entry.path().display()))?;
+            let rel = if rel.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{rel}/{name}")
+            };
+            let meta = entry.metadata()?; // does not follow symlinks
+            if meta.is_dir() {
+                dirs.push(rel.clone());
+                todo.push((entry.path(), rel));
+            } else if meta.is_file() {
+                files.push((rel, meta.len(), entry.path()));
+            }
+        }
+    }
+    dirs.sort();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let paths = files.iter().map(|f| f.2.clone()).collect();
+    let files = files
+        .into_iter()
+        .map(|(rel, size, _)| (rel, size))
+        .collect();
+    Ok((Listing { dirs, files }, paths))
+}
+
+fn hash_folder(root: &Path) -> Result<(String, u64)> {
+    let (listing, paths) = walk_folder(root)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&listing.encode());
+    let mut total = 0;
+    for (path, (_, size)) in paths.iter().zip(&listing.files) {
+        let file =
+            std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
+        if std::io::copy(&mut std::io::Read::take(file, *size), &mut hasher)? != *size {
+            bail!("{} changed while reading it", path.display());
+        }
+        total += size;
+    }
+    Ok((hasher.finalize().to_hex().to_string(), total))
+}
+
+/// Sends the folder at `root` (see [`Listing`]), compressed, as long as it still holds `size` bytes.
+async fn serve_folder(root: PathBuf, size: u64, tx: &mut SendStream) -> Result<()> {
+    let (listing, paths) = tokio::task::spawn_blocking(move || walk_folder(&root)).await??;
+    let len: u64 = listing.files.iter().map(|f| f.1).sum();
+    if len != size {
+        bail!("folder changed since it was offered");
+    }
+    let mut header = vec![0u8];
+    header.extend_from_slice(&len.to_be_bytes());
+    tx.write_all(&header).await?;
+    let mut body =
+        async_compression::tokio::write::ZstdEncoder::with_quality(&mut *tx, Level::Precise(1));
+    body.write_all(&listing.encode()).await?;
+    for (path, (_, size)) in paths.iter().zip(&listing.files) {
+        let file = tokio::fs::File::open(path).await?;
+        if tokio::io::copy(&mut file.take(*size), &mut body).await? != *size {
+            bail!("folder changed since it was offered");
+        }
+    }
+    body.shutdown().await?;
+    Ok(())
+}
+
+/// A `/`-separated path from a folder listing, as a relative path that stays inside the folder.
+fn safe_relative(rel: &str) -> Result<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in rel.split('/') {
+        if part.is_empty() || part == "." || part == ".." || part.contains(['\\', ':', '\0']) {
+            bail!("unsafe path in the folder: {rel:?}");
+        }
+        out.push(part);
+    }
+    Ok(out)
 }
 
 pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
@@ -1424,5 +1647,31 @@ pub(super) fn clean_file_name(name: &str) -> String {
         "file".into()
     } else {
         name.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_paths_stay_inside() {
+        assert_eq!(
+            safe_relative("a/b c/d.txt").unwrap(),
+            Path::new("a").join("b c").join("d.txt")
+        );
+        for bad in [
+            "",
+            "/etc/passwd",
+            "a//b",
+            "../x",
+            "a/../../x",
+            "./a",
+            "a/",
+            "C:/x",
+            "a\\..\\x",
+        ] {
+            assert!(safe_relative(bad).is_err(), "{bad:?}");
+        }
     }
 }

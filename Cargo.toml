@@ -53,6 +53,7 @@ http-body-util = "0.1"
 bytes = "1"
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+async-compression = { version = "0.4.51", features = ["tokio", "zstd"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 hostname = "0.4"

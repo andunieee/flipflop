@@ -104,7 +104,7 @@ pub struct FileRow {
     pub size: String,
     /// "Alice's phone · 14:02"
     pub meta: String,
-    /// 0 file, 1 photo / video, 2 app
+    /// 0 file, 1 photo / video, 2 app, 3 folder
     pub kind: i32,
     pub mine: bool,
     pub have: bool,
@@ -876,7 +876,7 @@ impl App {
         }
     }
 
-    /// Pick files to offer to the open group ("file" | "media"), or list the apps to share ("app", see
+    /// Pick files to offer to the open group ("file" | "media" | "folder", the latter desktop only), or list the apps to share ("app", see
     /// [`list_apps`]; the UI shows the picker).
     pub fn pick(&self, kind: String) {
         #[cfg(target_os = "android")]
@@ -900,6 +900,18 @@ impl App {
                         .await;
                     if let Some(file) = picked {
                         inner.add_app(&core, gid, file.path().to_owned(), None);
+                    }
+                });
+                return;
+            }
+            if kind == "folder" {
+                self.inner.rt.spawn(async move {
+                    let picked = rfd::AsyncFileDialog::new()
+                        .set_title("Offer a folder to the group")
+                        .pick_folder()
+                        .await;
+                    if let Some(folder) = picked {
+                        inner.offer(&core, gid, folder.path().to_owned(), None, "folder", false);
                     }
                 });
                 return;
@@ -1299,6 +1311,7 @@ fn build_state(shared: &Shared) -> UiState {
                 kind: match f.kind.as_str() {
                     "media" => 1,
                     "apk" => 2,
+                    "folder" => 3,
                     _ => 0,
                 },
                 mine: f.mine,
