@@ -40,6 +40,7 @@ textarea { resize: vertical; }
 #pad { min-height: 55vh; font-family: ui-monospace, monospace; font-size: .95rem; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
 .empty { color: var(--dim); text-align: center; padding: 24px 0; }
+button.more { display: block; margin: 0 auto; }
 .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; color: var(--dim); margin-bottom: 12px; }
 .drop.over { border-color: var(--accent); color: var(--fg); }
 progress { width: 100%; height: .5rem; }
@@ -230,13 +231,19 @@ function size(n) {
   return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
 }
 
+// Files no longer offered that the list shows before "Show more".
+const PAST_FILES = 10;
+
 function renderFiles() {
   const files = [...state.snap.files].reverse();
   $("n-files").textContent = files.length || "";
   const list = $("file-list");
   list.replaceChildren();
   if (!files.length) list.append(el("div", { class: "empty" }, "Nothing shared yet."));
+  // Everything still offered, but only the latest few that no longer are, unless asked for all of them.
+  const hidden = state.allFiles ? new Set() : new Set(files.filter((f) => f.stopped).slice(PAST_FILES));
   for (const f of files) {
+    if (hidden.has(f)) continue;
     const mine = state.me && f.from === state.me.id;
     const button = el("button", { class: "act" }, "Download");
     if (f.stopped) { button.textContent = "Gone"; button.setAttribute("aria-disabled", "true"); }
@@ -246,6 +253,11 @@ function renderFiles() {
         el("div", { class: "name" }, f.name),
         el("div", { class: "meta" }, size(f.size) + " · " + (mine ? "you" : f.from_name) + (state.me && f.downloaded.includes(state.me.id) ? " · downloaded" : ""))),
       button));
+  }
+  if (hidden.size) {
+    const more = el("button", { class: "act quiet more" }, `Show ${hidden.size} more`);
+    more.onclick = () => { state.allFiles = true; renderFiles(); };
+    list.append(more);
   }
 }
 

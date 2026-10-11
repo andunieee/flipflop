@@ -92,6 +92,9 @@ private fun FileCard(f: FileRow, nav: Nav) {
     }
 }
 
+/** Files no longer offered that the files tab shows before "Show more". */
+private const val PAST_FILES = 10
+
 @Composable
 private fun FilesTab(s: UiState, nav: Nav) {
     val d = Theme.d
@@ -106,7 +109,12 @@ private fun FilesTab(s: UiState, nav: Nav) {
                 }
             }
         }
-        s.files.forEach { FileCard(it, nav) }
+        // Everything still offered, but only the latest few that no longer are, unless asked for all of them.
+        var all by remember { mutableStateOf(false) }
+        val hidden = if (all) emptySet() else s.files.filter { it.stopped }.drop(PAST_FILES).map { it.id }.toSet()
+        val shown = s.files.filter { it.id !in hidden }
+        shown.forEach { FileCard(it, nav) }
+        if (shown.size < s.files.size) GhostButton("Show ${s.files.size - shown.size} more", Modifier.fillMaxWidth(), Icons.chevronDown) { all = true }
         if (s.files.isEmpty()) HintText("Nothing offered yet.", center = true)
     }
 }
