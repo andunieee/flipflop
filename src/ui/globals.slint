@@ -33,10 +33,6 @@ export struct TransferRow {
     // secondary line, e.g. "2 files renamed to avoid overwriting"
     note: string,
     error: string,
-    // received pasted text (shown instead of a file summary)
-    text: string,
-    // `text` is a single link
-    is-link: bool,
 }
 
 export struct HistoryRow {
@@ -181,8 +177,6 @@ export global Logic {
     callback send-composed();
     // pasted text
     callback paste-clipboard();
-    callback copy-text(string);
-    callback open-link(string);
 
     // share-sheet queue (Android)
     callback outbox-remove(string);

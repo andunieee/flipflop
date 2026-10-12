@@ -1015,13 +1015,17 @@ fn register_history(ctx: &AppCtx) {
         });
     }
     {
-        // Tap a row: open what it received; pasted text is shared (Android)
-        // or copied (desktop).
+        // Tap a row: open what it received; a pasted link opens in the
+        // browser, other text is shared (Android) or copied (desktop).
         let ctx = ctx.clone();
         logic.on_open_row(move |id: SharedString| {
             let ctx_bg = ctx.clone();
             ctx.rt.spawn_blocking(move || match row_target(&ctx_bg, &id) {
                 Some(RowTarget::Text(text)) => {
+                    if let Some(url) = transfers::as_link(&text) {
+                        platform::open_url(url);
+                        return;
+                    }
                     #[cfg(target_os = "android")]
                     platform::share_text(&text);
                     #[cfg(not(target_os = "android"))]

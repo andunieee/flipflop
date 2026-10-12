@@ -687,10 +687,9 @@ async fn finish_send(ctx: AppCtx, key: String) {
     shutdown_share(&ctx, handle, true).await;
     let ctx_ui = ctx.clone();
     let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
-        update_row(&ui, &key, |row| {
-            row.active = false;
-            row.status = format!("Sent to {peer_name}").into();
-        });
+        // Done: the history row is its record from here on.
+        remove_row(&ui, &key);
+        toast(&ui, &format!("Sent to {peer_name}"), false);
         refresh_history(&ctx_ui);
     });
 }
@@ -900,20 +899,15 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
         let ctx_ui = ctx.clone();
         match result {
             Ok(_) => {
-                // Pasted text: show it (the file stays saved too).
+                // Pasted text goes into the history row (the file stays
+                // saved too).
                 let pasted = received.lock().unwrap().pasted_text(&save_dir);
                 if let Some(text) = &pasted {
                     recorder.set_text(text.clone());
                 }
                 let _ = weak.upgrade_in_event_loop(move |ui| {
-                    update_row(&ui, &key, |row| {
-                        row.active = false;
-                        if let Some(text) = &pasted {
-                            row.title = "text".into();
-                            row.is_link = as_link(text).is_some();
-                            row.text = text.as_str().into();
-                        }
-                    });
+                    // Done: the history row is its record from here on.
+                    remove_row(&ui, &key);
                     let msg = if pasted.is_some() {
                         format!("Text from {peer_name}")
                     } else {
@@ -1070,22 +1064,6 @@ pub(crate) fn register(ctx: &AppCtx) {
                     None => toast(&ui, "The clipboard has no text", false),
                 }
             });
-        });
-    }
-    {
-        // Received text: copy it, or open it when it is a link.
-        let weak = ctx.weak.clone();
-        logic.on_copy_text(move |text| {
-            let Some(ui) = weak.upgrade() else { return };
-            match platform::copy_to_clipboard(&text) {
-                Ok(()) => toast(&ui, "Copied", false),
-                Err(e) => toast(&ui, &format!("Could not copy: {e}"), true),
-            }
-        });
-        logic.on_open_link(move |text| {
-            if let Some(url) = as_link(&text) {
-                platform::open_url(url);
-            }
         });
     }
     {
