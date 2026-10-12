@@ -124,7 +124,8 @@ component TransferCard inherits Card {
                 horizontal-stretch: 1;
 
                 Text {
-                    text: (root.transfer.sending ? "Sending " : "Receiving ") + root.transfer.title;
+                    text: (root.transfer.waiting ? "Queued: " : root.transfer.sending ? "Sending " : "Receiving ")
+                        + root.transfer.title;
                     color: Theme.text-strong;
                     font-weight: 650;
                     overflow: elide;
@@ -140,7 +141,7 @@ component TransferCard inherits Card {
             VerticalLayout {
                 alignment: center;
                 if root.transfer.active: SecondaryButton {
-                    label: root.transfer.sending ? "Stop" : "Cancel";
+                    label: root.transfer.sending && !root.transfer.waiting ? "Stop" : "Cancel";
                     clicked => {
                         if root.transfer.sending {
                             Logic.stop-share(root.transfer.key);
@@ -156,7 +157,7 @@ component TransferCard inherits Card {
             }
         }
 
-        if root.transfer.active || root.transfer.progress > 0: VerticalLayout {
+        if (root.transfer.active && !root.transfer.waiting) || root.transfer.progress > 0: VerticalLayout {
             spacing: 6px;
             ProgressBar {
                 value: root.transfer.progress;

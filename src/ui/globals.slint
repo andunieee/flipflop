@@ -25,6 +25,8 @@ export struct TransferRow {
     sending: bool,
     // still running (Stop/Cancel) vs. finished (Dismiss)
     active: bool,
+    // a send queued until its peer is reachable
+    waiting: bool,
     title: string,
     progress: float,
     progress-label: string,
