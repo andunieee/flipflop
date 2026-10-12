@@ -21,4 +21,4 @@ android-install:
     fi
     rustup target add aarch64-linux-android x86_64-linux-android
     cargo apk build --lib -p flipflop
-    adb install -r target/debug/apk/flipflop.apk
+    adb install -r ~/.cache/cargo-target/debug/apk/flipflop.apk
