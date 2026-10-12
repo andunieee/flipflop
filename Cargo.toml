@@ -26,7 +26,7 @@ name = "probe_custom_relay"
 path = "src/examples/probe_custom_relay.rs"
 
 [build-dependencies]
-slint-build = "=1.16.1"
+slint-build = "=1.18.1"
 # Compiles android/java into a dex for Android builds (as Slint does).
 android-build = "0.1"
 
@@ -63,9 +63,11 @@ keyring = "3"
 uuid = { version = "1", features = ["v4"] }
 # backend-android-activity-06 is inert off-Android (only used on
 # target_os = "android"); enabling it unconditionally keeps one dep set.
-# Pinned to 1.16.1: 1.17.x ships a `i-slint-backend-android-activity =1.17.1`
-# requirement that was never published to crates.io.
-slint = { version = "=1.16.1", features = ["backend-android-activity-06"] }
+# Exact pin. Not 1.17.x: it requires an `i-slint-backend-android-activity
+# =1.17.1` that was never published to crates.io. Not 1.16.x: its Flickable
+# grows its scroll clamp height to the Android IME inset (the nav bar, even
+# with no keyboard up), so ScrollViews stop short of the bottom.
+slint = { version = "=1.18.1", features = ["backend-android-activity-06"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 qrcode = { version = "0.14.1", default-features = false }
