@@ -14,7 +14,7 @@ use slint::platform::software_renderer::{
 };
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, ModelRc, PhysicalSize, VecModel};
-use flipflop::{AppWindow, HistoryRow, OutboxRow, PeerRow, State, TransferRow};
+use flipflop::{AppRow, AppWindow, HistoryRow, OutboxRow, PeerRow, State, TransferRow};
 
 struct Headless(Rc<MinimalSoftwareWindow>);
 
@@ -254,6 +254,25 @@ fn main() {
     render(&window, phone, &out.join("phone-peers.ppm"));
     state.set_peer_open(true);
     render(&window, phone, &out.join("phone-outbox.ppm"));
+
+    // Phone: the "Send app" chooser.
+    let apps = [
+        ("Firefox", "org.mozilla.firefox", "131.0"),
+        ("Signal", "org.thoughtcrime.securesms", "7.20.1 · split APK"),
+        ("VLC", "org.videolan.vlc", "3.6.0"),
+    ]
+    .into_iter()
+    .map(|(name, package, detail)| AppRow {
+        package: package.into(),
+        name: name.into(),
+        detail: detail.into(),
+        icon: Default::default(),
+    })
+    .collect();
+    state.set_apps(model(apps));
+    state.set_app_picker_open(true);
+    render(&window, phone, &out.join("phone-apps.ppm"));
+    state.set_app_picker_open(false);
     state.set_outbox_count(0);
     state.set_outbox(model(Vec::new()));
     state.set_peer_open(false);

@@ -34,7 +34,8 @@ pub struct Transfers {
     /// gone when it ends was cancelled by the user.
     recv_cancels: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     next_key: Arc<AtomicU64>,
-    /// A file picker is open (ignore further "Send files…" clicks).
+    /// A file picker is open (ignore further "Files" clicks).
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     picking: Arc<AtomicBool>,
     /// Share-sheet files a send has taken from the queue; they leave the
     /// queue for good once that send completes, or return if it does not.
@@ -957,6 +958,47 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
 
 // ---------------------------------------------------------------- callbacks
 
+/// Runs the blocking file dialog off the UI thread, then sends what was
+/// picked to the selected peer.
+#[cfg(not(target_os = "android"))]
+fn pick_and_send(ctx: &AppCtx) {
+    let Some(ui) = ctx.weak.upgrade() else { return };
+    let Some(node) = ctx.node() else {
+        toast(&ui, "Still connecting. Try again in a moment.", false);
+        return;
+    };
+    let state = ui.global::<State>();
+    let peer_id = state.get_selected_id().to_string();
+    let peer_name = state.get_selected_name().to_string();
+    if peer_id.is_empty() || state.get_selected_sending() {
+        return;
+    }
+    if ctx.transfers.picking.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let ctx = ctx.clone();
+    ctx.rt.clone().spawn_blocking(move || {
+        let picked = platform::pick_send_paths();
+        ctx.transfers.picking.store(false, Ordering::SeqCst);
+        if picked.is_empty() {
+            return;
+        }
+        let ctx_ui = ctx.clone();
+        let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
+            start_send(
+                &ctx_ui,
+                &ui,
+                node,
+                peer_id,
+                peer_name,
+                picked,
+                Vec::new(),
+                None,
+            );
+        });
+    });
+}
+
 pub(crate) fn register(ctx: &AppCtx) {
     let Some(ui) = ctx.weak.upgrade() else {
         return;
@@ -964,36 +1006,55 @@ pub(crate) fn register(ctx: &AppCtx) {
     let logic = ui.global::<Logic>();
 
     {
-        // Send the typed/pasted text to the selected peer.
+        // Send card: the typed/pasted text and any queued files, to the
+        // selected peer.
         let ctx = ctx.clone();
-        logic.on_send_text(move || {
+        logic.on_send_composed(move || {
             let Some(ui) = ctx.weak.upgrade() else { return };
             let state = ui.global::<State>();
-            let text = state.get_paste_input().to_string();
             let peer_id = state.get_selected_id().to_string();
             let peer_name = state.get_selected_name().to_string();
-            if text.trim().is_empty() || peer_id.is_empty() {
+            if peer_id.is_empty() || state.get_selected_sending() {
+                return;
+            }
+            let text = state.get_paste_input().to_string();
+            let queued = queued_files(&ctx);
+            if text.trim().is_empty() && queued.is_empty() {
                 return;
             }
             let Some(node) = ctx.node() else {
                 toast(&ui, "Still connecting. Try again in a moment.", false);
                 return;
             };
-            match write_paste_file(&text) {
-                Ok((dir, file)) => {
-                    state.set_paste_input("".into());
-                    start_send(
-                        &ctx,
-                        &ui,
-                        node,
-                        peer_id,
-                        peer_name,
-                        vec![file],
-                        Vec::new(),
-                        Some(dir),
-                    );
+            if !text.trim().is_empty() {
+                match write_paste_file(&text) {
+                    Ok((dir, file)) => {
+                        state.set_paste_input("".into());
+                        start_send(
+                            &ctx,
+                            &ui,
+                            node.clone(),
+                            peer_id.clone(),
+                            peer_name.clone(),
+                            vec![file],
+                            Vec::new(),
+                            Some(dir),
+                        );
+                    }
+                    Err(e) => toast(&ui, &format!("Could not prepare the text: {e}"), true),
                 }
-                Err(e) => toast(&ui, &format!("Could not prepare the text: {e}"), true),
+            }
+            if !queued.is_empty() {
+                start_send(
+                    &ctx,
+                    &ui,
+                    node,
+                    peer_id,
+                    peer_name,
+                    queued.clone(),
+                    queued,
+                    None,
+                );
             }
         });
     }
@@ -1047,55 +1108,12 @@ pub(crate) fn register(ctx: &AppCtx) {
         });
     }
 
+    // Desktop: pick files, share them and deliver them to the selected peer.
+    // Android queues picks in the send card instead.
+    #[cfg(not(target_os = "android"))]
     {
-        // Pick files, share them and deliver to the selected peer.
         let ctx = ctx.clone();
-        logic.on_send_to_peer(move || {
-            let Some(ui) = ctx.weak.upgrade() else { return };
-            let Some(node) = ctx.node() else {
-                toast(&ui, "Still connecting. Try again in a moment.", false);
-                return;
-            };
-            let state = ui.global::<State>();
-            let peer_id = state.get_selected_id().to_string();
-            let peer_name = state.get_selected_name().to_string();
-            if peer_id.is_empty() || state.get_selected_sending() {
-                return;
-            }
-            if ctx.transfers.picking.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            let ctx = ctx.clone();
-            ctx.rt.clone().spawn_blocking(move || {
-                // Android sends the share-sheet queue; desktop opens a picker.
-                #[cfg(target_os = "android")]
-                let picked = queued_files(&ctx);
-                #[cfg(not(target_os = "android"))]
-                let picked = platform::pick_send_paths();
-                ctx.transfers.picking.store(false, Ordering::SeqCst);
-                if picked.is_empty() {
-                    // Touch devices pick content through the system share
-                    // sheet; say so instead of silently doing nothing.
-                    if platform::TOUCH {
-                        toast_later(
-                            &ctx.weak,
-                            "Share files to flipflop from any app first, then send them here.",
-                            false,
-                        );
-                    }
-                    return;
-                }
-                let staged = if cfg!(target_os = "android") {
-                    picked.clone()
-                } else {
-                    Vec::new()
-                };
-                let ctx_ui = ctx.clone();
-                let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
-                    start_send(&ctx_ui, &ui, node, peer_id, peer_name, picked, staged, None);
-                });
-            });
-        });
+        logic.on_send_to_peer(move || pick_and_send(&ctx));
     }
     {
         let ctx = ctx.clone();

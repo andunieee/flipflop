@@ -181,6 +181,12 @@ name = "android.permission.CAMERA"
 name = "android.hardware.camera"
 required = false
 
+# "Send app" lists launchable apps; Android 11+ hides other packages unless
+# the manifest declares what it looks for.
+[[package.metadata.android.queries.intent]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]
+
 # A share made while the app runs arrives in a second activity instance,
 # which brings the main window's task back to the front.
 [[package.metadata.android.uses_permission]]

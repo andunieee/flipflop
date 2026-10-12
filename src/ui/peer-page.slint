@@ -1,5 +1,5 @@
 import { LineEdit, TextEdit } from "std-widgets.slint";
-import { State, Logic, HistoryRow, TransferRow } from "globals.slint";
+import { State, Logic, HistoryRow, TransferRow, AppRow } from "globals.slint";
 import {
     Theme, Dot, Card, ProgressBar, HintText, Avatar, Badge, DirectionIcon,
     PrimaryButton, SecondaryButton, GhostButton, DangerButton, SectionTitle,
@@ -306,10 +306,39 @@ export component EmptyPeersCard inherits Card {
     }
 }
 
-// Share-sheet queue: every staged file with a remove button. On a peer's
-// page it also sends the lot to that peer.
+// Queued files (share sheet, pickers), each with a remove button.
+component OutboxFiles inherits VerticalLayout {
+    spacing: Theme.space-1;
+    for file in State.outbox: HorizontalLayout {
+        spacing: Theme.space-2;
+        padding-left: Theme.space-1;
+        VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.file; size: 16px; tint: Theme.text-muted; }
+        }
+        Text {
+            text: file.name;
+            color: Theme.text;
+            font-size: Theme.font-sm;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: file.size;
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            vertical-alignment: center;
+        }
+        IconButton {
+            icon: Icons.close;
+            clicked => { Logic.outbox-remove(file.path); }
+        }
+    }
+}
+
+// Share-sheet queue on the peer list, waiting for a peer to be picked.
 export component OutboxCard inherits Card {
-    in property <bool> can-send;
     border-color: Theme.accent-border;
 
     VerticalLayout {
@@ -345,55 +374,58 @@ export component OutboxCard inherits Card {
             }
         }
 
-        for file in State.outbox: HorizontalLayout {
-            spacing: Theme.space-2;
-            padding-left: Theme.space-1;
-            VerticalLayout {
-                alignment: center;
-                Icon { source: Icons.file; size: 16px; tint: Theme.text-muted; }
-            }
-            Text {
-                text: file.name;
-                color: Theme.text;
-                font-size: Theme.font-sm;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: file.size;
-                color: Theme.text-faint;
-                font-size: Theme.font-xs;
-                vertical-alignment: center;
-            }
-            IconButton {
-                icon: Icons.close;
-                clicked => { Logic.outbox-remove(file.path); }
-            }
-        }
+        OutboxFiles { }
+    }
+}
 
+// Attachment action of the send card: icon over a short label.
+component AttachButton inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    horizontal-stretch: 1;
+    height: State.touch ? 60px : 52px;
+    border-radius: Theme.radius-sm + 2px;
+    background: !root.enabled ? Theme.chip-bg
+        : touch.pressed ? Theme.chip-bg-press
+        : touch.has-hover ? Theme.chip-bg-hover
+        : Theme.chip-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background { duration: 90ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: root.enabled ? pointer : default;
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
         HorizontalLayout {
-            spacing: Theme.space-2;
-            padding-top: Theme.space-1;
-            SecondaryButton {
-                label: "Add files…";
-                icon: Icons.folder;
-                horizontal-stretch: root.can-send ? 0 : 1;
-                clicked => { Logic.pick-files(); }
-            }
-            if root.can-send: PrimaryButton {
-                label: State.selected-sending ? "Sending…" : "Send to " + State.selected-name;
-                icon: Icons.send;
-                enabled: !State.selected-sending;
-                horizontal-stretch: 1;
-                clicked => { Logic.send-to-peer(); }
-            }
+            alignment: center;
+            Icon { source: root.icon; size: 20px; tint: Theme.accent-text; }
+        }
+        Text {
+            text: root.label;
+            color: Theme.text-strong;
+            font-size: Theme.font-xs;
+            font-weight: 600;
+            horizontal-alignment: center;
         }
     }
 }
 
-// Type or paste text and send it as-is (arrives as text, not a file).
-component SendTextCard inherits Card {
+// Everything sent to a peer starts here: type or paste text, attach
+// pictures / an app / files, then Send. Android queues attachments (listed
+// above the text box) until Send; desktop only has Files, which sends right
+// away.
+component SendCard inherits Card {
+    border-color: State.outbox-count > 0 ? Theme.accent-border : Theme.border;
+
     VerticalLayout {
         padding: Theme.card-padding;
         spacing: Theme.space-3;
@@ -407,7 +439,7 @@ component SendTextCard inherits Card {
                     height: 36px;
                     border-radius: 10px;
                     background: Theme.accent-soft;
-                    Icon { source: Icons.text; size: 18px; tint: Theme.accent-text; }
+                    Icon { source: Icons.send; size: 18px; tint: Theme.accent-text; }
                 }
             }
             VerticalLayout {
@@ -415,31 +447,75 @@ component SendTextCard inherits Card {
                 spacing: 2px;
                 horizontal-stretch: 1;
                 Text {
-                    text: "Send text";
+                    text: "Send to " + State.selected-name;
                     color: Theme.text-strong;
                     font-weight: 650;
+                    overflow: elide;
+                }
+                if State.outbox-count > 0: Text {
+                    text: State.outbox-count == 1 ? "1 file attached" : State.outbox-count + " files attached";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-sm;
                 }
             }
+            if State.outbox-count > 0: VerticalLayout {
+                alignment: center;
+                GhostButton { label: "Clear"; clicked => { Logic.outbox-clear(); } }
+            }
         }
-        TextEdit {
+
+        if State.outbox-count > 0: OutboxFiles { }
+
+        text-box := TextEdit {
             text <=> State.paste-input;
             placeholder-text: "Type or paste text…";
             wrap: word-wrap;
             height: 96px;
         }
+
         HorizontalLayout {
             spacing: Theme.space-2;
-            GhostButton {
+            AttachButton {
                 label: "Paste";
-                icon: Icons.copy;
+                icon: Icons.clipboard;
                 clicked => { Logic.paste-clipboard(); }
             }
-            Rectangle { horizontal-stretch: 1; }
+            if State.touch: AttachButton {
+                label: "Picture";
+                icon: Icons.image;
+                clicked => { Logic.pick-images(); }
+            }
+            if State.touch: AttachButton {
+                label: "App";
+                icon: Icons.apps;
+                clicked => { Logic.pick-app(); }
+            }
+            AttachButton {
+                label: "Files";
+                icon: Icons.folder;
+                enabled: State.touch || !State.selected-sending;
+                clicked => {
+                    if State.touch {
+                        Logic.pick-files();
+                    } else {
+                        Logic.send-to-peer();
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: State.touch ? stretch : end;
             PrimaryButton {
-                label: "Send text";
+                label: State.selected-sending ? "Sending…" : "Send";
                 icon: Icons.send;
-                enabled: State.paste-input != "" && !State.selected-sending;
-                clicked => { Logic.send-text(); }
+                enabled: !State.selected-sending
+                    && (State.paste-input != "" || State.outbox-count > 0);
+                clicked => {
+                    // Losing focus commits the keyboard's composing text on Android.
+                    text-box.clear-focus();
+                    Logic.send-composed();
+                }
             }
         }
     }
@@ -547,54 +623,7 @@ component WidePeerView inherits Rectangle {
         if State.rename-mode: RenameRow { }
         if !root.has-peer: EmptyPeersCard { }
 
-        // Share-sheet queue (touch devices that are wide enough for this view).
-        if root.has-peer && State.outbox-count > 0: OutboxCard { can-send: true; }
-
-        // Send action (hidden while a send to this peer is in flight).
-        if root.has-peer && !State.selected-sending && State.outbox-count == 0: Card {
-            HorizontalLayout {
-                padding: Theme.card-padding;
-                spacing: Theme.space-3 + 2px;
-
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 12px;
-                        background: Theme.accent-soft;
-                        Icon { source: Icons.send; size: 20px; tint: Theme.accent-text; }
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 3px;
-                    horizontal-stretch: 1;
-                    Text {
-                        text: "Send files to " + State.selected-name;
-                        color: Theme.text-strong;
-                        font-weight: 650;
-                        overflow: elide;
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    PrimaryButton {
-                        label: State.touch ? "Choose files…" : "Send files…";
-                        icon: State.touch ? Icons.folder : Icons.send;
-                        clicked => {
-                            if State.touch {
-                                Logic.pick-files();
-                            } else {
-                                Logic.send-to-peer();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if root.has-peer: SendTextCard { }
+        if root.has-peer: SendCard { }
 
         for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
 
@@ -666,44 +695,7 @@ component PhonePeerView inherits Rectangle {
 
             if State.rename-mode: RenameRow { }
 
-            if State.outbox-count > 0: OutboxCard { can-send: true; }
-            if State.outbox-count == 0 && !State.selected-sending: Card {
-                VerticalLayout {
-                    padding: Theme.card-padding;
-                    spacing: Theme.space-3;
-                    HorizontalLayout {
-                        spacing: Theme.space-3;
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 36px;
-                                height: 36px;
-                                border-radius: 10px;
-                                background: Theme.accent-soft;
-                                Icon { source: Icons.send; size: 18px; tint: Theme.accent-text; }
-                            }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 2px;
-                            horizontal-stretch: 1;
-                            Text {
-                                text: "Send files to " + State.selected-name;
-                                color: Theme.text-strong;
-                                font-weight: 650;
-                                overflow: elide;
-                            }
-                        }
-                    }
-                    PrimaryButton {
-                        label: "Choose files…";
-                        icon: Icons.folder;
-                        clicked => { Logic.pick-files(); }
-                    }
-                }
-            }
-
-            SendTextCard { }
+            SendCard { }
 
             for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
 
@@ -749,4 +741,121 @@ component PhonePeerView inherits Rectangle {
 export component PeerPage inherits Rectangle {
     if !State.compact: WidePeerView { width: 100%; height: 100%; }
     if State.compact: PhonePeerView { width: 100%; height: 100%; }
+}
+
+component AppItem inherits Rectangle {
+    in property <AppRow> app;
+
+    height: State.touch ? 60px : 48px;
+    border-radius: Theme.radius;
+    background: ta.pressed ? Theme.chip-bg-hover : ta.has-hover ? Theme.chip-bg : transparent;
+    animate background { duration: 90ms; }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Logic.app-chosen(root.app.package); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-2;
+        padding-right: Theme.space-2;
+        spacing: Theme.space-3;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.app.icon;
+                width: 36px;
+                height: 36px;
+                image-fit: contain;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.app.name;
+                color: Theme.text-strong;
+                font-weight: 600;
+                overflow: elide;
+            }
+            if root.app.detail != "": Text {
+                text: root.app.detail;
+                color: Theme.text-muted;
+                font-size: Theme.font-xs;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// "Send app" chooser (Android): installed apps, filterable; picking one
+// queues its APK in the send card.
+export component AppPickerSheet inherits Rectangle {
+    in property <length> inset-top;
+    in property <length> inset-bottom;
+
+    background: Theme.shadow;
+    // Swallow clicks meant for the page underneath; tapping outside closes.
+    TouchArea { clicked => { State.app-picker-open = false; } }
+
+    Rectangle {
+        x: State.compact ? 0 : (parent.width - self.width) / 2;
+        y: State.compact ? 0 : (parent.height - self.height) / 2;
+        width: State.compact ? parent.width : min(parent.width - 48px, 480px);
+        height: State.compact ? parent.height : min(parent.height - 48px, 640px);
+        border-radius: State.compact ? 0 : Theme.radius-lg;
+        background: Theme.window-bg;
+        TouchArea { }
+
+        VerticalLayout {
+            padding: Theme.page-padding;
+            padding-top: Theme.page-padding + (State.compact ? root.inset-top : 0);
+            padding-bottom: Theme.page-padding + (State.compact ? root.inset-bottom : 0);
+            spacing: Theme.space-3;
+
+            HorizontalLayout {
+                spacing: Theme.space-2;
+                Text {
+                    text: "Send an app";
+                    color: Theme.text-strong;
+                    font-size: Theme.font-lg;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                IconButton {
+                    icon: Icons.close;
+                    tint: Theme.text-strong;
+                    clicked => { State.app-picker-open = false; }
+                }
+            }
+            LineEdit {
+                text <=> State.app-filter;
+                placeholder-text: "Search apps";
+                edited(text) => { Logic.app-filter-changed(text); }
+            }
+            if State.apps-loading: Text {
+                text: "Loading apps…";
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-stretch: 1;
+                vertical-alignment: center;
+            }
+            if !State.apps-loading && State.apps.length == 0: Text {
+                text: State.app-filter == "" ? "No installed apps to send." : "No app matches.";
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-stretch: 1;
+                vertical-alignment: center;
+            }
+            if !State.apps-loading && State.apps.length > 0: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 2px;
+                    for app in State.apps: AppItem { app: app; }
+                }
+            }
+        }
+    }
 }

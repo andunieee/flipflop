@@ -1452,9 +1452,9 @@ pub fn run() {
             } else {
                 format!("{} files", staged.len())
             };
-            // Picked files: the user is already where they want to send from.
+            // Picked files: the user is already on the send card, which
+            // lists them.
             if origin == crate::android::Origin::Picker {
-                toast(&ui, &format!("{what} ready to send"), false);
                 return;
             }
             let state = ui.global::<State>();
@@ -1471,8 +1471,12 @@ pub fn run() {
     ui.global::<Logic>()
         .on_back_at_root(crate::android::move_to_background);
     #[cfg(target_os = "android")]
-    ui.global::<Logic>()
-        .on_pick_files(crate::android::pick_files);
+    {
+        let logic = ui.global::<Logic>();
+        logic.on_pick_files(crate::android::pick_files);
+        logic.on_pick_images(crate::android::pick_images);
+        register_app_picker(&ctx);
+    }
 
     register_node(&ctx);
     register_peers(&ctx);
@@ -1483,6 +1487,136 @@ pub fn run() {
     transfers::register(&ctx);
 
     ui.run().expect("UI error");
+}
+
+// ------------------------------------------------------------ app picker
+
+#[cfg(target_os = "android")]
+thread_local! {
+    /// The last app list, with icons ready for the UI. UI thread only.
+    static APPS: std::cell::RefCell<Vec<(crate::android::InstalledApp, crate::AppRow)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// "Send app": lists installed apps in the chooser, and queues the chosen
+/// one's APK in the send card.
+#[cfg(target_os = "android")]
+fn register_app_picker(ctx: &AppCtx) {
+    use crate::android::{self, InstalledApp, APP_ICON_SIZE};
+    use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+
+    fn show_filtered(ui: &AppWindow) {
+        let state = ui.global::<State>();
+        let filter = state.get_app_filter().to_lowercase();
+        let rows: Vec<crate::AppRow> = APPS.with(|apps| {
+            apps.borrow()
+                .iter()
+                .filter(|(app, _)| {
+                    filter.is_empty()
+                        || app.label.to_lowercase().contains(&filter)
+                        || app.package.to_lowercase().contains(&filter)
+                })
+                .map(|(_, row)| row.clone())
+                .collect()
+        });
+        state.set_apps(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    let Some(ui) = ctx.weak.upgrade() else {
+        return;
+    };
+    let logic = ui.global::<Logic>();
+    {
+        // Open the chooser; the list is reloaded each time (apps come and
+        // go), showing the previous one meanwhile.
+        let weak = ctx.weak.clone();
+        logic.on_pick_app(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let state = ui.global::<State>();
+            state.set_app_filter("".into());
+            state.set_app_picker_open(true);
+            let cached = APPS.with(|apps| !apps.borrow().is_empty());
+            state.set_apps_loading(!cached);
+            show_filtered(&ui);
+            let weak = weak.clone();
+            std::thread::spawn(move || {
+                let apps = android::installed_apps().unwrap_or_else(|e| {
+                    tracing::warn!("listing installed apps failed: {e}");
+                    Vec::new()
+                });
+                // Pixel buffers cross threads; images are made on the UI thread.
+                let apps: Vec<(InstalledApp, Option<SharedPixelBuffer<Rgba8Pixel>>)> = apps
+                    .into_iter()
+                    .map(|mut app| {
+                        let icon = app.icon.take().map(|rgba| {
+                            SharedPixelBuffer::clone_from_slice(&rgba, APP_ICON_SIZE, APP_ICON_SIZE)
+                        });
+                        (app, icon)
+                    })
+                    .collect();
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    let apps = apps
+                        .into_iter()
+                        .map(|(app, icon)| {
+                            let mut detail = app.version.clone();
+                            if app.split {
+                                detail = if detail.is_empty() {
+                                    "Split APK".into()
+                                } else {
+                                    format!("{detail} · split APK")
+                                };
+                            }
+                            let row = crate::AppRow {
+                                package: app.package.clone().into(),
+                                name: app.label.clone().into(),
+                                detail: detail.into(),
+                                icon: icon.map(Image::from_rgba8).unwrap_or_default(),
+                            };
+                            (app, row)
+                        })
+                        .collect();
+                    APPS.with(|cell| *cell.borrow_mut() = apps);
+                    ui.global::<State>().set_apps_loading(false);
+                    show_filtered(&ui);
+                });
+            });
+        });
+    }
+    {
+        let weak = ctx.weak.clone();
+        logic.on_app_filter_changed(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                show_filtered(&ui);
+            }
+        });
+    }
+    {
+        // Copy the APK into the queue off the UI thread (it can be large).
+        let weak = ctx.weak.clone();
+        logic.on_app_chosen(move |package| {
+            let Some(ui) = weak.upgrade() else { return };
+            ui.global::<State>().set_app_picker_open(false);
+            let Some(app) = APPS.with(|apps| {
+                apps.borrow()
+                    .iter()
+                    .find(|(app, _)| app.package == package.as_str())
+                    .map(|(app, _)| app.clone())
+            }) else {
+                return;
+            };
+            if app.split {
+                toast(
+                    &ui,
+                    &format!(
+                        "{} is split into several APKs; only the base APK is sent, which may not install on its own.",
+                        app.label
+                    ),
+                    false,
+                );
+            }
+            std::thread::spawn(move || android::stage_app(&app));
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1561,3 +1695,4 @@ mod tests {
         assert!(row.can_open);
     }
 }
+
