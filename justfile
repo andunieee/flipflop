@@ -17,6 +17,20 @@ desktop: build
     cd kmp
     LD_LIBRARY_PATH="$target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" DYLD_LIBRARY_PATH="$target/debug" ./gradlew :desktopApp:run
 
+# install the desktop app system-wide in /opt/flipflop and add its menu entry and icons for the current user (Linux)
+desktop-install: portable
+    #!/usr/bin/env bash
+    set -euo pipefail
+    app=kmp/desktopApp/build/compose/binaries/main/app/flipflop
+    # Replace the installed copy, keeping the bundled runtime, then put the launcher in PATH without taking the
+    # `flipflop` name from the command line client (`flipflop gui` looks for `flipflop-gui`).
+    sudo rm -rf /opt/flipflop
+    sudo cp -a "$app" /opt/flipflop
+    sudo ln -sf /opt/flipflop/bin/flipflop /usr/local/bin/flipflop-gui
+    # The menu entry and icons go to ~/.local/share/applications and ~/.local/share/icons, with Exec pointing at
+    # the launcher we just installed.
+    /opt/flipflop/bin/flipflop --install-desktop-entry
+
 # build the Rust library (debug)
 build:
     cargo build
