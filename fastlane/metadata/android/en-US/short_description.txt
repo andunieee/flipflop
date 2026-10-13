@@ -1,0 +1,1 @@
+Send files and text to your own devices over LAN, Bluetooth or the internet

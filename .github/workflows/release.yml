@@ -24,11 +24,20 @@ jobs:
           fi
           echo "name=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Stamp Cargo version
+      # F-Droid builds the tagged source itself, so the tag's Cargo.toml must
+      # already carry the version (no stamping here), the matching F-Droid
+      # version code, and a changelog for it.
+      - name: Check Android version metadata
         run: |
-          sed -i.bak 's/^version = "[^"]*"$/version = "${{ steps.version.outputs.name }}"/' Cargo.toml
-          rm -f Cargo.toml.bak
-          grep -q "^version = \"${{ steps.version.outputs.name }}\"$" Cargo.toml
+          name="${{ steps.version.outputs.name }}"
+          IFS=. read -r major minor patch <<< "$name"
+          code=$(( (1 << 24) | (major << 16) | (minor << 8) | patch ))
+          grep -q "^version = \"$name\"$" Cargo.toml \
+            || { echo "::error::Cargo.toml version is not $name"; exit 1; }
+          grep -q "^version_code = $code$" Cargo.toml \
+            || { echo "::error::Cargo.toml [package.metadata.fdroid] version_code is not $code"; exit 1; }
+          test -s "fastlane/metadata/android/en-US/changelogs/$code.txt" \
+            || { echo "::error::missing fastlane/metadata/android/en-US/changelogs/$code.txt"; exit 1; }
 
       - uses: actions/setup-java@v4
         with:

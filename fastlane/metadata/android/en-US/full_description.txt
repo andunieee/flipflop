@@ -1,0 +1,27 @@
+<p>Send files and text straight to your own devices.</p>
+
+<p>Pair once with a trusted peer, a desktop or another phone, and flipflop keeps a private channel open between you, at home or anywhere else. Drop files or paste any text, and it lands directly on the other side. Each peer gets its own history of what went back and forth.</p>
+
+<p>No cloud, no accounts, and no internet required: peers find each other over the local network or Bluetooth, and connect across the internet when they are apart.</p>
+
+<p><b>Features</b></p>
+<ul>
+<li>Pair by scanning a QR code, typing an address, or accepting a nearby device</li>
+<li>Send text, pictures, files and installed apps</li>
+<li>"Share → flipflop" from any app</li>
+<li>Sends to an offline peer wait and go out as soon as it comes back</li>
+<li>Received files are saved to Download/flipflop, one folder per peer</li>
+<li>Browser link: someone without flipflop can swap files and text with you from any browser on the same Wi-Fi</li>
+<li>Desktop apps for Linux, macOS and Windows</li>
+</ul>
+
+<p><b>Network</b></p>
+<p>Connections are end-to-end encrypted and built on <a href="https://iroh.computer">iroh</a>. When two peers can't reach each other directly, traffic is forwarded through a relay server: by default the public relays run by n0, the iroh developers, which only see encrypted data. You can point flipflop at your own relays or turn relaying off in Settings.</p>
+
+<p><b>Permissions</b></p>
+<ul>
+<li>Nearby devices / location: finding peers over Bluetooth (Android requires location for Bluetooth scanning)</li>
+<li>Camera: scanning a peer's QR code</li>
+<li>Storage (Android 8 and 9 only): saving received files to Downloads</li>
+<li>Wi-Fi multicast: discovering peers on the local network</li>
+</ul>

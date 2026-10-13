@@ -1,0 +1,42 @@
+Categories:
+  - Connectivity
+  - File Transfer
+License: AGPL-3.0-only
+AuthorName: andunie
+SourceCode: https://github.com/andunieee/flipflop
+IssueTracker: https://github.com/andunieee/flipflop/issues
+Changelog: https://github.com/andunieee/flipflop/releases
+
+AutoName: flipflop
+
+RepoType: git
+Repo: https://github.com/andunieee/flipflop.git
+
+Builds:
+  - versionName: 0.0.6
+    versionCode: 16777222
+    commit: v0.0.6
+    sudo:
+      - apt-get update
+      - apt-get install -y build-essential openjdk-17-jdk-headless
+    output: target/release/apk/flipflop-unaligned.apk
+    srclibs:
+      - rustup@1.28.2
+    prebuild: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+    build:
+      - $$rustup$$/rustup-init.sh -y --profile minimal --default-toolchain 1.92 --target
+        aarch64-linux-android,x86_64-linux-android
+      - source $HOME/.cargo/env
+      - cargo install cargo-apk --version 0.10.0 --locked
+      - keytool -genkeypair -keystore throwaway.jks -storepass throwaway -alias throwaway
+        -keyalg RSA -dname CN=throwaway -validity 1
+      - export ANDROID_NDK_ROOT=$$NDK$$ ANDROID_PLATFORM=android-35 ANDROID_BUILD_TOOLS_VERSION=35.0.0
+        CARGO_APK_RELEASE_KEYSTORE=$PWD/throwaway.jks CARGO_APK_RELEASE_KEYSTORE_PASSWORD=throwaway
+      - cargo apk build --release --lib -p flipflop
+    ndk: r27c
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[0-9]+\.[0-9]+\.[0-9]+$
+UpdateCheckData: Cargo.toml|^version_code = (\d+)$|Cargo.toml|^version = "(.+)"$
+CurrentVersion: 0.0.6
+CurrentVersionCode: 16777222

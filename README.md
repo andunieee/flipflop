@@ -33,4 +33,5 @@ just android-install         # Android (needs cargo-apk, Android SDK + NDK)
 ```
 
 Architecture, platform notes and the Android toolchain setup are in
-[docs/development.md](docs/development.md).
+[docs/development.md](docs/development.md). Release steps and app store
+publishing are in [docs/releasing.md](docs/releasing.md).

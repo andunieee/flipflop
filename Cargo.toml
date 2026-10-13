@@ -1,6 +1,6 @@
 [package]
 name = "flipflop"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Send files and text straight to your own trusted devices, desktop and Android, over LAN, Bluetooth or the internet"
@@ -130,6 +130,13 @@ apk_name = "flipflop"
 resources = "src/android/res"
 # Slint's Android backend needs API >= 26.
 build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+
+# cargo-apk derives the APK versionCode from `version` and refuses an
+# explicit one: (1 << 24) | major << 16 | minor << 8 | patch. It is
+# repeated here only so F-Droid's update checker can read it; the release
+# workflow fails if it doesn't match. Bump it together with `version`.
+[package.metadata.fdroid]
+version_code = 16777222
 
 [package.metadata.android.sdk]
 min_sdk_version = 26
