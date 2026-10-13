@@ -1486,15 +1486,18 @@ pub fn run() {
     #[cfg(target_os = "android")]
     {
         let ctx_shared = ctx.clone();
-        crate::android::on_shared(move |staged, origin| {
+        crate::android::on_shared(move |staged, text, origin| {
             transfers::refresh_outbox(&ctx_shared);
             let Some(ui) = ctx_shared.weak.upgrade() else {
                 return;
             };
-            if staged.is_empty() {
+            // Shared text goes into the send card's text box, like a paste.
+            let what = if let Some(text) = text {
+                ui.global::<State>().set_paste_input(text.trim().into());
+                "Text".to_string()
+            } else if staged.is_empty() {
                 return;
-            }
-            let what = if staged.len() == 1 {
+            } else if staged.len() == 1 {
                 "1 file".to_string()
             } else {
                 format!("{} files", staged.len())

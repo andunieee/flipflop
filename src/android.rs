@@ -507,8 +507,10 @@ mod imp {
     // ----------------------------------------------------- shared content
 
     thread_local! {
-        /// Receives staged outbox files; lives on the UI (event loop) thread.
-        static ON_SHARED: RefCell<Option<Box<dyn Fn(Vec<PathBuf>, Origin)>>> = RefCell::new(None);
+        /// Receives staged outbox files and shared text; lives on the UI
+        /// (event loop) thread.
+        static ON_SHARED: RefCell<Option<Box<dyn Fn(Vec<PathBuf>, Option<String>, Origin)>>> =
+            RefCell::new(None);
     }
 
     /// How content got into the outbox.
@@ -521,19 +523,19 @@ mod imp {
     }
 
     /// Register the UI's handler for new outbox content: called on the event
-    /// loop with every staged outbox file each time something is shared in or
-    /// picked. Must be called on the UI thread.
-    pub fn on_shared(handler: impl Fn(Vec<PathBuf>, Origin) + 'static) {
+    /// loop with every staged outbox file, plus any text shared in, each time
+    /// something is shared in or picked. Must be called on the UI thread.
+    pub fn on_shared(handler: impl Fn(Vec<PathBuf>, Option<String>, Origin) + 'static) {
         ON_SHARED.with(|h| *h.borrow_mut() = Some(Box::new(handler)));
     }
 
-    /// Hand the outbox to the UI's [`on_shared`] handler.
-    fn deliver_outbox(origin: Origin) {
+    /// Hand the outbox and any shared `text` to the UI's [`on_shared`] handler.
+    fn deliver_outbox(text: Option<String>, origin: Origin) {
         let staged = outbox_files();
         let posted = slint::invoke_from_event_loop(move || {
             ON_SHARED.with(|h| {
                 if let Some(handler) = h.borrow().as_ref() {
-                    handler(staged, origin);
+                    handler(staged, text, origin);
                 }
             })
         });
@@ -562,16 +564,19 @@ mod imp {
         }
         let app = app().clone();
         std::thread::spawn(move || {
-            stage_intent_of(&app);
-            deliver_outbox(Origin::Share);
+            let text = stage_intent_of(&app);
+            deliver_outbox(text, Origin::Share);
         });
     }
 
-    /// Copy what `app`'s launch intent shares into the outbox.
-    fn stage_intent_of(app: &AndroidApp) {
-        if let Err(e) = with_env(|env| collect_shared_files_with_env(env, &activity_of(app)?)) {
-            tracing::warn!("staging shared files failed: {e}");
-        }
+    /// Copy the files `app`'s launch intent shares into the outbox; returns
+    /// the text it shares instead, if that is what it carries.
+    fn stage_intent_of(app: &AndroidApp) -> Option<String> {
+        with_env(|env| collect_shared_with_env(env, &activity_of(app)?))
+            .unwrap_or_else(|e| {
+                tracing::warn!("staging shared content failed: {e}");
+                None
+            })
     }
 
     /// `android_main` for every activity instance after the first.
@@ -589,8 +594,8 @@ mod imp {
         std::thread::spawn(move || {
             // Stage before finishing: the sender's URI grant only lasts as
             // long as this activity does.
-            stage_intent_of(&worker);
-            deliver_outbox(Origin::Share);
+            let text = stage_intent_of(&worker);
+            deliver_outbox(text, Origin::Share);
             let closer = worker.clone();
             worker.run_on_java_main_thread(Box::new(move || {
                 if let Err(e) = with_env(|env| show_primary_and_finish(env, &closer)) {
@@ -1001,7 +1006,7 @@ mod imp {
                 tracing::warn!("staging picked files failed: {e}");
                 show_toast("Could not read the picked files", true);
             }
-            deliver_outbox(Origin::Picker);
+            deliver_outbox(None, Origin::Picker);
         });
     }
 
@@ -1142,7 +1147,7 @@ mod imp {
             show_toast(&format!("Could not read {}'s APK", app.label), true);
             return;
         }
-        deliver_outbox(Origin::Picker);
+        deliver_outbox(None, Origin::Picker);
     }
 
     // ----------------------------------------------------------- bluetooth
@@ -1385,17 +1390,19 @@ mod imp {
         }
     }
 
-    fn collect_shared_files_with_env(
+    /// Stage the shared files into the outbox; returns shared text (a plain
+    /// `EXTRA_TEXT` share, or a text stream that is not a named file).
+    fn collect_shared_with_env(
         env: &mut jni::JNIEnv,
         activity: &JObject,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Option<String>, String> {
         let intent = env
             .call_method(activity, "getIntent", "()Landroid/content/Intent;", &[])
             .map_err(|e| e.to_string())?
             .l()
             .map_err(|e| e.to_string())?;
         if intent.is_null() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let action_obj = env
             .call_method(&intent, "getAction", "()Ljava/lang/String;", &[])
@@ -1464,39 +1471,60 @@ mod imp {
             }
             _ => {}
         }
+        let is_send = action == "android.intent.action.SEND";
+        let text = if is_send {
+            string_extra(env, &intent, "android.intent.extra.TEXT")?
+                .filter(|t| !t.trim().is_empty())
+        } else {
+            None
+        };
         if uris.is_empty() {
             // Shared text or a link (ACTION_SEND with EXTRA_TEXT only).
-            if action == "android.intent.action.SEND" {
-                return stage_text(env, &intent).map(|p| p.into_iter().collect());
-            }
-            return Ok(Vec::new());
+            return Ok(text);
         }
-        stage_uris(env, activity, uris)
+        let is_plain_text = is_send
+            && intent_type(env, &intent)?.is_some_and(|t| t.starts_with("text/plain"));
+        let staged = stage_uris(env, activity, uris)?;
+        // Some apps share text as a stream (an extensionless "text-content"
+        // and the like), often with the same text in EXTRA_TEXT: that is a
+        // paste, not a file. Named files (notes.txt) stay files.
+        if let ([file], true) = (staged.as_slice(), is_plain_text) {
+            if file.extension().is_none() {
+                if let Some(streamed) = read_small_text(file) {
+                    let _ = std::fs::remove_file(file);
+                    return Ok(text.or(Some(streamed)));
+                }
+            }
+        }
+        Ok(None)
     }
 
-    /// Save a text share (`EXTRA_TEXT`, named after `EXTRA_SUBJECT` when
-    /// given) as a `.txt` file in the outbox.
-    fn stage_text(env: &mut jni::JNIEnv, intent: &JObject) -> Result<Option<PathBuf>, String> {
-        let Some(text) = string_extra(env, intent, "android.intent.extra.TEXT")? else {
-            return Ok(None);
-        };
-        if text.trim().is_empty() {
+    /// The contents of `path` if it is UTF-8 text small enough to be a paste.
+    fn read_small_text(path: &Path) -> Option<String> {
+        if std::fs::metadata(path).ok()?.len() > crate::transfers::PASTE_MAX_BYTES {
+            return None;
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+    }
+
+    /// `intent.getType()`.
+    fn intent_type(env: &mut jni::JNIEnv, intent: &JObject) -> Result<Option<String>, String> {
+        let value = env
+            .call_method(intent, "getType", "()Ljava/lang/String;", &[])
+            .map_err(|e| e.to_string())?
+            .l()
+            .map_err(|e| e.to_string())?;
+        if value.is_null() {
             return Ok(None);
         }
-        let subject = string_extra(env, intent, "android.intent.extra.SUBJECT")?
-            .map(|s| s.trim().chars().take(60).collect::<String>())
-            .filter(|s| !s.is_empty());
-        let name = match subject {
-            Some(subject) => format!("{subject}.txt"),
-            None if text.trim().starts_with("http") => "shared-link.txt".to_string(),
-            None => "shared-text.txt".to_string(),
-        };
-        let path = unique_outbox_path(&name);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&path, text.trim()).map_err(|e| e.to_string())?;
-        Ok(Some(path))
+        Ok(Some(
+            env.get_string(&JString::from(value))
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned(),
+        ))
     }
 
     /// `intent.getCharSequenceExtra(key)` as a string.
