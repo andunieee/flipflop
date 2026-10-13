@@ -7,17 +7,40 @@
    into the APK, so every part of the version must stay below 256.
 2. Write `fastlane/metadata/android/en-US/changelogs/<version_code>.txt`
    (plain text, 500 characters at most). F-Droid and IzzyOnDroid show it as
-   the release notes.
+   the release notes, and the release workflow also uses it as the GitHub
+   release body, which is what Zapstore shows.
 3. Commit, tag `vX.Y.Z` and push the tag. `.github/workflows/release.yml`
    checks steps 1 and 2 before building anything, then publishes the GitHub
    release with the signed APK.
 
 ## Android app stores
 
-Both stores read the store listing from `fastlane/metadata/android/en-US`
+All three stores read the store listing from `fastlane/metadata/android/en-US`
 (title, descriptions, icon, screenshots, changelogs). Edit it there.
 The screenshots are the phone renders from
 `cargo run --example screenshots`, converted to PNG.
+
+### Zapstore
+
+Zapstore is a Nostr app store. It ships the APK from the GitHub release
+(our signature, like IzzyOnDroid), and `zsp` reads the listing from the
+fastlane folder and the release notes from the GitHub release body.
+`zapstore.yaml` holds the rest: the repo, the tags and the publisher's
+npub. The relay whitelists that npub because the file is committed in this
+repo, so keep `pubkey` in sync with whoever publishes.
+
+First publish, by hand, after the GitHub release exists:
+
+1. Install the publisher: `go install github.com/zapstore/zsp@latest`.
+2. `zsp publish --check zapstore.yaml` confirms it finds the arm64 APK.
+3. `SIGN_WITH=browser zsp publish zapstore.yaml` (or a `bunker://` URL).
+   The first run asks to link the APK signing certificate to the npub
+   (NIP-C1); point it at `release.jks`. It shows a preview before it
+   publishes anything.
+
+After that, the `zapstore` job in `.github/workflows/release.yml` publishes
+each tagged release. It needs a `ZAPSTORE_SIGN_WITH` secret holding a NIP-46
+bunker URL (not an nsec), and skips itself while the secret is unset.
 
 ### IzzyOnDroid
 
