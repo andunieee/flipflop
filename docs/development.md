@@ -37,6 +37,19 @@ Implemented:
 - **Settings**, downloads folder, own device name, relay mode (default /
   disabled / custom URLs + auth token), local discovery (everyone / paired
   only / off), history toggle; persisted to `settings.json`.
+- **Browser link**, for someone without flipflop: "Add peer → Open browser
+  link" starts a small HTTP/1.1 server (`src/guest`) on the LAN and adds a
+  temporary "Browser" peer with a QR code and URL
+  (`http://<lan-ip>:53530/<random token>`; any free port if 53530 is taken).
+  The token is the only key: no prompts, and every other path is a 404.
+  Sends to it become offers on the web page (one file as is, a folder or
+  several files as a streamed, stored zip with an exact length; text shown
+  inline); uploads from the page are saved to `<downloads>/Browser`. Both
+  use ordinary transfer rows and history under the peer id `browser`.
+  Closing the link stops the server and withdraws whatever wasn't
+  downloaded. Plain HTTP (no secure context in the page, so its Copy button
+  falls back to `execCommand`), IPv4 only, LAN only, and only while the app
+  runs (no Android foreground service).
 - **Notifications**, toasts: an in-window overlay on desktop, native
   `Toast`s on Android.
 
@@ -131,6 +144,9 @@ carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
 - `src/main.rs`, desktop entry point.
 - `src/app.rs`, startup, node events, peers/pairing/history/settings wiring.
 - `src/transfers.rs`, send and receive flows; one `TransferRow` per transfer.
+- `src/guest.rs`, the browser link: session, offers, uploads; `guest/http.rs`
+  is the server and routes, `guest/zip.rs` the streaming zip writer,
+  `guest/page.html` the page itself.
 - `src/platform.rs`, per-platform clipboard, toasts, dialogs, "open", data
   dir and logging.
 - `src/android.rs`, Android platform services (JNI clipboard + toast,

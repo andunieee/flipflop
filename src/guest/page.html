@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>flipflop</title>
+<style>
+  :root {
+    --bg: #f4faff; --card: #ffffff; --inset: #f2f8fd; --border: #d6e7f5;
+    --text-strong: #10304a; --text: #2c4a63; --muted: #66819a; --faint: #95acc0;
+    --accent: #1e8cf0; --accent-press: #1774cc; --accent-soft: #dbeeff; --accent-text: #1366b8;
+    --ok: #179c4a; --error: #e5484d; --error-soft: #ffe5e5;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1824; --card: #15222f; --inset: #111c28; --border: #223446;
+      --text-strong: #e8f2fb; --text: #c2d3e2; --muted: #8aa1b6; --faint: #5d7489;
+      --accent-soft: #12324f; --accent-text: #6db8ff;
+      --ok: #3acb70; --error: #f2676b; --error-soft: #3b1a1e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  header svg { flex: none; }
+  h1 { font-size: 20px; margin: 0; color: var(--text-strong); overflow-wrap: anywhere; }
+  .sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 16px;
+  }
+  h2 { font-size: 15px; margin: 0 0 12px; color: var(--text-strong); }
+  .drop {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    min-height: 120px; padding: 16px; text-align: center; cursor: pointer;
+    border: 2px dashed var(--border); border-radius: 10px; background: var(--inset);
+    color: var(--muted); transition: border-color .1s, background .1s;
+  }
+  .drop strong { color: var(--accent-text); font-size: 16px; }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .links { margin-top: 8px; font-size: 13px; color: var(--muted); text-align: center; }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent-text); font: inherit; cursor: pointer; text-decoration: underline; }
+  textarea {
+    width: 100%; min-height: 84px; resize: vertical; margin-top: 12px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--inset); color: var(--text-strong);
+    font: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row.end { justify-content: flex-end; margin-top: 10px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 40px; padding: 0 16px; border-radius: 10px; border: 0; cursor: pointer;
+    background: var(--accent); color: #fff; font: 600 14px/1 system-ui, sans-serif; text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn:active { background: var(--accent-press); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.soft { background: var(--accent-soft); color: var(--accent-text); }
+  .list { display: flex; flex-direction: column; gap: 10px; }
+  .item { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--inset); }
+  .item .name { font-weight: 600; color: var(--text-strong); overflow-wrap: anywhere; }
+  .item .meta { font-size: 13px; color: var(--muted); }
+  .item .grow { flex: 1; min-width: 0; }
+  .text {
+    white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-strong);
+    max-height: 240px; overflow: auto; margin: 0 0 10px;
+  }
+  .files { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; }
+  .files li { display: flex; gap: 8px; padding: 4px 0; border-top: 1px solid var(--border); }
+  .files a { color: var(--accent-text); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .files span { color: var(--faint); white-space: nowrap; }
+  .empty { color: var(--faint); font-size: 14px; text-align: center; padding: 12px 0; }
+  .bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .ok { color: var(--ok); }
+  .err { color: var(--error); }
+  .banner {
+    display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: 10px;
+    background: var(--error-soft); color: var(--text-strong); font-size: 14px;
+  }
+  .banner.show { display: block; }
+  footer { color: var(--faint); font-size: 12px; text-align: center; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" aria-hidden="true" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5fd0ff"/><stop offset="1" stop-color="#2f86ff"/></linearGradient><radialGradient id="h" cx="0.3" cy="0.2" r="0.8"><stop offset="0" stop-color="#fff" stop-opacity="0.25"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><rect width="96" height="96" rx="27" fill="url(#g)"/><rect width="96" height="96" rx="27" fill="url(#h)"/><g transform="translate(12 12) scale(3)"><path transform="rotate(-22 12 12)" d="M12 2.6C15.6 2.6 17.4 5.4 17.2 8.8C17 11.6 15.8 13 15.9 15.8C16 19 14.6 21.4 11.9 21.4C9.3 21.4 8 19.2 8.1 16.2C8.2 13.3 6.8 11.6 6.8 8.8C6.8 5.3 8.6 2.6 12 2.6Z" fill="#fff"/><g transform="rotate(-22 12 12)" fill="none" stroke="#ff5a5f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.7 12.6C8.7 9.7 10.3 7.6 12.1 6.5C13.9 7.6 15.3 9.7 16.2 12.4"/><circle cx="12.1" cy="6.5" r="0.4"/></g></g></svg>
+    <div>
+      <h1 id="title">flipflop</h1>
+      <p class="sub">Swap files and text with this device, right from your browser.</p>
+    </div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <section class="card">
+    <h2 id="send-title">Send</h2>
+    <div class="drop" id="drop" role="button" tabindex="0">
+      <strong>Choose files</strong>
+      <span id="drop-hint">or drop them here</span>
+    </div>
+    <div class="links" id="folder-link" hidden>
+      <button class="link" id="pick-folder" type="button">Send a whole folder</button>
+    </div>
+    <input type="file" id="files" multiple hidden>
+    <input type="file" id="folder" webkitdirectory hidden>
+    <textarea id="text" placeholder="Type or paste text…"></textarea>
+    <div class="row end"><button class="btn" id="send-text" type="button" disabled>Send text</button></div>
+    <div class="list" id="uploads" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card">
+    <h2 id="recv-title">Received</h2>
+    <div class="list" id="items"><div class="empty">Nothing yet. What they send shows up here.</div></div>
+  </section>
+
+  <footer>Works while the link stays open on the other device. Nothing is stored online.</footer>
+</main>
+<script>
+"use strict";
+const base = "/{{TOKEN}}/";
+let version = null;
+let deviceName = "";
+const $ = (id) => document.getElementById(id);
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const child of children) {
+    if (child != null) node.append(child);
+  }
+  return node;
+}
+
+function size(bytes) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, n = bytes;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + " " + units[i];
+}
+
+function banner(msg) {
+  $("banner").textContent = msg || "";
+  $("banner").classList.toggle("show", !!msg);
+}
+
+// ---- what they send us ------------------------------------------------
+
+async function copyText(text, button, pre) {
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (_) {}
+  if (!ok) {
+    // Plain-HTTP pages have no clipboard API: copy through a selection.
+    const area = el("textarea", { readonly: "", style: "position:fixed;top:0;left:0;opacity:0" });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    area.setSelectionRange(0, text.length);
+    try { ok = document.execCommand("copy"); } catch (_) {}
+    area.remove();
+  }
+  if (!ok) {
+    // Leave it selected for a manual copy.
+    window.getSelection().selectAllChildren(pre);
+  }
+  button.textContent = ok ? "Copied" : "Selected, copy it";
+  setTimeout(() => { button.textContent = "Copy"; }, 2000);
+}
+
+function renderItems(items) {
+  const list = $("items");
+  list.replaceChildren();
+  if (!items.length) {
+    list.append(el("div", { class: "empty" }, "Nothing yet. What " + deviceName + " sends shows up here."));
+    return;
+  }
+  for (const item of items) {
+    if (item.kind === "text") {
+      const pre = el("pre", { class: "text" }, item.text);
+      const copy = el("button", { class: "btn soft", type: "button" }, "Copy");
+      copy.addEventListener("click", () => copyText(item.text, copy, pre));
+      const link = /^https?:\/\/\S+$/.test(item.text.trim())
+        ? el("a", { class: "btn soft", href: item.text.trim(), target: "_blank", rel: "noopener noreferrer" }, "Open")
+        : null;
+      list.append(el("div", { class: "item" }, pre, el("div", { class: "row end" }, link, copy)));
+      continue;
+    }
+    const href = base + "dl/" + item.id;
+    const meta = item.kind === "zip"
+      ? size(item.size) + " · downloads as " + item.download
+      : size(item.size);
+    const node = el("div", { class: "item" },
+      el("div", { class: "row" },
+        el("div", { class: "grow" },
+          el("div", { class: "name" }, item.name),
+          el("div", { class: "meta" }, meta)),
+        el("a", { class: "btn", href, download: item.download }, "Download")));
+    if (item.files && item.files.length) {
+      const files = el("ul", { class: "files" });
+      item.files.forEach((file, i) => files.append(el("li", {},
+        el("a", { href: href + "/" + i, download: file.name }, file.name),
+        el("span", {}, size(file.size)))));
+      node.append(files);
+    }
+    list.append(node);
+  }
+}
+
+async function poll() {
+  let failures = 0;
+  for (;;) {
+    try {
+      const url = base + "api/state" + (version === null ? "" : "?v=" + version);
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.status === 404) {
+        banner("This link has been closed. Ask for a new one.");
+        return;
+      }
+      const state = await res.json();
+      failures = 0;
+      banner("");
+      version = state.v;
+      if (state.name !== deviceName) {
+        deviceName = state.name;
+        document.title = "flipflop · " + deviceName;
+        $("title").textContent = deviceName;
+        $("send-title").textContent = "Send to " + deviceName;
+        $("recv-title").textContent = "From " + deviceName;
+      }
+      renderItems(state.items);
+    } catch (_) {
+      failures++;
+      if (failures > 1) {
+        banner("Can't reach " + (deviceName || "the other device") + ". Is it still on the same network with the link open? Retrying…");
+      }
+      await new Promise((r) => setTimeout(r, Math.min(1000 * failures, 5000)));
+    }
+  }
+}
+
+// ---- what we send them ------------------------------------------------
+
+const queue = [];
+let busy = false;
+
+function sendText() {
+  const text = $("text").value;
+  if (!text.trim()) return;
+  const button = $("send-text");
+  button.disabled = true;
+  fetch(base + "api/text", { method: "POST", body: text, headers: { "Content-Type": "text/plain;charset=utf-8" } })
+    .then((res) => {
+      if (!res.ok) throw new Error();
+      $("text").value = "";
+      button.textContent = "Sent";
+      setTimeout(() => { button.textContent = "Send text"; }, 1600);
+    })
+    .catch(() => alert("The text could not be sent."))
+    .finally(() => { button.disabled = !$("text").value.trim(); });
+}
+
+function enqueue(files) {
+  files = files.filter((f) => f.file.size >= 0);
+  if (!files.length) return;
+  const total = files.reduce((n, f) => n + f.file.size, 0);
+  const title = files.length === 1 ? files[0].name.split("/").pop() : files.length + " files";
+  const status = el("div", { class: "meta" }, "Waiting…");
+  const fill = el("div");
+  const cancel = el("button", { class: "link", type: "button" }, "Cancel");
+  const view = el("div", { class: "item" },
+    el("div", { class: "row" },
+      el("div", { class: "grow" },
+        el("div", { class: "name" }, title),
+        status),
+      cancel),
+    el("div", { class: "bar" }, fill));
+  $("uploads").prepend(view);
+  const job = { files, total, status, fill, cancel, view, cancelled: false, xhr: null, batch: null };
+  cancel.addEventListener("click", () => {
+    job.cancelled = true;
+    if (job.xhr) job.xhr.abort();
+    if (job.batch) fetch(base + "api/cancel/" + job.batch, { method: "POST" }).catch(() => {});
+    finish(job, "Cancelled", "");
+  });
+  queue.push(job);
+  pump();
+}
+
+function finish(job, msg, tone) {
+  job.status.textContent = msg;
+  job.status.className = "meta " + tone;
+  job.cancel.hidden = true;
+}
+
+function put(job, index, done) {
+  return new Promise((resolve, reject) => {
+    const file = job.files[index].file;
+    const xhr = new XMLHttpRequest();
+    job.xhr = xhr;
+    xhr.open("PUT", base + "api/upload/" + job.batch + "/" + index);
+    xhr.upload.onprogress = (e) => {
+      const sent = done + e.loaded;
+      job.fill.style.width = (job.total ? 100 * sent / job.total : 100) + "%";
+      job.status.textContent = size(sent) + " of " + size(job.total);
+    };
+    xhr.onload = () => xhr.status === 200 ? resolve()
+      : reject(new Error(xhr.status === 410 ? "Cancelled on " + deviceName : (xhr.responseText || "Failed")));
+    xhr.onerror = () => reject(new Error("Connection lost"));
+    xhr.onabort = () => reject(new Error("Cancelled"));
+    xhr.send(file);
+  });
+}
+
+async function pump() {
+  if (busy) return;
+  busy = true;
+  while (queue.length) {
+    const job = queue.shift();
+    if (job.cancelled) continue;
+    try {
+      const res = await fetch(base + "api/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: job.files.map((f) => ({ name: f.name, size: f.file.size })) }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      job.batch = (await res.json()).id;
+      let done = 0;
+      for (let i = 0; i < job.files.length; i++) {
+        if (job.cancelled) break;
+        await put(job, i, done);
+        done += job.files[i].file.size;
+      }
+      if (!job.cancelled) {
+        job.fill.style.width = "100%";
+        finish(job, "Sent · " + size(job.total), "ok");
+      }
+    } catch (e) {
+      if (!job.cancelled) finish(job, e.message || "Failed", "err");
+    }
+  }
+  busy = false;
+}
+
+// Files from a drop, folders included (walked through the entries API).
+async function dropped(dataTransfer) {
+  const entries = [...dataTransfer.items]
+    .map((item) => item.webkitGetAsEntry && item.webkitGetAsEntry())
+    .filter(Boolean);
+  if (!entries.length) {
+    return [...dataTransfer.files].map((file) => ({ file, name: file.name }));
+  }
+  const out = [];
+  async function walk(entry, prefix) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      out.push({ file, name: prefix + file.name });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (;;) {
+        const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        if (!batch.length) break;
+        for (const child of batch) await walk(child, prefix + entry.name + "/");
+      }
+    }
+  }
+  for (const entry of entries) await walk(entry, "");
+  return out;
+}
+
+const drop = $("drop");
+drop.addEventListener("click", () => $("files").click());
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") $("files").click(); });
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  drop.classList.remove("over");
+  enqueue(await dropped(e.dataTransfer));
+});
+$("files").addEventListener("change", (e) => {
+  enqueue([...e.target.files].map((file) => ({ file, name: file.name })));
+  e.target.value = "";
+});
+$("folder").addEventListener("change", (e) => {
+  enqueue([...e.target.files].map((file) => ({ file, name: file.webkitRelativePath || file.name })));
+  e.target.value = "";
+});
+$("pick-folder").addEventListener("click", () => $("folder").click());
+// Phones can't pick folders; desktops get the option.
+if ("webkitdirectory" in document.createElement("input") && !/Android|iPhone|iPad/.test(navigator.userAgent)) {
+  $("folder-link").hidden = false;
+}
+if (!("ondrop" in window) || /Android|iPhone|iPad/.test(navigator.userAgent)) {
+  $("drop-hint").textContent = "photos, videos, documents…";
+}
+$("text").addEventListener("input", () => { $("send-text").disabled = !$("text").value.trim(); });
+$("send-text").addEventListener("click", sendText);
+
+poll();
+</script>
+</body>
+</html>

@@ -279,6 +279,8 @@ export component Avatar inherits Rectangle {
     in property <bool> online;
     in property <color> tint: Theme.accent-soft;
     in property <color> ink: Theme.accent-text;
+    // shown instead of the initials when set
+    in property <image> icon;
 
     width: root.size;
     height: root.size;
@@ -287,7 +289,12 @@ export component Avatar inherits Rectangle {
         border-radius: root.size / 2;
         background: root.tint;
     }
-    Text {
+    if root.icon.width > 0: Icon {
+        source: root.icon;
+        size: root.size * 0.55;
+        tint: root.ink;
+    }
+    if root.icon.width == 0: Text {
         text: root.initials == "" ? "?" : root.initials;
         color: root.ink;
         font-size: root.size * 0.38;
