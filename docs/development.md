@@ -144,8 +144,15 @@ Build & run on a device/emulator with [cargo-apk](https://crates.io/crates/cargo
 
 ```sh
 cargo install cargo-apk
-cargo apk run -p flipflop
+just android-install
 ```
+
+`just android-install` builds a debug APK as `com.flipflop.app.debug`
+(labelled "flipflop debug", data in `/data/data/com.flipflop.app.debug`),
+so it installs next to a release build instead of failing on the signature
+mismatch. cargo-apk can't vary the package id per profile, so the recipe
+patches `Cargo.toml` for the build and restores it afterwards. A plain
+`cargo apk run -p flipflop` still builds the debug APK under the release id.
 
 Logs: `adb logcat -s flipflop RustStdoutStderr` (`tracing` output goes
 to logcat under the `flipflop` tag; `RustStdoutStderr` shows panics).
