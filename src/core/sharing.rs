@@ -420,13 +420,18 @@ impl Core {
                 .map(|r| (r.file.clone(), r.path.clone()))
                 .collect()
         };
-        let reofferable: HashSet<String> = self.with_state(|st| {
-            st.stopped_shares
+        // Read-only: `build_view` runs while the publish lock is held (and from `with_state`), so it
+        // must not go through `with_state`, which publishes again.
+        let reofferable: HashSet<String> = {
+            let store = self.0.store.lock().unwrap();
+            store
+                .state
+                .stopped_shares
                 .iter()
                 .filter(|s| s.group == gid && s.path.exists())
                 .map(|s| s.file.clone())
                 .collect()
-        });
+        };
         let transfers = self.0.sharing.transfers.lock().unwrap();
         let name_of = |id: &str| {
             members
