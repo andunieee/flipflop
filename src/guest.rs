@@ -9,6 +9,13 @@
 //! wasn't downloaded yet. The link itself is the key, a random token in its
 //! path; there are no prompts.
 //!
+//! The link comes in two forms. On the same network, the page is served
+//! from here over plain HTTP. From anywhere else, it is a static page on the
+//! web ([`WEB_PAGE`], built from `web/`) that runs iroh in the browser and
+//! reaches us through our home relay, carrying the same HTTP requests
+//! (`http::serve_tunnel`). Its URL holds the token and our address in the
+//! fragment, which browsers never send to the page's host.
+//!
 //! The server only runs while the app does (no Android foreground service).
 
 mod http;
@@ -45,6 +52,10 @@ use http::Reply;
 pub(crate) const GUEST_ID: &str = "browser";
 const GUEST_NAME: &str = "Browser";
 
+/// The page on the web: `src/guest/page.html` plus iroh in wasm (`web/`),
+/// published to GitHub Pages by `.github/workflows/pages.yml`.
+const WEB_PAGE: &str = "https://andunieee.github.io/flipflop/";
+
 /// Tried first, so links look alike from one session to the next; any free
 /// port does if it's taken.
 const PORT: u16 = 53530;
@@ -74,15 +85,39 @@ struct Session {
     /// Our LAN addresses, likeliest to work first; `address` is the one shown.
     addresses: Vec<Ipv4Addr>,
     address: usize,
+    /// Showing the link for the web (anywhere) rather than the LAN one.
+    web: bool,
     _server: AbortOnDropHandle<()>,
+    /// Takes the web page's connections; `None` without a node.
+    _tunnel: Option<AbortOnDropHandle<()>>,
     _presence: AbortOnDropHandle<()>,
 }
 
 impl Session {
-    fn url(&self) -> Option<String> {
+    fn url(&self, ctx: &AppCtx) -> Option<String> {
+        if self.web {
+            return self.web_url(ctx);
+        }
         let ip = self.addresses.get(self.address)?;
         Some(format!("http://{ip}:{}/{}", self.port, self.shared.token))
     }
+
+    /// `<page>#t=<token>&e=<endpoint id>&r=<relay url>`; `None` until we
+    /// have a home relay (none at all with the relay disabled).
+    fn web_url(&self, ctx: &AppCtx) -> Option<String> {
+        self._tunnel.as_ref()?;
+        let (endpoint_id, relay_url) = ctx.node()?.guest_address();
+        Some(web_url(&self.shared.token, &endpoint_id, &relay_url?))
+    }
+}
+
+fn web_url(token: &str, endpoint_id: &str, relay_url: &str) -> String {
+    let fragment = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("t", token)
+        .append_pair("e", endpoint_id)
+        .append_pair("r", relay_url)
+        .finish();
+    format!("{WEB_PAGE}#{fragment}")
 }
 
 impl Guest {
@@ -1289,9 +1324,9 @@ fn sync_row(ctx: &AppCtx, ui: &AppWindow) {
 }
 
 /// Mirror the link (URL, QR code) into the UI. UI thread.
-fn show_link(ui: &AppWindow, session: Option<&Session>) {
+fn show_link(ctx: &AppCtx, ui: &AppWindow, session: Option<&Session>) {
     let state = ui.global::<State>();
-    let url = session.and_then(Session::url).unwrap_or_default();
+    let url = session.and_then(|s| s.url(ctx)).unwrap_or_default();
     if url != state.get_guest_url().as_str() {
         if let Some(buf) = (!url.is_empty()).then(|| crate::qr::render(&url)).flatten() {
             state.set_guest_qr(slint::Image::from_rgb8(buf));
@@ -1299,7 +1334,8 @@ fn show_link(ui: &AppWindow, session: Option<&Session>) {
         state.set_guest_url(SharedString::from(url));
     }
     state.set_guest_active(session.is_some());
-    state.set_guest_more_addresses(session.is_some_and(|s| s.addresses.len() > 1));
+    state.set_guest_web(session.is_some_and(|s| s.web));
+    state.set_guest_more_addresses(session.is_some_and(|s| !s.web && s.addresses.len() > 1));
 }
 
 /// Open the guest's page. UI thread.
@@ -1334,13 +1370,33 @@ async fn launch(ctx: &AppCtx) -> io::Result<Session> {
     });
     tracing::info!(port, ?addresses, "browser link: listening");
     let server = tokio::spawn(http::serve(listener, shared.clone()));
+    let tunnel = ctx.node().map(|node| {
+        let mut inbox = node.guest_inbox().listen();
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    conn = inbox.recv() => {
+                        let Some(conn) = conn else { break };
+                        tracing::info!(remote = %conn.remote_id().fmt_short(), "browser link: web page connected");
+                        connections.spawn(http::serve_tunnel(conn, shared.clone()));
+                    }
+                    Some(_) = connections.join_next(), if !connections.is_empty() => {}
+                }
+            }
+        })
+    });
     let presence = tokio::spawn(watch_presence(shared.clone()));
     Ok(Session {
         shared,
         port,
+        // Nobody on our network to share with: offer the web link.
+        web: addresses.is_empty(),
         addresses,
         address: 0,
         _server: AbortOnDropHandle::new(server),
+        _tunnel: tunnel.map(AbortOnDropHandle::new),
         _presence: AbortOnDropHandle::new(presence),
     })
 }
@@ -1385,7 +1441,7 @@ pub(crate) fn start(ctx: &AppCtx) {
         let _ = ctx.weak.upgrade_in_event_loop(move |ui| match result {
             Ok(session) => {
                 let mut slot = ctx_ui.guest.session.lock().unwrap();
-                show_link(&ui, Some(&session));
+                show_link(&ctx_ui, &ui, Some(&session));
                 *slot = Some(session);
                 drop(slot);
                 refresh_peers(&ctx_ui);
@@ -1434,7 +1490,7 @@ pub(crate) fn stop(ctx: &AppCtx) {
         end_batch(ctx, batch, Ended::LinkClosed);
     }
     if let Some(ui) = &ui {
-        show_link(ui, None);
+        show_link(ctx, ui, None);
         toast(ui, "Browser link closed", false);
     }
     refresh_peers(ctx);
@@ -1458,7 +1514,7 @@ pub(crate) fn refresh_addresses(ctx: &AppCtx) {
                 .and_then(|ip| addresses.iter().position(|a| *a == ip))
                 .unwrap_or(0);
             session.addresses = addresses;
-            show_link(&ui, Some(session));
+            show_link(&ctx_ui, &ui, Some(session));
         });
     });
 }
@@ -1499,7 +1555,17 @@ pub(crate) fn register(ctx: &AppCtx) {
             if !session.addresses.is_empty() {
                 session.address = (session.address + 1) % session.addresses.len();
             }
-            show_link(&ui, Some(session));
+            show_link(&ctx, &ui, Some(session));
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        logic.on_guest_set_web(move |web| {
+            let Some(ui) = ctx.weak.upgrade() else { return };
+            let mut slot = ctx.guest.session.lock().unwrap();
+            let Some(session) = slot.as_mut() else { return };
+            session.web = web;
+            show_link(&ctx, &ui, Some(session));
         });
     }
 }
@@ -1529,6 +1595,15 @@ mod tests {
         let edge = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 Edg/120.0";
         assert_eq!(describe_browser(edge), "Edge on Windows");
         assert_eq!(describe_browser("curl/8.0"), "A browser");
+    }
+
+    #[test]
+    fn web_links_carry_everything_in_the_fragment() {
+        let url = web_url("abc", "ae58ff", "https://relay.example/");
+        assert_eq!(
+            url,
+            format!("{WEB_PAGE}#t=abc&e=ae58ff&r=https%3A%2F%2Frelay.example%2F")
+        );
     }
 
     #[test]

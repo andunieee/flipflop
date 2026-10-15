@@ -48,8 +48,18 @@ Implemented:
   use ordinary transfer rows and history under the peer id `browser`.
   Closing the link stops the server and withdraws whatever wasn't
   downloaded. Plain HTTP (no secure context in the page, so its Copy button
-  falls back to `execCommand`), IPv4 only, LAN only, and only while the app
-  runs (no Android foreground service).
+  falls back to `execCommand`), IPv4 only, and only while the app runs (no
+  Android foreground service).
+  "Anywhere" on the link card swaps the URL for one to the same page on
+  GitHub Pages (`https://andunieee.github.io/flipflop/#t=<token>&e=<endpoint
+  id>&r=<home relay>`, all in the fragment, which never leaves the browser).
+  There the page loads iroh as wasm (`web/`), dials us through our home relay
+  on the `flipflop/guest/0` ALPN, and sends the same requests as on the LAN,
+  one HTTP/1.1 exchange per QUIC stream; the app serves them with the same
+  routes and token check (`guest::http::serve_tunnel`). Downloads stream
+  to disk through a service worker (`web/sw.js`), or are buffered in memory
+  where there is none. Needs the relay (not "disabled"); a custom relay
+  works only if browsers may connect to it without an auth token.
 - **Notifications**, toasts: an in-window overlay on desktop, native
   `Toast`s on Android.
 
@@ -147,6 +157,13 @@ carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
 - `src/guest.rs`, the browser link: session, offers, uploads; `guest/http.rs`
   is the server and routes, `guest/zip.rs` the streaming zip writer,
   `guest/page.html` the page itself.
+- `web/`, the browser link's page on the web: a separate wasm crate (the
+  iroh tunnel), the download service worker and `build.sh`, which bundles
+  them with `src/guest/page.html`. `.github/workflows/pages.yml` publishes
+  it to GitHub Pages on every push to master touching them. Locally:
+  `rustup target add wasm32-unknown-unknown`, a `wasm-bindgen` CLI of the
+  version pinned in `web/Cargo.toml`, then `web/build.sh` and serve
+  `web/dist` from `http://localhost` (a secure context, for the worker).
 - `src/platform.rs`, per-platform clipboard, toasts, dialogs, "open", data
   dir and logging.
 - `src/android.rs`, Android platform services (JNI clipboard + toast,

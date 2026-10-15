@@ -128,9 +128,14 @@
 
   <footer>Works while the link stays open on the other device. Nothing is stored online.</footer>
 </main>
-<script>
+<script type="module">
 "use strict";
-const base = "/{{TOKEN}}/";
+// Served by the app on the LAN, the token is in the path. Served from the
+// web (web/, GitHub Pages), the fragment carries the token and the app's
+// address, and every request goes to the app through iroh in wasm.
+const link = new URLSearchParams(location.hash.slice(1));
+const remote = link.has("t");
+const base = "/" + (remote ? link.get("t") : "{{TOKEN}}") + "/";
 let version = null;
 let deviceName = "";
 const $ = (id) => document.getElementById(id);
@@ -158,6 +163,156 @@ function size(bytes) {
 function banner(msg) {
   $("banner").textContent = msg || "";
   $("banner").classList.toggle("show", !!msg);
+}
+
+// ---- talking to the app ------------------------------------------------
+
+// request(method, path, { body, type, progress, signal }) → { status, text() }
+// `progress` (uploads) hears the bytes sent so far.
+const lan = {
+  async request(method, path, opts = {}) {
+    if (opts.progress) return lanUpload(method, path, opts);
+    const headers = opts.type ? { "Content-Type": opts.type } : {};
+    const res = await fetch(base + path, { method, body: opts.body, headers, cache: "no-store", signal: opts.signal });
+    return { status: res.status, text: () => res.text() };
+  },
+};
+
+// XHR, for upload progress.
+function lanUpload(method, path, opts) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, base + path);
+    xhr.upload.onprogress = (e) => opts.progress(e.loaded);
+    xhr.onload = () => resolve({ status: xhr.status, text: async () => xhr.responseText });
+    xhr.onerror = () => reject(new Error("Connection lost"));
+    xhr.onabort = () => reject(new Error("Cancelled"));
+    if (opts.signal) opts.signal.addEventListener("abort", () => xhr.abort());
+    xhr.send(opts.body);
+  });
+}
+
+let wasm = null;
+let tunnel = null;
+
+async function connected() {
+  if (tunnel) {
+    const t = await tunnel.catch(() => null);
+    if (t && !t.closed()) return t;
+    if (t) t.free();
+  }
+  wasm = wasm || import("./flipflop_web.js").then(async (mod) => { await mod.default(); return mod; });
+  wasm.catch(() => { wasm = null; });
+  tunnel = wasm.then((mod) => mod.Tunnel.connect(link.get("e"), link.get("r")));
+  return tunnel;
+}
+
+const viaIroh = {
+  async request(method, path, opts = {}) {
+    const t = await connected();
+    const headers = ["User-Agent", navigator.userAgent];
+    if (opts.type) headers.push("Content-Type", opts.type);
+    const body = typeof opts.body === "string" ? new Blob([opts.body]) : opts.body;
+    const res = await t.request(method, base + path, headers, body, opts.progress, opts.signal);
+    return {
+      status: res.status,
+      header: (name) => res.header(name),
+      chunk: () => res.chunk(),
+      cancel: () => res.cancel(),
+      free: () => res.free(),
+      text: async () => { try { return await res.text(); } finally { res.free(); } },
+    };
+  },
+};
+
+const app = remote ? viaIroh : lan;
+
+// ---- downloads over iroh ------------------------------------------------
+
+// A service worker turns the bytes into a real download, streamed to disk;
+// without one they are collected in memory first.
+let worker = null;
+function serviceWorker() {
+  if (!worker) {
+    worker = "serviceWorker" in navigator
+      ? navigator.serviceWorker.register("sw.js")
+          .then(() => navigator.serviceWorker.ready)
+          .then((reg) => reg.active)
+          .catch(() => null)
+      : Promise.resolve(null);
+  }
+  return worker;
+}
+
+async function download(path, name, button) {
+  const label = button.textContent;
+  button.setAttribute("aria-disabled", "true");
+  const show = (text) => { button.textContent = text; };
+  const done = (text) => {
+    show(text);
+    setTimeout(() => { show(label); button.removeAttribute("aria-disabled"); }, 2000);
+  };
+  let res;
+  try {
+    show("Starting…");
+    res = await app.request("GET", path);
+    if (res.status !== 200) {
+      done("Failed");
+      alert(await res.text());
+      return;
+    }
+  } catch (_) {
+    done("Failed");
+    return;
+  }
+  const total = Number(res.header("content-length")) || 0;
+  let got = 0;
+  const progress = (n) => {
+    got += n;
+    if (total) show(Math.floor(100 * got / total) + "%");
+  };
+  const sw = await serviceWorker();
+  if (!sw) {
+    try {
+      const parts = [];
+      for (let c; (c = await res.chunk()); ) { parts.push(c); progress(c.length); }
+      const a = el("a", { href: URL.createObjectURL(new Blob(parts)), download: name });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      done("Saved");
+    } catch (_) {
+      done("Failed");
+    } finally {
+      res.free();
+    }
+    return;
+  }
+  const id = Math.random().toString(36).slice(2);
+  const channel = new MessageChannel();
+  const frame = el("iframe", { hidden: "" });
+  const end = (text) => { done(text); res.free(); setTimeout(() => frame.remove(), 1000); };
+  channel.port1.onmessage = async ({ data }) => {
+    if (data === "cancel") {
+      await res.cancel();
+      return end("Cancelled");
+    }
+    try {
+      const c = await res.chunk();
+      if (c) {
+        progress(c.length);
+        channel.port1.postMessage({ chunk: c }, [c.buffer]);
+      } else {
+        channel.port1.postMessage({ done: true });
+        end("Saved");
+      }
+    } catch (e) {
+      channel.port1.postMessage({ error: String(e) });
+      end("Failed");
+    }
+  };
+  sw.postMessage({ download: { id, name, size: total } }, [channel.port2]);
+  frame.src = "save/" + id + "/" + encodeURIComponent(name);
+  document.body.append(frame);
 }
 
 // ---- what they send us ------------------------------------------------
@@ -188,6 +343,18 @@ async function copyText(text, button, pre) {
   setTimeout(() => { button.textContent = "Copy"; }, 2000);
 }
 
+// A plain link on the LAN; over iroh the page fetches the bytes itself.
+function downloadLink(attrs, path, name, label) {
+  const a = el("a", { ...attrs, href: base + path, download: name }, label);
+  if (remote) {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!a.hasAttribute("aria-disabled")) download(path, name, a);
+    });
+  }
+  return a;
+}
+
 function renderItems(items) {
   const list = $("items");
   list.replaceChildren();
@@ -206,7 +373,6 @@ function renderItems(items) {
       list.append(el("div", { class: "item" }, pre, el("div", { class: "row end" }, link, copy)));
       continue;
     }
-    const href = base + "dl/" + item.id;
     const meta = item.kind === "zip"
       ? size(item.size) + " · downloads as " + item.download
       : size(item.size);
@@ -215,11 +381,11 @@ function renderItems(items) {
         el("div", { class: "grow" },
           el("div", { class: "name" }, item.name),
           el("div", { class: "meta" }, meta)),
-        el("a", { class: "btn", href, download: item.download }, "Download")));
+        downloadLink({ class: "btn" }, "dl/" + item.id, item.download, "Download")));
     if (item.files && item.files.length) {
       const files = el("ul", { class: "files" });
       item.files.forEach((file, i) => files.append(el("li", {},
-        el("a", { href: href + "/" + i, download: file.name }, file.name),
+        downloadLink({}, "dl/" + item.id + "/" + i, file.name, file.name),
         el("span", {}, size(file.size)))));
       node.append(files);
     }
@@ -231,13 +397,12 @@ async function poll() {
   let failures = 0;
   for (;;) {
     try {
-      const url = base + "api/state" + (version === null ? "" : "?v=" + version);
-      const res = await fetch(url, { cache: "no-store" });
+      const res = await app.request("GET", "api/state" + (version === null ? "" : "?v=" + version));
       if (res.status === 404) {
         banner("This link has been closed. Ask for a new one.");
         return;
       }
-      const state = await res.json();
+      const state = JSON.parse(await res.text());
       failures = 0;
       banner("");
       version = state.v;
@@ -249,10 +414,17 @@ async function poll() {
         $("recv-title").textContent = "From " + deviceName;
       }
       renderItems(state.items);
-    } catch (_) {
+    } catch (e) {
       failures++;
+      if (remote && String(e).includes("no browser link")) {
+        banner("This link has been closed. Ask for a new one.");
+        return;
+      }
       if (failures > 1) {
-        banner("Can't reach " + (deviceName || "the other device") + ". Is it still on the same network with the link open? Retrying…");
+        const who = deviceName || "the other device";
+        banner(remote
+          ? "Can't reach " + who + ". Is it online, with the link still open? Retrying…"
+          : "Can't reach " + who + ". Is it still on the same network with the link open? Retrying…");
       }
       await new Promise((r) => setTimeout(r, Math.min(1000 * failures, 5000)));
     }
@@ -269,9 +441,10 @@ function sendText() {
   if (!text.trim()) return;
   const button = $("send-text");
   button.disabled = true;
-  fetch(base + "api/text", { method: "POST", body: text, headers: { "Content-Type": "text/plain;charset=utf-8" } })
-    .then((res) => {
-      if (!res.ok) throw new Error();
+  app.request("POST", "api/text", { body: text, type: "text/plain;charset=utf-8" })
+    .then(async (res) => {
+      await res.text();
+      if (res.status !== 200) throw new Error();
       $("text").value = "";
       button.textContent = "Sent";
       setTimeout(() => { button.textContent = "Send text"; }, 1600);
@@ -296,11 +469,11 @@ function enqueue(files) {
       cancel),
     el("div", { class: "bar" }, fill));
   $("uploads").prepend(view);
-  const job = { files, total, status, fill, cancel, view, cancelled: false, xhr: null, batch: null };
+  const job = { files, total, status, fill, cancel, view, cancelled: false, abort: new AbortController(), batch: null };
   cancel.addEventListener("click", () => {
     job.cancelled = true;
-    if (job.xhr) job.xhr.abort();
-    if (job.batch) fetch(base + "api/cancel/" + job.batch, { method: "POST" }).catch(() => {});
+    job.abort.abort();
+    if (job.batch) app.request("POST", "api/cancel/" + job.batch).then((res) => res.text()).catch(() => {});
     finish(job, "Cancelled", "");
   });
   queue.push(job);
@@ -313,23 +486,23 @@ function finish(job, msg, tone) {
   job.cancel.hidden = true;
 }
 
-function put(job, index, done) {
-  return new Promise((resolve, reject) => {
-    const file = job.files[index].file;
-    const xhr = new XMLHttpRequest();
-    job.xhr = xhr;
-    xhr.open("PUT", base + "api/upload/" + job.batch + "/" + index);
-    xhr.upload.onprogress = (e) => {
-      const sent = done + e.loaded;
-      job.fill.style.width = (job.total ? 100 * sent / job.total : 100) + "%";
-      job.status.textContent = size(sent) + " of " + size(job.total);
-    };
-    xhr.onload = () => xhr.status === 200 ? resolve()
-      : reject(new Error(xhr.status === 410 ? "Cancelled on " + deviceName : (xhr.responseText || "Failed")));
-    xhr.onerror = () => reject(new Error("Connection lost"));
-    xhr.onabort = () => reject(new Error("Cancelled"));
-    xhr.send(file);
-  });
+async function put(job, index, done) {
+  const progress = (loaded) => {
+    const sent = done + loaded;
+    job.fill.style.width = (job.total ? 100 * sent / job.total : 100) + "%";
+    job.status.textContent = size(sent) + " of " + size(job.total);
+  };
+  let res;
+  try {
+    res = await app.request("PUT", "api/upload/" + job.batch + "/" + index,
+      { body: job.files[index].file, progress, signal: job.abort.signal });
+  } catch (e) {
+    throw new Error(job.cancelled ? "Cancelled" : "Connection lost");
+  }
+  const text = await res.text();
+  if (res.status !== 200) {
+    throw new Error(res.status === 410 ? "Cancelled on " + deviceName : (text || "Failed"));
+  }
 }
 
 async function pump() {
@@ -339,13 +512,13 @@ async function pump() {
     const job = queue.shift();
     if (job.cancelled) continue;
     try {
-      const res = await fetch(base + "api/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await app.request("POST", "api/batch", {
+        type: "application/json",
         body: JSON.stringify({ files: job.files.map((f) => ({ name: f.name, size: f.file.size })) }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      job.batch = (await res.json()).id;
+      const text = await res.text();
+      if (res.status !== 200) throw new Error(text);
+      job.batch = JSON.parse(text).id;
       let done = 0;
       for (let i = 0; i < job.files.length; i++) {
         if (job.cancelled) break;
@@ -418,7 +591,14 @@ if (!("ondrop" in window) || /Android|iPhone|iPad/.test(navigator.userAgent)) {
 $("text").addEventListener("input", () => { $("send-text").disabled = !$("text").value.trim(); });
 $("send-text").addEventListener("click", sendText);
 
-poll();
+if (remote) {
+  serviceWorker();
+  poll();
+} else if (base.includes("{{")) {
+  banner("Open this page from a link made in flipflop.");
+} else {
+  poll();
+}
 </script>
 </body>
 </html>

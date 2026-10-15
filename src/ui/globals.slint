@@ -142,6 +142,8 @@ export global State {
     in-out property <bool> guest-active: false;
     in-out property <string> guest-url: "";
     in-out property <image> guest-qr;
+    // showing the link for anywhere (the web page over iroh), not the LAN one
+    in-out property <bool> guest-web: false;
     // more than one address to offer ("Try another address")
     in-out property <bool> guest-more-addresses: false;
 
@@ -224,6 +226,7 @@ export global Logic {
     callback guest-stop();
     callback guest-copy-url();
     callback guest-next-address();
+    callback guest-set-web(bool);
 
     // settings
     callback pick-downloads-dir();

@@ -773,6 +773,41 @@ impl ControlProtocol {
     }
 }
 
+/// ALPN of the browser link's tunnel: the web page (iroh in wasm) reaching
+/// us over the relay. See `crate::guest`.
+pub const GUEST_ALPN: &[u8] = b"flipflop/guest/0";
+
+/// Hands browser-link connections to the open link, if any; refused
+/// otherwise. Outlives network rebuilds like the share registry.
+#[derive(Debug, Clone, Default)]
+pub struct GuestInbox(Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<Connection>>>>);
+
+impl GuestInbox {
+    /// Take the connections from now on (replacing any earlier listener).
+    /// Dropping the receiver refuses them again.
+    pub fn listen(&self) -> mpsc::UnboundedReceiver<Connection> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self.0.lock().expect("guest inbox") = Some(tx);
+        rx
+    }
+}
+
+impl ProtocolHandler for GuestInbox {
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        let refused = {
+            let slot = self.0.lock().expect("guest inbox");
+            match slot.as_ref() {
+                Some(tx) => tx.send(connection).err().map(|e| e.0),
+                None => Some(connection),
+            }
+        };
+        if let Some(connection) = refused {
+            connection.close(404u32.into(), b"no browser link");
+        }
+        Ok(())
+    }
+}
+
 impl ProtocolHandler for ControlProtocol {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         let this = self.clone();
@@ -826,6 +861,8 @@ pub struct NodeService {
     shares: Arc<ShareRegistry>,
     /// Bluetooth transport, when the device has one. Outlives rebuilds too.
     bluetooth: Option<BluetoothHub>,
+    /// Browser-link connections ([`GUEST_ALPN`]). Outlives rebuilds too.
+    guest_inbox: GuestInbox,
     /// Redials paired peers as they come into Bluetooth range.
     bluetooth_arrivals: Mutex<Option<JoinHandle<()>>>,
     /// Serializes `reconfigure_network`, `set_discoverability` and `shutdown`.
@@ -923,6 +960,7 @@ impl NodeService {
         let shares = Arc::new(ShareRegistry::open(&data_dir.join("outgoing")).await?);
 
         let home_relay_url = Arc::new(std::sync::RwLock::new(None));
+        let guest_inbox = GuestInbox::default();
         let runtime = build_runtime(
             identity.clone(),
             paired_store.clone(),
@@ -941,6 +979,7 @@ impl NodeService {
             home_relay_url.clone(),
             shares.clone(),
             bluetooth.clone(),
+            guest_inbox.clone(),
         )
         .await?;
         let runtime = Arc::new(Mutex::new(runtime));
@@ -994,6 +1033,7 @@ impl NodeService {
             shares,
             bluetooth,
             bluetooth_arrivals: Mutex::new(bluetooth_arrivals),
+            guest_inbox,
         })
     }
 
@@ -1094,6 +1134,7 @@ impl NodeService {
             self.home_relay_url.clone(),
             self.shares.clone(),
             self.bluetooth.clone(),
+            self.guest_inbox.clone(),
         )
         .await?;
 
@@ -1305,6 +1346,22 @@ impl NodeService {
             relay_url,
         };
         ticket.encode()
+    }
+
+    /// Where a browser reaches us: our endpoint id and home relay URL (none
+    /// until the relay is known, or with the relay disabled).
+    pub fn guest_address(&self) -> (String, Option<String>) {
+        let relay_url = self
+            .home_relay_url
+            .read()
+            .expect("home_relay_url")
+            .clone();
+        (self.identity.endpoint_id(), relay_url)
+    }
+
+    /// Browser-link connections, see [`GuestInbox::listen`].
+    pub fn guest_inbox(&self) -> &GuestInbox {
+        &self.guest_inbox
     }
 
     pub async fn invite_paired_device(
@@ -2363,6 +2420,7 @@ async fn build_runtime(
     home_relay_url: Arc<std::sync::RwLock<Option<String>>>,
     shares: Arc<ShareRegistry>,
     bluetooth: Option<BluetoothHub>,
+    guest_inbox: GuestInbox,
 ) -> anyhow::Result<NodeRuntime> {
 
     let hook = PairedOnlyHook {
@@ -2409,7 +2467,11 @@ async fn build_runtime(
         .secret_key(identity.secret_key.clone())
         .relay_mode(relay_mode.clone())
         .hooks(hook)
-        .alpns(vec![CONTROL_ALPN.to_vec(), iroh_blobs::ALPN.to_vec()])
+        .alpns(vec![
+            CONTROL_ALPN.to_vec(),
+            iroh_blobs::ALPN.to_vec(),
+            GUEST_ALPN.to_vec(),
+        ])
         .bind()
         .await?;
 
@@ -2436,6 +2498,7 @@ async fn build_runtime(
     let router = Router::builder(endpoint.clone())
         .accept(CONTROL_ALPN, control)
         .accept(iroh_blobs::ALPN, shares.protocol())
+        .accept(GUEST_ALPN, guest_inbox)
         .spawn();
 
     let mark_network_ready = {
