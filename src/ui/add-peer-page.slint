@@ -2,7 +2,7 @@ import { LineEdit } from "std-widgets.slint";
 import { State, Logic, PeerRow } from "globals.slint";
 import {
     Theme, Card, HintText, StatusText, SectionHeader, PageTitle, Avatar,
-    Icons, PrimaryButton, SecondaryButton, GhostButton, ScrollView,
+    Icons, PrimaryButton, SecondaryButton, GhostButton, IconButton, ScrollView,
 } from "components.slint";
 
 component SuggestionRow inherits Rectangle {
@@ -74,7 +74,23 @@ export component AddPeerPage inherits Rectangle {
             spacing: Theme.space-4;
             alignment: start;
 
-            PageTitle { title: "Add a peer"; }
+            // Phones reach this page from the peer list: a way back.
+            if !State.compact: PageTitle { title: "Add a peer"; }
+            if State.compact: HorizontalLayout {
+                spacing: Theme.space-2;
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon: Icons.arrow-left;
+                        tint: Theme.text-strong;
+                        clicked => {
+                            State.page = "peer";
+                            Logic.page-changed("peer");
+                        }
+                    }
+                }
+                PageTitle { title: "Add a peer"; }
+            }
 
             // Outcome of the last pairing attempt (address or nearby).
             if !State.pairing-busy && State.pairing-status != "": Rectangle {
@@ -175,7 +191,7 @@ export component AddPeerPage inherits Rectangle {
                 }
             }
 
-            // Someone without flipflop: a temporary page they open in a browser.
+            // Someone without flipflop: a browser link instead.
             Card {
                 VerticalLayout {
                     padding: Theme.card-padding;
@@ -183,14 +199,17 @@ export component AddPeerPage inherits Rectangle {
 
                     SectionHeader { label: "No flipflop on their device?"; icon: Icons.globe; }
                     HintText {
-                        label: "Open a temporary browser link: they send and receive files from any browser on the same Wi-Fi, no app needed.";
+                        label: "Share through a browser link instead: they send or receive files from any browser, no app needed.";
                     }
                     HorizontalLayout {
                         alignment: start;
                         SecondaryButton {
-                            label: State.guest-active ? "Show browser link" : "Open browser link";
+                            label: "Share via link";
                             icon: Icons.globe;
-                            clicked => { Logic.guest-start(); }
+                            clicked => {
+                                State.page = "share-link";
+                                Logic.page-changed("share-link");
+                            }
                         }
                     }
                 }

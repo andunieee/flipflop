@@ -62,6 +62,8 @@ pub fn unpaired_message_allowed(msg: &ControlMessage) -> bool {
             | ControlMessage::Invite { .. }
             | ControlMessage::InviteResponse { .. }
             | ControlMessage::PairRequest { .. }
+            | ControlMessage::QuickShare { .. }
+            | ControlMessage::QuickShareDeclined { .. }
     )
 }
 

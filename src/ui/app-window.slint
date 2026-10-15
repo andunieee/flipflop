@@ -5,15 +5,18 @@ import { PeerPage, AppPickerSheet } from "peer-page.slint";
 import { PeersListPage } from "peers-list-page.slint";
 import { AddPeerPage } from "add-peer-page.slint";
 import { SettingsPage } from "settings-page.slint";
+import { QuickSharePage, ShareLinkPage, PhoneSharePage } from "share-page.slint";
 
 export { State, Logic }
 
-// Sidebar navigation entry (Settings, Add peer).
+// Sidebar navigation entry (Add peer, Quick share, Share via link,
+// Settings), with an optional count badge.
 component SideButton inherits Rectangle {
     in property <string> label;
     in property <image> icon;
     in property <bool> active;
     in property <bool> accent;
+    in property <int> badge;
     callback clicked;
 
     height: 36px;
@@ -49,6 +52,23 @@ component SideButton inherits Rectangle {
             font-weight: root.active || root.accent ? 600 : 500;
             vertical-alignment: center;
             horizontal-stretch: 1;
+        }
+        if root.badge > 0: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 18px;
+                width: max(18px, side-badge.preferred-width + 10px);
+                border-radius: 9px;
+                background: Theme.accent;
+                side-badge := Text {
+                    text: root.badge;
+                    color: white;
+                    font-size: 11px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
         }
     }
 }
@@ -118,7 +138,9 @@ component TabButton inherits Rectangle {
     in property <string> key;
     in property <image> icon;
     in property <int> badge;
-    property <bool> active: State.page == root.key;
+    // other pages that light this tab up
+    in property <bool> also-active;
+    property <bool> active: State.page == root.key || root.also-active;
 
     ta := TouchArea {
         clicked => {
@@ -221,6 +243,9 @@ export component AppWindow inherits Window {
     property <length> inset-bottom: max(root.safe-area-insets.bottom, root.preview-inset-bottom);
     // Compact: a peer's own screen is showing (it still exists).
     property <bool> peer-screen: State.peer-open && State.selected-name != "";
+    // One of the sharing pages, which phones show as one.
+    property <bool> share-page: State.page == "share" || State.page == "quick-share"
+        || State.page == "share-link";
 
     // Appearance setting -> std-widgets palette, which `Theme` follows.
     property <int> theme: State.theme;
@@ -334,6 +359,25 @@ export component AppWindow inherits Window {
                             Logic.page-changed("add-peer");
                         }
                     }
+                    SideButton {
+                        label: "Quick share";
+                        icon: Icons.nearby;
+                        active: State.page == "quick-share" || State.page == "share";
+                        badge: State.quick-incoming.length;
+                        clicked => {
+                            State.page = "quick-share";
+                            Logic.page-changed("quick-share");
+                        }
+                    }
+                    SideButton {
+                        label: "Share via link";
+                        icon: Icons.globe;
+                        active: State.page == "share-link";
+                        clicked => {
+                            State.page = "share-link";
+                            Logic.page-changed("share-link");
+                        }
+                    }
 
                     HorizontalLayout {
                         padding-left: Theme.space-3;
@@ -404,6 +448,18 @@ export component AppWindow inherits Window {
                     width: 100%;
                     height: 100%;
                 }
+                if !root.compact && (State.page == "quick-share" || State.page == "share"): QuickSharePage {
+                    width: 100%;
+                    height: 100%;
+                }
+                if !root.compact && State.page == "share-link": ShareLinkPage {
+                    width: 100%;
+                    height: 100%;
+                }
+                if root.compact && root.share-page: PhoneSharePage {
+                    width: 100%;
+                    height: 100%;
+                }
             }
         }
 
@@ -422,8 +478,20 @@ export component AppWindow inherits Window {
             }
             HorizontalLayout {
                 padding-bottom: root.inset-bottom;
-                TabButton { label: "Peers"; key: "peer"; icon: Icons.peers; badge: State.outbox-count; }
-                TabButton { label: "Add peer"; key: "add-peer"; icon: Icons.add-peer; }
+                TabButton {
+                    label: "Peers";
+                    key: "peer";
+                    icon: Icons.peers;
+                    badge: State.outbox-count;
+                    also-active: State.page == "add-peer";
+                }
+                TabButton {
+                    label: "Share";
+                    key: "share";
+                    icon: Icons.share;
+                    badge: State.quick-incoming.length;
+                    also-active: root.share-page;
+                }
                 TabButton { label: "Settings"; key: "settings"; icon: Icons.settings; }
             }
         }

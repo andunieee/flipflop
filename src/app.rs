@@ -1,6 +1,6 @@
 use crate::emitter::{MainEmitter, MainQueue};
 use crate::format;
-use crate::guest::{self, Guest};
+use crate::guest::{self, Guests};
 use crate::platform::{self, copy_to_clipboard, open_path, pick_downloads_folder, toast};
 use crate::settings::Settings;
 use crate::transfers::{self, Transfers};
@@ -29,7 +29,7 @@ pub(crate) struct AppCtx {
     pair_requests: Arc<Mutex<Vec<(String, String)>>>,
     queue: MainQueue,
     pub transfers: Transfers,
-    pub guest: Guest,
+    pub guest: Guests,
 }
 
 impl AppCtx {
@@ -40,7 +40,7 @@ impl AppCtx {
 }
 
 /// Up to two letters for an avatar: "Living Room" → "LR", "laptop" → "L".
-fn initials(name: &str) -> String {
+pub(crate) fn initials(name: &str) -> String {
     name.split_whitespace()
         .filter_map(|word| word.chars().find(|c| c.is_alphanumeric()))
         .take(2)
@@ -207,12 +207,14 @@ pub(crate) fn refresh_peers(ctx: &AppCtx) {
         let ctx_ui = ctx.clone();
         let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
             let state = ui.global::<State>();
-            let rows: Vec<PeerRow> = guest::peer_row(&ctx_ui).into_iter().collect();
+            let rows = guest::peer_rows(&ctx_ui);
             let selected = state.get_selected_id();
             let current = rows.iter().find(|r| r.endpoint_id == selected).or(rows.first());
             show_selected(&state, current);
+            state.set_links(ModelRc::from(Rc::new(VecModel::from(rows.clone()))));
             state.set_peers(ModelRc::from(Rc::new(VecModel::from(rows))));
             transfers::sync_peer_activity(&ui);
+            guest::show_link(&ctx_ui, &ui);
         });
         return;
     };
@@ -226,11 +228,14 @@ pub(crate) fn refresh_peers(ctx: &AppCtx) {
         let ctx_ui = ctx.clone();
         let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
             let state = ui.global::<State>();
-            // An open browser link comes first: it's what's going on now.
-            let rows: Vec<PeerRow> = guest::peer_row(&ctx_ui)
-                .into_iter()
+            // Open browser links come first: they're what's going on now.
+            let links = guest::peer_rows(&ctx_ui);
+            let rows: Vec<PeerRow> = links
+                .iter()
+                .cloned()
                 .chain(devices.iter().map(paired_row))
                 .collect();
+            state.set_links(ModelRc::from(Rc::new(VecModel::from(links))));
             let online_count = devices.iter().filter(|d| d.online).count();
             // Keep the selection (re-reading its name/presence, which may
             // have changed); fall back to the first peer when nothing is
@@ -244,6 +249,7 @@ pub(crate) fn refresh_peers(ctx: &AppCtx) {
             show_selected(&state, current);
             state.set_peers(ModelRc::from(Rc::new(VecModel::from(rows))));
             transfers::sync_peer_activity(&ui);
+            guest::show_link(&ctx_ui, &ui);
             state.set_presence_label(format!("{online_count} of {} online", devices.len()).into());
             state.set_my_name(my_name.into());
             state.set_node_ready(ready);
@@ -314,6 +320,15 @@ fn refresh_suggestions(ctx: &AppCtx) {
                 rows.push(nearby_row(d));
             }
             state.set_suggestions(ModelRc::from(Rc::new(VecModel::from(rows))));
+            // Quick share lists every device around, asking to pair or not.
+            let devices: Vec<PeerRow> = nearby
+                .iter()
+                .map(|d| PeerRow {
+                    detail: "On your local network".into(),
+                    ..nearby_row(d)
+                })
+                .collect();
+            state.set_nearby_devices(ModelRc::from(Rc::new(VecModel::from(devices))));
             state.set_nearby_note(reason.unwrap_or_default().into());
         });
     });
@@ -594,6 +609,12 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
         "paired-invite-received" => {
             transfers::accept_invite(ctx, parsed.unwrap_or_default());
         }
+        "quick-share-received" => {
+            transfers::quick_offered(ctx, parsed.unwrap_or_default());
+        }
+        "quick-share-declined" => {
+            transfers::quick_declined(ctx, parsed.unwrap_or_default());
+        }
         _ => {}
     }
 }
@@ -793,6 +814,7 @@ fn register_peers(ctx: &AppCtx) {
             state.set_rename_mode(false);
             show_selected(&state, Some(&row));
             transfers::sync_peer_activity(&ui);
+            guest::show_link(&ctx, &ui);
             refresh_history(&ctx);
         });
     }
@@ -1443,6 +1465,8 @@ fn register_settings(ctx: &AppCtx) {
             } else if page == "add-peer" {
                 refresh_suggestions(&ctx);
                 refresh_peers(&ctx);
+            } else if matches!(page.as_str(), "share" | "quick-share" | "share-link") {
+                refresh_suggestions(&ctx);
             } else if page == "settings" {
                 if let Some(ui) = ctx.weak.upgrade() {
                     ui.global::<State>().set_name_editing(false);
@@ -1498,7 +1522,7 @@ pub fn run() {
         pair_requests: Arc::new(Mutex::new(Vec::new())),
         queue: MainQueue::default(),
         transfers: Transfers::default(),
-        guest: Guest::default(),
+        guest: Guests::default(),
     };
     // Sends that were waiting for their peer when the app last closed.
     transfers::restore_queued(&ctx, &ui, data_dir.join("queued-sends.json"));

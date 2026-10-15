@@ -29,6 +29,8 @@ export struct TransferRow {
     active: bool,
     // a send queued until its peer is reachable
     waiting: bool,
+    // a quick share (shown on the Quick share page, not a peer's)
+    quick: bool,
     title: string,
     progress: float,
     progress-label: string,
@@ -55,6 +57,16 @@ export struct HistoryRow {
     preview: string,
 }
 
+// A quick share offered to us, waiting for Accept or Decline.
+export struct QuickOffer {
+    key: string,
+    sender: string,
+    initials: string,
+    // "report.pdf", "3 items", "text"
+    title: string,
+    size: string,
+}
+
 // An installed app offered by "Send app" (Android).
 export struct AppRow {
     package: string,
@@ -72,7 +84,8 @@ export struct OutboxRow {
 }
 
 export global State {
-    // navigation: "peer" | "add-peer" | "settings"
+    // navigation: "peer" | "add-peer" | "settings", and "quick-share" |
+    // "share-link" (desktop) or "share", both on one page (phones)
     in-out property <string> page: "peer";
 
     // ---- responsive layout -------------------------------------------
@@ -111,6 +124,18 @@ export global State {
     in-out property <bool> scanning: false;
     in-out property <image> scan-frame;
 
+    // quick share: devices around (paired or not), shares offered to us,
+    // and the quick sends and receives under way or just done
+    in-out property <[PeerRow]> nearby-devices;
+    in-out property <[QuickOffer]> quick-incoming;
+    in-out property <[TransferRow]> quick-transfers;
+
+    // share via link: the new link's choices (anywhere vs. same Wi-Fi,
+    // receive vs. send), and the open links
+    in-out property <bool> link-web: false;
+    in-out property <bool> link-receive: false;
+    in-out property <[PeerRow]> links;
+
     // peer page
     in-out property <string> selected-id: "";
     in-out property <string> selected-name: "";
@@ -137,13 +162,14 @@ export global State {
     in-out property <string> app-filter: "";
     in-out property <[AppRow]> apps;
 
-    // browser link: a temporary page for someone without flipflop; the
-    // URL shown (one of our addresses) and its QR code
-    in-out property <bool> guest-active: false;
+    // the selected browser link (a temporary page for someone without
+    // flipflop): its URL (one of our addresses) and QR code
     in-out property <string> guest-url: "";
     in-out property <image> guest-qr;
-    // showing the link for anywhere (the web page over iroh), not the LAN one
+    // made for anywhere (the web page over iroh), not the LAN
     in-out property <bool> guest-web: false;
+    // its page may send us files and text
+    in-out property <bool> guest-upload: false;
     // more than one address to offer ("Try another address")
     in-out property <bool> guest-more-addresses: false;
 
@@ -197,8 +223,8 @@ export global Logic {
     // share-sheet queue (Android)
     callback outbox-remove(string);
     callback outbox-clear();
-    // Android: add files / gallery pictures to the queue with the system
-    // pickers.
+    // Add files (desktop: or a folder) / gallery pictures (Android) to the
+    // queue with the system pickers.
     callback pick-files();
     callback pick-images();
     // Android "Send app": open the chooser, filter it, queue the chosen APK.
@@ -221,12 +247,19 @@ export global Logic {
     callback scan-qr();
     callback scan-cancel();
 
-    // browser link
-    callback guest-start();
+    // quick share: send the composer's content to a device (endpoint id);
+    // accept or decline a share offered to us (QuickOffer key)
+    callback quick-send(string);
+    callback quick-accept(string);
+    callback quick-decline(string);
+
+    // browser links: make one from `link-web` / `link-receive` (and the
+    // composer, for sending); the selected one's controls
+    callback link-create();
     callback guest-stop();
     callback guest-copy-url();
     callback guest-next-address();
-    callback guest-set-web(bool);
+    callback guest-set-upload(bool);
 
     // settings
     callback pick-downloads-dir();

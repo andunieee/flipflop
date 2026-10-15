@@ -24,7 +24,7 @@ use crate::emitter::apply_transfer_event;
 use crate::format::fmt_bytes;
 use crate::platform::{self, toast, toast_later};
 use crate::recorder::{Ctx, Recorder};
-use crate::{android, guest, AppWindow, Logic, OutboxRow, State, TransferRow};
+use crate::{android, guest, AppWindow, Logic, OutboxRow, QuickOffer, State, TransferRow};
 
 /// Cross-thread transfer bookkeeping, shared through `AppCtx`.
 #[derive(Clone, Default)]
@@ -48,6 +48,40 @@ pub struct Transfers {
     /// Queued sends restored at startup whose share isn't set up yet.
     restored: Arc<Mutex<HashSet<String>>>,
     queue_path: Arc<OnceLock<PathBuf>>,
+    /// Desktop: files picked for the composer and not sent yet (Android
+    /// stages copies in its outbox instead).
+    picked: Arc<Mutex<Vec<PathBuf>>>,
+    /// Quick shares offered to us, waiting for Accept or Decline.
+    incoming: Arc<Mutex<Vec<IncomingQuick>>>,
+}
+
+/// A quick share someone nearby offered us.
+#[derive(Clone)]
+struct IncomingQuick {
+    /// Our handle on it (the UI's `QuickOffer.key`).
+    key: String,
+    /// The sender's, echoed in a decline.
+    id: String,
+    title: String,
+    invite: Invite,
+}
+
+/// One send the composer produced: files, or a pasted text's file in its
+/// private dir (`cleanup`). `staged` are the share-sheet files among `paths`.
+pub(crate) struct Outgoing {
+    pub paths: Vec<PathBuf>,
+    pub staged: Vec<PathBuf>,
+    pub cleanup: Option<PathBuf>,
+}
+
+impl Outgoing {
+    /// Drop a send that won't happen.
+    pub(crate) fn discard(self, ctx: &AppCtx) {
+        if let Some(dir) = self.cleanup {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        refresh_outbox(ctx);
+    }
 }
 
 /// A send waiting for its peer, as saved to disk.
@@ -214,6 +248,9 @@ pub(crate) fn sync_peer_activity(ui: &AppWindow) {
             peers.set_row_data(i, peer);
         }
     }
+    let quick: Vec<TransferRow> = state.get_transfers().iter().filter(|t| t.quick).collect();
+    set_rows(&state.get_quick_transfers(), quick, |rows| state.set_quick_transfers(rows));
+
     let selected = state.get_selected_id();
     // Sends to a browser wait on its page; more can join them meanwhile.
     state.set_selected_sending(busy(&selected, true) && !guest::is_guest(&selected));
@@ -223,22 +260,34 @@ pub(crate) fn sync_peer_activity(ui: &AppWindow) {
     let visible: Vec<TransferRow> = state
         .get_transfers()
         .iter()
-        .filter(|t| t.peer_id == selected)
+        .filter(|t| t.peer_id == selected && !t.quick)
         .collect();
-    let shown = state.get_visible_transfers();
-    let same_rows = shown.row_count() == visible.len()
-        && visible
+    set_rows(&state.get_visible_transfers(), visible, |rows| {
+        state.set_visible_transfers(rows)
+    });
+}
+
+/// Show `rows` in the model `shown`: in place when they are the same
+/// transfers, so cards (and their progress animation) aren't rebuilt, else
+/// through `replace`.
+fn set_rows(
+    shown: &ModelRc<TransferRow>,
+    rows: Vec<TransferRow>,
+    replace: impl FnOnce(ModelRc<TransferRow>),
+) {
+    let same_rows = shown.row_count() == rows.len()
+        && rows
             .iter()
             .enumerate()
             .all(|(i, t)| shown.row_data(i).is_some_and(|s| s.key == t.key));
     if same_rows {
-        for (i, row) in visible.into_iter().enumerate() {
+        for (i, row) in rows.into_iter().enumerate() {
             if shown.row_data(i).as_ref() != Some(&row) {
                 shown.set_row_data(i, row);
             }
         }
     } else {
-        state.set_visible_transfers(ModelRc::from(Rc::new(VecModel::from(visible))));
+        replace(ModelRc::from(Rc::new(VecModel::from(rows))));
     }
 }
 
@@ -474,6 +523,42 @@ impl Drop for RemoveDirOnDrop {
     }
 }
 
+/// Take what the composer holds, the typed text and then the attached
+/// files, as sends; the text box is cleared and desktop picks are taken.
+/// Empty when there is nothing. UI thread.
+pub(crate) fn take_composed(ctx: &AppCtx, ui: &AppWindow) -> Vec<Outgoing> {
+    let state = ui.global::<State>();
+    let text = state.get_paste_input().to_string();
+    let mut sends = Vec::new();
+    if !text.trim().is_empty() {
+        match write_paste_file(&text) {
+            Ok((dir, file)) => {
+                state.set_paste_input("".into());
+                sends.push(Outgoing {
+                    paths: vec![file],
+                    staged: Vec::new(),
+                    cleanup: Some(dir),
+                });
+            }
+            Err(e) => toast(ui, &format!("Could not prepare the text: {e}"), true),
+        }
+    }
+    let picked = std::mem::take(&mut *ctx.transfers.picked.lock().unwrap());
+    let staged = queued_staged(ctx);
+    let paths: Vec<PathBuf> = staged.iter().chain(&picked).cloned().collect();
+    if !paths.is_empty() {
+        sends.push(Outgoing {
+            paths,
+            staged,
+            cleanup: None,
+        });
+    }
+    if !picked.is_empty() {
+        refresh_outbox(ctx);
+    }
+    sends
+}
+
 /// Share `paths` and deliver the ticket to the peer. UI thread.
 fn start_send(
     ctx: &AppCtx,
@@ -486,7 +571,7 @@ fn start_send(
     cleanup: Option<PathBuf>,
 ) {
     if guest::is_guest(&peer_id) {
-        return guest::offer(ctx, ui, paths, staged, cleanup);
+        return guest::offer_paths(ctx, ui, &peer_id, paths, staged, cleanup);
     }
     let key = ctx.transfers.new_key("send");
     let first_name = paths.first().map(|p| path_name(p)).unwrap_or_default();
@@ -506,6 +591,119 @@ fn start_send(
     spawn_send(ctx, node, key, peer_id, peer_name, paths, staged, cleanup);
 }
 
+/// A share [`open_share`] opened.
+struct Opened {
+    ticket: String,
+    item_count: u32,
+    byte_count: u64,
+    /// The text, when this is a pasted one.
+    pasted: Option<String>,
+}
+
+/// Import `paths` and open a share of them for `peer_id`, registered under
+/// the row `key` so Stop and completion find it. `staged` share-sheet files
+/// must be claimed; the share owns them (and `cleanup`) from here. `None`
+/// when that failed (the row says why) or Stop came first.
+#[allow(clippy::too_many_arguments)]
+async fn open_share(
+    ctx: &AppCtx,
+    node: &NodeService,
+    key: &str,
+    peer_id: &str,
+    peer_name: &str,
+    paths: Vec<PathBuf>,
+    staged: Vec<PathBuf>,
+    cleanup: Option<PathBuf>,
+) -> Option<Opened> {
+    // Removed on any early return; the open share owns it after that.
+    let mut cleanup = RemoveDirOnDrop(cleanup);
+    let mut claim_guard = ClaimGuard {
+        ctx: ctx.clone(),
+        paths: staged.clone(),
+    };
+    let weak = &ctx.weak;
+    // Walking folders for their size can take a while: keep it off the
+    // async workers.
+    let scan = paths.clone();
+    let (metadata, path_type, pasted) = match tokio::task::spawn_blocking(move || {
+        (metadata_for(&scan), path_type_of(&scan), sent_paste_text(&scan))
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            fail(weak, key, format!("Could not read the files: {e}"));
+            return None;
+        }
+    };
+    let (byte_count, item_count) = (metadata.size, metadata.item_count);
+    post_update(weak, key, move |row| {
+        row.progress_label = fmt_bytes(byte_count).into();
+    });
+
+    let history_enabled = ctx.settings.lock().unwrap().history_enabled;
+    let recorder = Arc::new(Recorder::new(
+        ctx.history.clone(),
+        TransferDirection::Send,
+        Ctx {
+            root_name: metadata.file_name.clone(),
+            payload_bytes: byte_count,
+            item_count,
+            path_type,
+            peer: Some(TransferPeer {
+                endpoint_id: peer_id.to_string(),
+                display_name: Some(peer_name.to_string()),
+                device_type: None,
+            }),
+            text: pasted.clone(),
+            ..Ctx::default()
+        },
+        history_enabled,
+    ));
+    let emitter = TransferEmitter {
+        weak: weak.clone(),
+        key: key.to_string(),
+        recorder: recorder.clone(),
+        close_when_sent: Some(ctx.clone()),
+        received: None,
+    };
+    let app_handle: AppHandle = Some(Arc::new(emitter));
+
+    let share = match node.share_with_peer(peer_id, paths, app_handle).await {
+        Ok(share) => share,
+        Err(e) => {
+            tracing::warn!(%peer_id, "send: share setup failed: {e:#}");
+            forget_stopped(ctx, key).await;
+            fail(weak, key, format!("Could not start share: {e:#}"));
+            return None;
+        }
+    };
+    let ticket = share.ticket.clone();
+    let handle = ShareHandle {
+        _share: share,
+        recorder,
+        peer_name: peer_name.to_string(),
+        staged,
+        _cleanup: RemoveDirOnDrop(cleanup.0.take()),
+    };
+    let mut shares = ctx.transfers.shares.lock().await;
+    if shares.stopped.remove(key) {
+        // Stopped while preparing: the row is already gone.
+        drop(shares);
+        shutdown_share(ctx, handle, false).await;
+        return None;
+    }
+    shares.open.insert(key.to_string(), handle);
+    // The open share now owns the files (see `shutdown_share`).
+    claim_guard.disarm();
+    Some(Opened {
+        ticket,
+        item_count,
+        byte_count,
+        pasted,
+    })
+}
+
 /// The share-and-invite part of a send whose row exists and whose `staged`
 /// files are claimed. An unreachable peer leaves the send waiting (see
 /// [`retry_waiting`]).
@@ -519,63 +717,22 @@ fn spawn_send(
     staged: Vec<PathBuf>,
     cleanup: Option<PathBuf>,
 ) {
-    // Removed on any early return; the open share owns it after that.
-    let mut cleanup = RemoveDirOnDrop(cleanup);
     tracing::info!(%peer_id, %key, paths = paths.len(), "send: starting flow");
-    let mut claim_guard = ClaimGuard {
-        ctx: ctx.clone(),
-        paths: staged.clone(),
-    };
     let ctx = ctx.clone();
     let weak = ctx.weak.clone();
     ctx.rt.clone().spawn(async move {
-        // Walking folders for their size can take a while: keep it off the
-        // async workers.
-        let scan = paths.clone();
-        let (metadata, path_type, pasted) = match tokio::task::spawn_blocking(move || {
-            (metadata_for(&scan), path_type_of(&scan), sent_paste_text(&scan))
-        })
-        .await
-        {
-                Ok(v) => v,
-                Err(e) => {
-                    unqueue(&ctx, &key);
-                    return fail(&weak, &key, format!("Could not read the files: {e}"));
-                }
-            };
-        let (byte_count, item_count) = (metadata.size, metadata.item_count);
-        post_update(&weak, &key, move |row| {
-            row.progress_label = fmt_bytes(byte_count).into();
-        });
-
-        let history_enabled = ctx.settings.lock().unwrap().history_enabled;
-        let recorder = Arc::new(Recorder::new(
-            ctx.history.clone(),
-            TransferDirection::Send,
-            Ctx {
-                root_name: metadata.file_name.clone(),
-                payload_bytes: byte_count,
-                item_count,
-                path_type,
-                peer: Some(TransferPeer {
-                    endpoint_id: peer_id.clone(),
-                    display_name: Some(peer_name.clone()),
-                    device_type: None,
-                }),
-                text: pasted.clone(),
-                ..Ctx::default()
-            },
-            history_enabled,
-        ));
-        let emitter = TransferEmitter {
-            weak: weak.clone(),
-            key: key.clone(),
-            recorder: recorder.clone(),
-            close_when_sent: Some(ctx.clone()),
-            received: None,
+        let saved_paths = paths.clone();
+        let saved_staged = staged.clone();
+        let Some(Opened {
+            ticket,
+            item_count,
+            byte_count,
+            pasted,
+        }) = open_share(&ctx, &node, &key, &peer_id, &peer_name, paths, staged, cleanup).await
+        else {
+            unqueue(&ctx, &key);
+            return;
         };
-        let app_handle: AppHandle = Some(Arc::new(emitter));
-
         // Kept for the saved queue in case the peer can't be reached.
         let queued = QueuedSend {
             peer_id: peer_id.clone(),
@@ -583,40 +740,11 @@ fn spawn_send(
             paths: if pasted.is_some() {
                 Vec::new()
             } else {
-                paths.clone()
+                saved_paths
             },
-            staged: staged.clone(),
+            staged: saved_staged,
             text: pasted,
         };
-        let share = match node.share_with_peer(&peer_id, paths, app_handle).await {
-            Ok(share) => share,
-            Err(e) => {
-                tracing::warn!(%peer_id, "send: share setup failed: {e:#}");
-                forget_stopped(&ctx, &key).await;
-                unqueue(&ctx, &key);
-                return fail(&weak, &key, format!("Could not start share: {e:#}"));
-            }
-        };
-        let ticket = share.ticket.clone();
-        let handle = ShareHandle {
-            _share: share,
-            recorder,
-            peer_name: peer_name.clone(),
-            staged,
-            _cleanup: RemoveDirOnDrop(cleanup.0.take()),
-        };
-        {
-            let mut shares = ctx.transfers.shares.lock().await;
-            if shares.stopped.remove(&key) {
-                // Stopped while preparing: the row is already gone.
-                drop(shares);
-                shutdown_share(&ctx, handle, false).await;
-                return;
-            }
-            shares.open.insert(key.clone(), handle);
-            // The open share now owns the files (see `shutdown_share`).
-            claim_guard.disarm();
-        }
 
         // A peer known to be offline is not worth a connection timeout now;
         // the send waits for it either way.
@@ -893,12 +1021,20 @@ async fn shutdown_share(ctx: &AppCtx, handle: ShareHandle, sent: bool) {
 // ---------------------------------------------------- share-sheet queue
 
 /// Queued share-sheet files: staged, and not taken by a send in flight.
-fn queued_files(ctx: &AppCtx) -> Vec<PathBuf> {
+fn queued_staged(ctx: &AppCtx) -> Vec<PathBuf> {
     let claimed = ctx.transfers.claimed.lock().unwrap();
     android::outbox_files()
         .into_iter()
         .filter(|p| !claimed.contains(p))
         .collect()
+}
+
+/// Everything attached in the composer: queued share-sheet files, then
+/// desktop picks.
+fn queued_files(ctx: &AppCtx) -> Vec<PathBuf> {
+    let mut files = queued_staged(ctx);
+    files.extend(ctx.transfers.picked.lock().unwrap().iter().cloned());
+    files
 }
 
 pub(crate) fn claim(ctx: &AppCtx, paths: &[PathBuf]) {
@@ -946,7 +1082,7 @@ pub(crate) fn refresh_outbox(ctx: &AppCtx) {
     let rows: Vec<(String, String, String)> = queued_files(ctx)
         .iter()
         .map(|p| {
-            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            let size = dir_size(p);
             (
                 p.to_string_lossy().into_owned(),
                 path_name(p),
@@ -989,13 +1125,9 @@ async fn finish_send(ctx: AppCtx, key: String) {
 
 /// User pressed Stop on a send.
 fn stop_send(ctx: &AppCtx, key: String) {
-    let to_guest = ctx
-        .weak
-        .upgrade()
-        .and_then(|ui| row_peer(&ui, &key))
-        .is_some_and(|peer| guest::is_guest(&peer));
-    if to_guest {
-        return guest::withdraw(ctx, &key);
+    let peer = ctx.weak.upgrade().and_then(|ui| row_peer(&ui, &key));
+    if let Some(peer) = peer.filter(|peer| guest::is_guest(peer)) {
+        return guest::withdraw(ctx, &peer, &key);
     }
     // Restored and not started yet: there is no share to stop.
     if ctx.transfers.restored.lock().unwrap().remove(&key) {
@@ -1040,6 +1172,7 @@ fn stop_send(ctx: &AppCtx, key: String) {
 
 // ------------------------------------------------------------------ receive
 
+#[derive(Clone)]
 struct Invite {
     ticket: String,
     file_count: u32,
@@ -1112,6 +1245,19 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
     if invite.peer_id.is_empty() || invite.ticket.is_empty() {
         return;
     }
+    let items = if invite.file_count == 1 {
+        "1 item".to_string()
+    } else {
+        format!("{} items", invite.file_count)
+    };
+    receive(ctx, invite, items, false);
+}
+
+/// Download what `invite` offers, on a new row titled `title`. A `quick`
+/// share's sender is no peer of ours: it isn't answered (the download is
+/// the answer), and its finished row stays on the Quick share page.
+/// UI thread.
+fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
     let Some(node) = ctx.node() else {
         return;
     };
@@ -1120,11 +1266,6 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
     };
 
     let key = ctx.transfers.new_key("recv");
-    let items = if invite.file_count == 1 {
-        "1 item".to_string()
-    } else {
-        format!("{} items", invite.file_count)
-    };
     insert_row(
         &ui,
         TransferRow {
@@ -1132,7 +1273,8 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
             peer_id: invite.peer_id.clone().into(),
             sending: false,
             active: true,
-            title: items.into(),
+            quick,
+            title: title.into(),
             progress_label: fmt_bytes(invite.total_size).into(),
             status: "Accepting…".into(),
             ..Default::default()
@@ -1149,7 +1291,7 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
     ctx.rt.clone().spawn(async move {
         let weak = ctx.weak.clone();
         let id = invite.peer_id.clone();
-        tracing::info!(%id, %key, "receive: auto-accepting invite");
+        tracing::info!(%id, %key, quick, "receive: accepting invite");
         let stored_name = node
             .list_paired()
             .ok()
@@ -1157,7 +1299,8 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
                 list.into_iter()
                     .find(|d| d.endpoint_id.to_lowercase() == id)
                     .map(|d| d.display_name)
-            });
+            })
+            .filter(|_| !quick);
         let peer_name = invite_peer_name(stored_name, &invite.sender_name, &id);
         let save_dir = save_dir(&ctx, &peer_name, &id);
         let history_enabled = ctx.settings.lock().unwrap().history_enabled;
@@ -1171,9 +1314,11 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
             fail(&weak, &key, msg);
         };
 
-        if let Err(e) = node.respond_paired_invite(&id, true).await {
-            tracing::warn!(%id, "receive: accept handshake failed: {e}");
-            return give_up(format!("Could not accept files from {peer_name}: {e}"));
+        if !quick {
+            if let Err(e) = node.respond_paired_invite(&id, true).await {
+                tracing::warn!(%id, "receive: accept handshake failed: {e}");
+                return give_up(format!("Could not accept files from {peer_name}: {e}"));
+            }
         }
         let recorder = Arc::new(Recorder::new(
             ctx.history.clone(),
@@ -1226,6 +1371,11 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
                     recorder.set_text(text.clone());
                 }
                 let _ = weak.upgrade_in_event_loop(move |ui| {
+                    if quick {
+                        // No peer page to keep the record: the row stays.
+                        finish_quick_receive(&ui, &key, &peer_name, &save_dir, pasted);
+                        return;
+                    }
                     // Done: the history row is its record from here on.
                     remove_row(&ui, &key);
                     let msg = if pasted.is_some() {
@@ -1267,6 +1417,254 @@ pub(crate) fn accept_invite(ctx: &AppCtx, payload: serde_json::Value) {
                 });
             }
         }
+    });
+}
+
+// -------------------------------------------------------------- quick share
+
+/// Settle a finished quick receive: its row stays, saying where the files
+/// went; a text is copied, there being nowhere else to read it.
+fn finish_quick_receive(
+    ui: &AppWindow,
+    key: &str,
+    peer_name: &str,
+    save_dir: &Path,
+    pasted: Option<String>,
+) {
+    let (status, msg) = match pasted {
+        Some(text) => match platform::copy_to_clipboard(&text) {
+            Ok(()) => (
+                format!("Text copied · {}", text_preview(&text)),
+                format!("Text from {peer_name} copied"),
+            ),
+            Err(_) => (
+                format!("Text saved in {}", save_dir.display()),
+                format!("Text from {peer_name} saved"),
+            ),
+        },
+        None => (
+            format!("Saved in {}", save_dir.display()),
+            format!("Files from {peer_name} saved"),
+        ),
+    };
+    update_row(ui, key, |row| {
+        row.active = false;
+        row.progress = 1.0;
+        row.speed = "".into();
+        row.status = status.into();
+    });
+    toast(ui, &msg, false);
+}
+
+/// Mirror the quick shares offered to us into `State.quick-incoming`.
+/// UI thread.
+fn show_incoming(ctx: &AppCtx, ui: &AppWindow) {
+    let rows: Vec<QuickOffer> = ctx
+        .transfers
+        .incoming
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|offer| {
+            let name = invite_peer_name(None, &offer.invite.sender_name, &offer.invite.peer_id);
+            QuickOffer {
+                key: offer.key.clone().into(),
+                initials: crate::app::initials(&name).into(),
+                sender: name.into(),
+                title: offer.title.clone().into(),
+                size: fmt_bytes(offer.invite.total_size).into(),
+            }
+        })
+        .collect();
+    ui.global::<State>()
+        .set_quick_incoming(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
+/// Someone offered us a quick share (`quick-share-received`): list it for
+/// Accept or Decline. UI thread.
+pub(crate) fn quick_offered(ctx: &AppCtx, payload: serde_json::Value) {
+    let invite = parse_invite_payload(&payload);
+    let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+    if invite.peer_id.is_empty() || invite.ticket.is_empty() || id.is_empty() {
+        return;
+    }
+    let title = payload
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| t.chars().take(200).collect())
+        .unwrap_or_else(|| items_title("", invite.file_count as usize));
+    let name = invite_peer_name(None, &invite.sender_name, &invite.peer_id);
+    ctx.transfers.incoming.lock().unwrap().push(IncomingQuick {
+        key: ctx.transfers.new_key("offer"),
+        id: id.chars().take(64).collect(),
+        title: title.clone(),
+        invite,
+    });
+    let Some(ui) = ctx.weak.upgrade() else { return };
+    show_incoming(ctx, &ui);
+    let page = if platform::TOUCH { "Share" } else { "Quick share" };
+    toast(&ui, &format!("{name} wants to send you {title}. See {page}"), false);
+}
+
+/// Accept (download) or decline the quick share `key`. UI thread.
+fn answer_quick(ctx: &AppCtx, key: &str, accept: bool) {
+    let offer = {
+        let mut incoming = ctx.transfers.incoming.lock().unwrap();
+        let Some(i) = incoming.iter().position(|o| o.key == key) else {
+            return;
+        };
+        incoming.remove(i)
+    };
+    if let Some(ui) = ctx.weak.upgrade() {
+        show_incoming(ctx, &ui);
+    }
+    if accept {
+        return receive(ctx, offer.invite, offer.title, true);
+    }
+    let Some(node) = ctx.node() else { return };
+    ctx.rt.spawn(async move {
+        if let Err(e) = node.decline_quick_share(&offer.invite.peer_id, &offer.id).await {
+            tracing::debug!("declining quick share failed: {e:#}");
+        }
+    });
+}
+
+/// Quick share what the composer holds with a device we don't pair with:
+/// share it, then offer it to them to accept. UI thread.
+fn quick_send(ctx: &AppCtx, peer_id: &str) {
+    let Some(ui) = ctx.weak.upgrade() else { return };
+    let state = ui.global::<State>();
+    let peer_name = state
+        .get_nearby_devices()
+        .iter()
+        .find(|d| d.endpoint_id == peer_id)
+        .map(|d| d.name.to_string())
+        .unwrap_or_else(|| short_id(peer_id));
+    let Some(node) = ctx.node() else {
+        toast(&ui, "Still connecting. Try again in a moment.", false);
+        return;
+    };
+    let sends = take_composed(ctx, &ui);
+    if sends.is_empty() {
+        toast(&ui, "Add something to send first", false);
+        return;
+    }
+    for send in sends {
+        let key = ctx.transfers.new_key("send");
+        let first_name = send.paths.first().map(|p| path_name(p)).unwrap_or_default();
+        let title = items_title(&first_name, send.paths.len());
+        insert_row(
+            &ui,
+            TransferRow {
+                key: key.clone().into(),
+                peer_id: peer_id.into(),
+                sending: true,
+                active: true,
+                quick: true,
+                title: format!("{title} to {peer_name}").into(),
+                status: "Preparing…".into(),
+                ..Default::default()
+            },
+        );
+        claim(ctx, &send.staged);
+        let (ctx, node, peer_id, peer_name) =
+            (ctx.clone(), node.clone(), peer_id.to_string(), peer_name.clone());
+        ctx.rt.clone().spawn(async move {
+            let weak = ctx.weak.clone();
+            let Some(opened) = open_share(
+                &ctx,
+                &node,
+                &key,
+                &peer_id,
+                &peer_name,
+                send.paths,
+                send.staged,
+                send.cleanup,
+            )
+            .await
+            else {
+                return;
+            };
+            post_update(&weak, &key, |row| row.status = "Contacting…".into());
+            let delivered = node
+                .quick_share(
+                    &peer_id,
+                    &key,
+                    &opened.ticket,
+                    opened.item_count,
+                    opened.byte_count,
+                    &title,
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(%peer_id, "quick share: delivery failed: {e:#}");
+                    false
+                });
+            if delivered {
+                post_update(&weak, &key, move |row| {
+                    if row.status.as_str() == "Contacting…" {
+                        row.status = format!("Waiting for {peer_name} to accept…").into();
+                    }
+                });
+                return;
+            }
+            if let Some(handle) = take_share(&ctx, &key).await {
+                handle.recorder.finalize(
+                    TransferStatus::Failed,
+                    None,
+                    None,
+                    None,
+                    Some("unreachable".to_string()),
+                );
+                shutdown_share(&ctx, handle, false).await;
+            }
+            fail(
+                &weak,
+                &key,
+                format!("Couldn't reach {peer_name}. Are you on the same network?"),
+            );
+        });
+    }
+}
+
+/// The receiver turned down our quick share `id` (`quick-share-declined`):
+/// stop sharing it. UI thread.
+pub(crate) fn quick_declined(ctx: &AppCtx, payload: serde_json::Value) {
+    let field = |k: &str| {
+        payload
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (peer_id, key) = (field("remote_endpoint_id").to_lowercase(), field("id"));
+    let Some(ui) = ctx.weak.upgrade() else { return };
+    // Only a quick send of ours, to that very device.
+    let ours = with_rows(&ui, |rows| {
+        position(rows, &key)
+            .and_then(|i| rows.row_data(i))
+            .is_some_and(|r| r.quick && r.sending && r.peer_id.to_lowercase() == peer_id)
+    });
+    if ours != Some(true) {
+        return;
+    }
+    let ctx = ctx.clone();
+    ctx.rt.clone().spawn(async move {
+        let Some(handle) = take_share(&ctx, &key).await else {
+            return;
+        };
+        let name = handle.peer_name.clone();
+        handle
+            .recorder
+            .finalize(TransferStatus::Cancelled, None, None, None, None);
+        shutdown_share(&ctx, handle, false).await;
+        let ctx_ui = ctx.clone();
+        let _ = ctx.weak.upgrade_in_event_loop(move |ui| {
+            remove_row(&ui, &key);
+            toast(&ui, &format!("{name} declined"), true);
+            refresh_history(&ctx_ui);
+        });
     });
 }
 
@@ -1345,43 +1743,20 @@ pub(crate) fn register(ctx: &AppCtx) {
             if peer_id.is_empty() || state.get_selected_sending() {
                 return;
             }
-            let text = state.get_paste_input().to_string();
-            let queued = queued_files(&ctx);
-            if text.trim().is_empty() && queued.is_empty() {
-                return;
-            }
             let Some(node) = ctx.node() else {
                 toast(&ui, "Still connecting. Try again in a moment.", false);
                 return;
             };
-            if !text.trim().is_empty() {
-                match write_paste_file(&text) {
-                    Ok((dir, file)) => {
-                        state.set_paste_input("".into());
-                        start_send(
-                            &ctx,
-                            &ui,
-                            node.clone(),
-                            peer_id.clone(),
-                            peer_name.clone(),
-                            vec![file],
-                            Vec::new(),
-                            Some(dir),
-                        );
-                    }
-                    Err(e) => toast(&ui, &format!("Could not prepare the text: {e}"), true),
-                }
-            }
-            if !queued.is_empty() {
+            for send in take_composed(&ctx, &ui) {
                 start_send(
                     &ctx,
                     &ui,
-                    node,
-                    peer_id,
-                    peer_name,
-                    queued.clone(),
-                    queued,
-                    None,
+                    node.clone(),
+                    peer_id.clone(),
+                    peer_name.clone(),
+                    send.paths,
+                    send.staged,
+                    send.cleanup,
                 );
             }
         });
@@ -1405,7 +1780,13 @@ pub(crate) fn register(ctx: &AppCtx) {
         let ctx = ctx.clone();
         logic.on_outbox_remove(move |path| {
             let path = PathBuf::from(path.as_str());
-            if queued_files(&ctx).contains(&path) {
+            let picked = {
+                let mut picked = ctx.transfers.picked.lock().unwrap();
+                let before = picked.len();
+                picked.retain(|p| *p != path);
+                picked.len() != before
+            };
+            if !picked && queued_staged(&ctx).contains(&path) {
                 android::clear_outbox(&[path]);
             }
             refresh_outbox(&ctx);
@@ -1415,8 +1796,35 @@ pub(crate) fn register(ctx: &AppCtx) {
         // Drop the whole queue (files being sent stay).
         let ctx = ctx.clone();
         logic.on_outbox_clear(move || {
-            android::clear_outbox(&queued_files(&ctx));
+            ctx.transfers.picked.lock().unwrap().clear();
+            android::clear_outbox(&queued_staged(&ctx));
             refresh_outbox(&ctx);
+        });
+    }
+
+    // Desktop: attach picked files to the composer (Android has its own
+    // pickers, which stage copies).
+    #[cfg(not(target_os = "android"))]
+    {
+        let ctx = ctx.clone();
+        logic.on_pick_files(move || {
+            if ctx.transfers.picking.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let ctx = ctx.clone();
+            ctx.rt.clone().spawn_blocking(move || {
+                let picked = platform::pick_send_paths();
+                ctx.transfers.picking.store(false, Ordering::SeqCst);
+                {
+                    let mut list = ctx.transfers.picked.lock().unwrap();
+                    for path in picked {
+                        if !list.contains(&path) {
+                            list.push(path);
+                        }
+                    }
+                }
+                refresh_outbox(&ctx);
+            });
         });
     }
 
@@ -1430,6 +1838,18 @@ pub(crate) fn register(ctx: &AppCtx) {
     {
         let ctx = ctx.clone();
         logic.on_stop_share(move |key: SharedString| stop_send(&ctx, key.to_string()));
+    }
+    {
+        let ctx = ctx.clone();
+        logic.on_quick_send(move |peer_id: SharedString| quick_send(&ctx, &peer_id));
+    }
+    {
+        let ctx = ctx.clone();
+        logic.on_quick_accept(move |key: SharedString| answer_quick(&ctx, &key, true));
+    }
+    {
+        let ctx = ctx.clone();
+        logic.on_quick_decline(move |key: SharedString| answer_quick(&ctx, &key, false));
     }
     {
         let ctx = ctx.clone();

@@ -37,21 +37,38 @@ Implemented:
 - **Settings**, downloads folder, own device name, relay mode (default /
   disabled / custom URLs + auth token), local discovery (everyone / paired
   only / off), history toggle; persisted to `settings.json`.
-- **Browser link**, for someone without flipflop: "Add peer → Open browser
-  link" starts a small HTTP/1.1 server (`src/guest`) on the LAN and adds a
-  temporary "Browser" peer with a QR code and URL
-  (`http://<lan-ip>:53530/<random token>`; any free port if 53530 is taken).
-  The token is the only key: no prompts, and every other path is a 404.
-  Sends to it become offers on the web page (one file as is, a folder or
-  several files as a streamed, stored zip with an exact length; text shown
-  inline); uploads from the page are saved to `<downloads>/Browser`. Both
-  use ordinary transfer rows and history under the peer id `browser`.
-  Closing the link stops the server and withdraws whatever wasn't
-  downloaded. Plain HTTP (no secure context in the page, so its Copy button
-  falls back to `execCommand`), IPv4 only, and only while the app runs (no
-  Android foreground service).
-  "Anywhere" on the link card swaps the URL for one to the same page on
-  GitHub Pages (`https://andunieee.github.io/flipflop/#t=<token>&e=<endpoint
+- **Quick share**, with a flipflop device nearby that we don't want as a
+  peer: pick what to send (the same composer as a peer's send card; desktop
+  attaches picked files instead of sending them at once), then a device
+  from the Nearby list. The share is opened for that device alone and
+  offered with a `QuickShare` control message (id, ticket, title), allowed
+  from unpaired peers like the nearby `Invite`. The receiver lists it under
+  "Incoming" (with a toast and a badge on the nav): Accept downloads that
+  share only, into `<downloads>/<sender name>`, and Decline answers
+  `QuickShareDeclined { id }`, which stops the sender's share. Nobody is
+  paired or remembered; the rows stay on the Quick share page. The receiver
+  must be discoverable to "Everyone" and on a direct path, as for any
+  stranger's control message.
+- **Browser links**, for someone without flipflop: "Share via link" makes a
+  temporary page for the same Wi-Fi or anywhere, to send (download only) or
+  to receive (uploads allowed). Any number can be open; each is one more
+  peer ("Browser 1", "Browser 2"…, id `browser-<token prefix>`) with its own
+  QR code, URL, send card, transfers and history, and a switch to allow
+  uploads or not (the page shows its upload form only while allowed, and
+  the server answers the upload routes with 403 otherwise). One small
+  HTTP/1.1 server (`src/guest`) serves every same-Wi-Fi link
+  (`http://<lan-ip>:53530/<random token>`; any free port if 53530 is taken),
+  and one tunnel every "anywhere" link; a link only answers over the one it
+  was made for, and both stop with the last link. The token is the only
+  key: no prompts, and every other path is a 404. Sends to a link become
+  offers on its page (one file as is, a folder or several files as a
+  streamed, stored zip with an exact length; text shown inline); uploads
+  are saved to `<downloads>/Browser`. Closing a link withdraws whatever
+  wasn't downloaded. Plain HTTP (no secure context in the page, so its Copy
+  button falls back to `execCommand`), IPv4 only, and only while the app
+  runs (no Android foreground service).
+  An "anywhere" link points to the same page on GitHub Pages
+  (`https://andunieee.github.io/flipflop/#t=<token>&e=<endpoint
   id>&r=<home relay>`, all in the fragment, which never leaves the browser).
   There the page loads iroh as wasm (`web/`), dials us through our home relay
   on the `flipflop/guest/0` ALPN, and sends the same requests as on the LAN,
@@ -85,7 +102,10 @@ The same UI runs on Android through Slint's `android-activity` backend. The
 crate builds as a `cdylib` (`src/lib.rs`) plus the desktop bin; the window
 switches to a single-pane layout with a bottom nav bar when there is no room
 for the sidebar (`State.compact`), and uses larger touch-sized rows and
-buttons on Android (`State.touch`).
+buttons on Android (`State.touch`). The bottom nav has Peers (with "Add
+peer" at the top of the list), Share (Quick share and browser links on one
+page, sharing one "what to send") and Settings; the desktop sidebar has Add
+peer, Quick share and Share via link as separate pages.
 
 Platform integration (see `src/android.rs`):
 
@@ -153,8 +173,9 @@ carries its own `rust-toolchain.toml` (1.92). `tinyvec` is pinned to
   `cdylib`.
 - `src/main.rs`, desktop entry point.
 - `src/app.rs`, startup, node events, peers/pairing/history/settings wiring.
-- `src/transfers.rs`, send and receive flows; one `TransferRow` per transfer.
-- `src/guest.rs`, the browser link: session, offers, uploads; `guest/http.rs`
+- `src/transfers.rs`, send and receive flows (quick shares included); one
+  `TransferRow` per transfer.
+- `src/guest.rs`, the browser links: links, offers, uploads; `guest/http.rs`
   is the server and routes, `guest/zip.rs` the streaming zip writer,
   `guest/page.html` the page itself.
 - `web/`, the browser link's page on the web: a separate wasm crate (the

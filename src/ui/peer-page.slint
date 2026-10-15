@@ -1,4 +1,4 @@
-import { LineEdit, TextEdit } from "std-widgets.slint";
+import { LineEdit, TextEdit, Switch } from "std-widgets.slint";
 import { State, Logic, HistoryRow, TransferRow, AppRow } from "globals.slint";
 import {
     Theme, Dot, Card, ProgressBar, HintText, StatusText, Avatar, Badge, DirectionIcon,
@@ -104,7 +104,7 @@ component HistoryItem inherits Rectangle {
     }
 }
 
-component TransferCard inherits Card {
+export component TransferCard inherits Card {
     in property <TransferRow> transfer;
 
     VerticalLayout {
@@ -383,10 +383,63 @@ component AttachButton inherits Rectangle {
     }
 }
 
+// What to send: typed or pasted text, and attachments (pictures, an app,
+// files), listed above the text box until sent. With `send-files-now`
+// (desktop peer pages) Files sends at once instead of attaching.
+export component Composer inherits VerticalLayout {
+    in property <bool> send-files-now: false;
+    spacing: Theme.space-3;
+
+    // Losing focus commits the keyboard's composing text on Android: call
+    // before sending.
+    public function commit() {
+        text-box.clear-focus();
+    }
+
+    if State.outbox-count > 0: OutboxFiles { }
+
+    text-box := TextEdit {
+        text <=> State.paste-input;
+        placeholder-text: "Type or paste text…";
+        wrap: word-wrap;
+        height: 96px;
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-2;
+        AttachButton {
+            label: "Paste";
+            icon: Icons.clipboard;
+            clicked => { Logic.paste-clipboard(); }
+        }
+        if State.touch: AttachButton {
+            label: "Picture";
+            icon: Icons.image;
+            clicked => { Logic.pick-images(); }
+        }
+        if State.touch: AttachButton {
+            label: "App";
+            icon: Icons.apps;
+            clicked => { Logic.pick-app(); }
+        }
+        AttachButton {
+            label: "Files";
+            icon: Icons.folder;
+            enabled: !root.send-files-now || !State.selected-sending;
+            clicked => {
+                if root.send-files-now {
+                    Logic.send-to-peer();
+                } else {
+                    Logic.pick-files();
+                }
+            }
+        }
+    }
+}
+
 // Everything sent to a peer starts here: type or paste text, attach
-// pictures / an app / files, then Send. Android queues attachments (listed
-// above the text box) until Send; desktop only has Files, which sends right
-// away.
+// pictures / an app / files, then Send. Attachments wait (listed above the
+// text box) until Send; on desktop Files sends right away.
 component SendCard inherits Card {
     border-color: State.outbox-count > 0 ? Theme.accent-border : Theme.border;
 
@@ -428,45 +481,7 @@ component SendCard inherits Card {
             }
         }
 
-        if State.outbox-count > 0: OutboxFiles { }
-
-        text-box := TextEdit {
-            text <=> State.paste-input;
-            placeholder-text: "Type or paste text…";
-            wrap: word-wrap;
-            height: 96px;
-        }
-
-        HorizontalLayout {
-            spacing: Theme.space-2;
-            AttachButton {
-                label: "Paste";
-                icon: Icons.clipboard;
-                clicked => { Logic.paste-clipboard(); }
-            }
-            if State.touch: AttachButton {
-                label: "Picture";
-                icon: Icons.image;
-                clicked => { Logic.pick-images(); }
-            }
-            if State.touch: AttachButton {
-                label: "App";
-                icon: Icons.apps;
-                clicked => { Logic.pick-app(); }
-            }
-            AttachButton {
-                label: "Files";
-                icon: Icons.folder;
-                enabled: State.touch || !State.selected-sending;
-                clicked => {
-                    if State.touch {
-                        Logic.pick-files();
-                    } else {
-                        Logic.send-to-peer();
-                    }
-                }
-            }
-        }
+        composer := Composer { send-files-now: !State.touch; }
 
         HorizontalLayout {
             alignment: State.touch ? stretch : end;
@@ -476,8 +491,7 @@ component SendCard inherits Card {
                 enabled: !State.selected-sending
                     && (State.paste-input != "" || State.outbox-count > 0);
                 clicked => {
-                    // Losing focus commits the keyboard's composing text on Android.
-                    text-box.clear-focus();
+                    composer.commit();
                     Logic.send-composed();
                 }
             }
@@ -549,27 +563,48 @@ component GuestQr inherits Rectangle {
     }
 }
 
-// Which link to show: one for this network, or one that works anywhere.
-component GuestLinkKind inherits HorizontalLayout {
-    spacing: Theme.space-1;
-    alignment: start;
-    // Declaration order is display order, whichever of a pair is shown.
-    if !State.guest-web: SecondaryButton { label: "Same Wi-Fi"; }
-    if State.guest-web: GhostButton { label: "Same Wi-Fi"; clicked => { Logic.guest-set-web(false); } }
-    if State.guest-web: SecondaryButton { label: "Anywhere"; }
-    if !State.guest-web: GhostButton { label: "Anywhere"; clicked => { Logic.guest-set-web(true); } }
+// "Let them send files to you", switched on the open link.
+component GuestUploadSwitch inherits HorizontalLayout {
+    spacing: Theme.space-3;
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        horizontal-stretch: 1;
+        Text {
+            text: "Let them send you files";
+            color: Theme.text-strong;
+            font-weight: 600;
+        }
+        Text {
+            text: State.guest-upload
+                ? "The page has a form to send you files and text."
+                : "The page only offers what you send them.";
+            color: Theme.text-muted;
+            font-size: Theme.font-sm;
+            wrap: word-wrap;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        Switch {
+            checked <=> State.guest-upload;
+            toggled => { Logic.guest-set-upload(self.checked); }
+        }
+    }
 }
 
 // The link itself: copy it, or switch to another of our addresses.
 component GuestLinkDetails inherits VerticalLayout {
     spacing: Theme.space-3;
 
-    SectionHeader { label: "Browser link"; icon: Icons.globe; }
-    GuestLinkKind { }
+    SectionHeader {
+        label: State.guest-web ? "Browser link · anywhere" : "Browser link · same Wi-Fi";
+        icon: Icons.globe;
+    }
     HintText {
         label: State.guest-web
-            ? "Open it in any browser, anywhere: it reaches this device over the internet, end-to-end encrypted. Whoever has the link can send and receive here until you close it."
-            : "Open it in any browser on the same Wi-Fi (or your hotspot). Whoever has the link can send and receive here until you close it.";
+            ? "Open it in any browser, anywhere: it reaches this device over the internet, end-to-end encrypted. It works until you close it."
+            : "Open it in any browser on the same Wi-Fi (or your hotspot). It works until you close it.";
     }
     if State.guest-url == "": StatusText {
         label: State.guest-web
@@ -638,6 +673,12 @@ component GuestLinkCard inherits Card {
                 alignment: center;
                 GuestQr { size: 200px; }
             }
+        }
+        VerticalLayout {
+            padding-top: Theme.space-4;
+            spacing: Theme.space-3;
+            Divider { }
+            GuestUploadSwitch { }
         }
     }
 }

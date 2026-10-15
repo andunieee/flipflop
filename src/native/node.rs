@@ -334,6 +334,14 @@ impl ControlProtocol {
                         }
                     }
                 }
+                message @ (ControlMessage::QuickShare { .. }
+                | ControlMessage::QuickShareDeclined { .. }) => {
+                    crate::native::pairing_util::emit_quick_share_message(
+                        &self.ctx.app_handle,
+                        &remote.to_string(),
+                        &message,
+                    );
+                }
                 ControlMessage::WhoAreYou
                 | ControlMessage::Identity { .. }
                 | ControlMessage::PairRequest { .. } => {
@@ -692,6 +700,14 @@ impl ControlProtocol {
                     }
                     return true;
                 }
+            }
+            message @ (ControlMessage::QuickShare { .. }
+            | ControlMessage::QuickShareDeclined { .. }) => {
+                crate::native::pairing_util::emit_quick_share_message(
+                    &self.ctx.app_handle,
+                    &remote.to_string(),
+                    &message,
+                );
             }
             _other => {
 
@@ -1488,6 +1504,41 @@ impl NodeService {
         Ok(true)
     }
 
+    /// Offers a one-off share (an already-minted `blob_ticket`) to any
+    /// device, paired or not, without pairing: the receiver accepts or
+    /// declines this download alone. `id` comes back in a decline
+    /// (`quick-share-declined`). `Ok(false)` when it can't be reached.
+    pub async fn quick_share(
+        &self,
+        endpoint_id: &str,
+        id: &str,
+        blob_ticket: &str,
+        file_count: u32,
+        total_size: u64,
+        title: &str,
+    ) -> anyhow::Result<bool> {
+        let remote = EndpointId::from_str(endpoint_id)?;
+        let paired = self.access.read().await.allowed.contains(&remote);
+        let message = ControlMessage::QuickShare {
+            id: id.to_string(),
+            blob_ticket: blob_ticket.to_string(),
+            file_count,
+            total_size,
+            title: title.to_string(),
+            sender_name: self.identity.display_name(),
+            device_type: self.identity.device_type(),
+        };
+        self.deliver_message(endpoint_id, message, paired).await
+    }
+
+    /// Turn down the quick share `id` from `endpoint_id`.
+    pub async fn decline_quick_share(&self, endpoint_id: &str, id: &str) -> anyhow::Result<bool> {
+        let remote = EndpointId::from_str(endpoint_id)?;
+        let paired = self.access.read().await.allowed.contains(&remote);
+        let message = ControlMessage::QuickShareDeclined { id: id.to_string() };
+        self.deliver_message(endpoint_id, message, paired).await
+    }
+
     /// Delivers a single `Invite` to `remote_endpoint_id`. Shared by the paired
     /// and nearby invite paths, only their preconditions differ.
     /// `use_cached_session` is false for a peer we've never talked to.
@@ -1497,6 +1548,24 @@ impl NodeService {
         blob_ticket: &str,
         file_count: u32,
         total_size: u64,
+        use_cached_session: bool,
+    ) -> anyhow::Result<bool> {
+        let invite = ControlMessage::Invite {
+            blob_ticket: blob_ticket.to_string(),
+            file_count,
+            total_size,
+            sender_name: self.identity.display_name(),
+        };
+        self.deliver_message(remote_endpoint_id, invite, use_cached_session)
+            .await
+    }
+
+    /// Delivers one control `message` to `remote_endpoint_id`; `Ok(false)`
+    /// when the peer can't be reached. See [`Self::deliver_invite`].
+    async fn deliver_message(
+        &self,
+        remote_endpoint_id: &str,
+        message: ControlMessage,
         use_cached_session: bool,
     ) -> anyhow::Result<bool> {
         let remote = EndpointId::from_str(remote_endpoint_id)?;
@@ -1559,19 +1628,13 @@ impl NodeService {
         let (mut send, _recv) = match conn.open_bi().await {
             Ok(streams) => streams,
             Err(err) => {
-                return Err(err).context("open bi stream for invite");
+                return Err(err).with_context(|| format!("open bi stream for {}", message.kind()));
             }
         };
 
-        let invite = ControlMessage::Invite {
-            blob_ticket: blob_ticket.to_string(),
-            file_count,
-            total_size,
-            sender_name: self.identity.display_name(),
-        };
-        if let Err(err) = write_message(&mut send, &invite).await {
+        if let Err(err) = write_message(&mut send, &message).await {
 
-            return Err(err).context("write Invite message");
+            return Err(err).with_context(|| format!("write {} message", message.kind()));
         }
 
         // Hold the connection open in the background so the receiver can read
