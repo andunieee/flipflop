@@ -125,8 +125,13 @@ pub struct FileRow {
     pub hosting: bool,
     /// "Also from Bob, Carol"
     pub hosts: String,
-    /// We stopped sharing it and it is still where it was.
+    /// It can be offered again: ours, stopped and still where it was; or someone else's that was
+    /// stopped, and our download still where it went.
     pub can_reoffer: bool,
+    /// Ours: where we share it from.
+    pub shared_from: String,
+    /// It can be removed from our files tab.
+    pub can_remove: bool,
 }
 
 /// One of the group's tabs: built-in ("files", "texts", "pad") or an app.
@@ -990,7 +995,18 @@ impl App {
         }
     }
 
-    /// Offer a file we stopped sharing again.
+    /// Take a file off the open group's files tab, here only.
+    pub fn remove_file(&self, id: String) {
+        let _g = self.inner.enter();
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
+        if let Err(err) = core.remove_file(&gid, &id) {
+            self.inner.notice(format!("{err:#}"));
+        }
+    }
+
+    /// Offer a stopped file again: ours, or one we downloaded.
     pub fn reoffer_file(&self, id: String) {
         let _g = self.inner.enter();
         let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
@@ -1372,6 +1388,12 @@ fn build_state(shared: &Shared) -> UiState {
                     format!("Also from {}", f.hosts.join(", "))
                 },
                 can_reoffer: f.can_reoffer,
+                shared_from: f
+                    .shared_from
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                can_remove: f.can_remove,
             }
         })
         .collect();

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -19,6 +20,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,51 +45,117 @@ import uniffi.flipflop.TextRow
 import uniffi.flipflop.UiState
 import uniffi.flipflop.mapCursor
 
+/**
+ * A file the user may take off the files tab: swiped away on touch screens, from a right-click menu
+ * on the desktop.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun Removable(enabled: Boolean, touch: Boolean, onRemove: () -> Unit, content: @Composable () -> Unit) {
+    val c = Theme.c
+    val d = Theme.d
+    if (!enabled) return content()
+    if (touch) {
+        val state = androidx.compose.material3.rememberSwipeToDismissBoxState()
+        LaunchedEffect(state.currentValue) {
+            if (state.currentValue != androidx.compose.material3.SwipeToDismissBoxValue.Settled) onRemove()
+        }
+        androidx.compose.material3.SwipeToDismissBox(
+            state,
+            backgroundContent = {
+                val start = state.dismissDirection == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd
+                Row(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(d.radiusLg)).background(c.errorSoft).padding(horizontal = d.space4),
+                    horizontalArrangement = Arrangement.spacedBy(d.space2, if (start) Alignment.Start else Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.trash, tint = c.error)
+                    Txt("Remove", d.fontSm, c.error, 650)
+                }
+            },
+        ) { content() }
+        return
+    }
+    var menu by remember { mutableStateOf<androidx.compose.ui.unit.DpOffset?>(null) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    Box(
+        Modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                    if (e.type != androidx.compose.ui.input.pointer.PointerEventType.Press || !e.buttons.isSecondaryPressed) continue
+                    val at = e.changes.first().position
+                    menu = with(density) { androidx.compose.ui.unit.DpOffset(at.x.toDp(), at.y.toDp()) }
+                }
+            }
+        },
+    ) {
+        content()
+        // The menu opens below its anchor: an empty box where the click was.
+        val at = menu ?: androidx.compose.ui.unit.DpOffset.Zero
+        Box(Modifier.offset(at.x, at.y).size(0.dp)) {
+            androidx.compose.material3.DropdownMenu(menu != null, { menu = null }) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Txt("Remove from the list", d.fontMd, c.error) },
+                    leadingIcon = { Icon(Icons.trash, tint = c.error) },
+                    onClick = {
+                        menu = null
+                        onRemove()
+                    },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun FileCard(f: FileRow, nav: Nav) {
     val app = nav.backend.app
     val c = Theme.c
     val d = Theme.d
-    Card {
-        Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(d.space3)) {
-                IconTile(
-                    when (f.kind) { 1 -> Icons.image; 2 -> Icons.apps; 3 -> Icons.folder; else -> Icons.file },
-                    tint = if (f.stopped) c.chipBg else c.accentSoft,
-                    ink = if (f.stopped) c.textFaint else c.accentText,
-                )
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Txt(f.name, d.fontMd, if (f.stopped) c.textMuted else c.textStrong, 650)
-                    Txt(f.size + " · " + f.meta, d.fontSm, c.textMuted)
-                    if (f.hosts.isNotEmpty()) Txt(f.hosts, d.fontSm, c.textMuted)
-                }
-            }
-            if (f.downloading) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    ProgressBar(f.progress)
-                    Txt(f.progressLabel, d.fontXs, c.textFaint)
-                }
-            }
-            if (f.error.isNotEmpty() && !f.downloading) Txt(f.error, d.fontSm, c.error)
-            if (f.savedTo.isNotEmpty() && !f.mine) Txt("Saved to " + f.savedTo, d.fontXs, c.textFaint)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.space2, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(d.space2)) {
-                    when {
-                        f.stopped -> Badge("Not shared anymore", "muted")
-                        f.mine -> Badge("Sharing", "active")
-                        f.hosting -> Badge("Hosting", "active")
-                        f.have -> Badge("Downloaded", "ok")
-                        f.downloading -> Badge("Downloading", "active")
-                        !f.canDownload -> Badge("Sender offline", "warn")
+    Removable(f.canRemove, nav.backend.touch, { app.removeFile(f.id) }) {
+        Card {
+            Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(d.space3)) {
+                    IconTile(
+                        when (f.kind) { 1 -> Icons.image; 2 -> Icons.apps; 3 -> Icons.folder; else -> Icons.file },
+                        tint = if (f.stopped) c.chipBg else c.accentSoft,
+                        ink = if (f.stopped) c.textFaint else c.accentText,
+                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Txt(f.name, d.fontMd, if (f.stopped) c.textMuted else c.textStrong, 650)
+                        Txt(f.size + " · " + f.meta, d.fontSm, c.textMuted)
+                        if (f.hosts.isNotEmpty()) Txt(f.hosts, d.fontSm, c.textMuted)
                     }
-                    if (f.audience.isNotEmpty()) Badge(f.audience, f.audienceTone)
                 }
-                if (f.canDownload) PrimaryButton(if (f.error.isNotEmpty()) "Retry" else "Download", icon = Icons.arrowDown) { app.downloadFile(f.id) }
-                if (f.savedTo.isNotEmpty()) SecondaryButton("Open", icon = Icons.open) { app.openFile(f.savedTo) }
-                if (f.canHost) SecondaryButton("Host it too", icon = Icons.share) { app.hostFile(f.id, true) }
-                if (f.hosting) SecondaryButton("Stop hosting") { app.hostFile(f.id, false) }
-                if (f.mine && !f.stopped) DangerButton("Stop sharing") { app.stopFile(f.id) }
-                if (f.canReoffer) SecondaryButton("Share again", icon = Icons.share) { app.reofferFile(f.id) }
+                if (f.downloading) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        ProgressBar(f.progress)
+                        Txt(f.progressLabel, d.fontXs, c.textFaint)
+                    }
+                }
+                if (f.error.isNotEmpty() && !f.downloading) Txt(f.error, d.fontSm, c.error)
+                if (f.savedTo.isNotEmpty() && !f.mine) Txt("Saved to " + f.savedTo, d.fontXs, c.textFaint)
+                if (f.sharedFrom.isNotEmpty()) Txt("Shared from " + f.sharedFrom, d.fontXs, c.textFaint)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.space2, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(d.space2)) {
+                        when {
+                            f.stopped -> Badge("Not shared anymore", "muted")
+                            f.mine -> Badge("Sharing", "active")
+                            f.hosting -> Badge("Hosting", "active")
+                            f.have -> Badge("Downloaded", "ok")
+                            f.downloading -> Badge("Downloading", "active")
+                            !f.canDownload -> Badge("Sender offline", "warn")
+                        }
+                        if (f.audience.isNotEmpty()) Badge(f.audience, f.audienceTone)
+                    }
+                    if (f.canDownload) PrimaryButton(if (f.error.isNotEmpty()) "Retry" else "Download", icon = Icons.arrowDown) { app.downloadFile(f.id) }
+                    if (f.savedTo.isNotEmpty()) SecondaryButton("Open", icon = Icons.open) { app.openFile(f.savedTo) }
+                    if (f.canHost) SecondaryButton("Host it too", icon = Icons.share) { app.hostFile(f.id, true) }
+                    if (f.hosting) SecondaryButton("Stop hosting") { app.hostFile(f.id, false) }
+                    if (f.mine && !f.stopped) DangerButton("Stop sharing") { app.stopFile(f.id) }
+                    if (f.canReoffer) SecondaryButton("Share again", icon = Icons.share) { app.reofferFile(f.id) }
+                }
             }
         }
     }
@@ -113,7 +182,8 @@ private fun FilesTab(s: UiState, nav: Nav) {
         var all by remember { mutableStateOf(false) }
         val hidden = if (all) emptySet() else s.files.filter { it.stopped }.drop(PAST_FILES).map { it.id }.toSet()
         val shown = s.files.filter { it.id !in hidden }
-        shown.forEach { FileCard(it, nav) }
+        // Keyed: a card swiped away must not hand its swipe to the one taking its place.
+        shown.forEach { androidx.compose.runtime.key(it.id) { FileCard(it, nav) } }
         if (shown.size < s.files.size) GhostButton("Show ${s.files.size - shown.size} more", Modifier.fillMaxWidth(), Icons.chevronDown) { all = true }
         if (s.files.isEmpty()) HintText("Nothing offered yet.", center = true)
     }

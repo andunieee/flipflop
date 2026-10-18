@@ -59,6 +59,9 @@ pub struct Group {
     /// A guest group: anyone holding the link joins it from a browser.
     #[serde(default)]
     pub guest: Option<GuestLink>,
+    /// Files the user removed from the files tab (only ours: the others still list them).
+    #[serde(default)]
+    pub hidden_files: Vec<String>,
 }
 
 /// The secret behind a guest group's links, and what its guests may do.
@@ -96,6 +99,7 @@ impl Group {
             with: None,
             seen: Seen::default(),
             guest: None,
+            hidden_files: Vec::new(),
         }
     }
 }

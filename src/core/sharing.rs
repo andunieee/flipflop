@@ -81,8 +81,13 @@ pub struct FileView {
     pub hosts: Vec<String>,
     /// We serve it too.
     pub hosting: bool,
-    /// We stopped sharing it, and the file is still where it was: it can be offered again.
+    /// It can be offered (again): ours, stopped and still where it was; or someone else's, stopped,
+    /// and our download still where it went.
     pub can_reoffer: bool,
+    /// Ours: where we share it from (not for copies made for the offer).
+    pub shared_from: Option<PathBuf>,
+    /// It may leave our files tab: nothing we serve or are downloading.
+    pub can_remove: bool,
     /// Someone who has it is online: the offerer or a host (we ourselves excluded).
     pub source_online: bool,
 }
@@ -432,6 +437,44 @@ impl Core {
                 .map(|s| s.file.clone())
                 .collect()
         };
+        // Where our own files are (shared or stopped), and what we downloaded; the files we removed from the tab.
+        let (sources, downloads, hidden): (
+            HashMap<String, PathBuf>,
+            HashMap<String, PathBuf>,
+            HashSet<String>,
+        ) = {
+            let store = self.0.store.lock().unwrap();
+            let state = &store.state;
+            let here = |s: &&Share| s.group == gid && s.path.exists();
+            (
+                state
+                    .shares
+                    .iter()
+                    .filter(|s| !s.staged)
+                    .chain(&state.stopped_shares)
+                    .filter(here)
+                    .map(|s| (s.file.clone(), s.path.clone()))
+                    .collect(),
+                state
+                    .received
+                    .iter()
+                    .filter(here)
+                    .map(|s| (s.file.clone(), s.path.clone()))
+                    .collect(),
+                state
+                    .groups
+                    .iter()
+                    .find(|g| g.id == gid)
+                    .map(|g| g.hidden_files.iter().cloned().collect())
+                    .unwrap_or_default(),
+            )
+        };
+        // Hashes we offer right now, so a file we already shared again is not offered twice.
+        let offering: HashSet<&str> = files
+            .iter()
+            .filter(|f| f.from == me && !f.stopped)
+            .map(|f| f.hash.as_str())
+            .collect();
         let transfers = self.0.sharing.transfers.lock().unwrap();
         let name_of = |id: &str| {
             members
@@ -445,7 +488,7 @@ impl Core {
         let now = crate::groupdoc::now_ms();
         let mut file_views: Vec<FileView> = files
             .iter()
-            .filter(|f| f.kind != APP_KIND)
+            .filter(|f| f.kind != APP_KIND && !hidden.contains(&f.id))
             .filter(|f| {
                 let since = if f.stopped_at > 0 { f.stopped_at } else { f.ts };
                 !(f.stopped && !received.contains_key(&f.id) && now - since > week_ms)
@@ -487,7 +530,15 @@ impl Core {
                         .map(|id| name_of(id))
                         .collect(),
                     hosting: f.hosts.contains(&me),
-                    can_reoffer: mine && f.stopped && reofferable.contains(&f.id),
+                    can_reoffer: f.stopped
+                        && if mine {
+                            reofferable.contains(&f.id)
+                        } else {
+                            downloads.contains_key(&f.id) && !offering.contains(f.hash.as_str())
+                        },
+                    shared_from: mine.then(|| sources.get(&f.id).cloned()).flatten(),
+                    can_remove: (f.stopped || !mine && !f.hosts.contains(&me))
+                        && !t.is_some_and(|t| t.active),
                     source_online: online.contains(&f.from)
                         || f.hosts.iter().any(|h| *h != me && online.contains(h)),
                 }
@@ -866,16 +917,39 @@ impl Core {
         Ok(())
     }
 
-    /// Offer one of our stopped files again, if it is still where it was. Unchanged, the same entry
-    /// comes back; changed, it is offered anew. Returns the file's id.
+    /// Offer a stopped file again, if it is still where it was. Ours unchanged, the same entry
+    /// comes back; changed, or someone else's we downloaded, it is offered anew, by us. Returns the file's id.
     pub async fn reoffer_file(&self, gid: &str, fid: &str) -> Result<String> {
         self.require_group(gid)?;
+        let me = self.me();
         let offer = self
             .with_doc(gid, |d| d.file(fid))
-            .filter(|f| f.from == self.me())
-            .context("you did not share that file")?;
+            .context("no such file")?;
         if !offer.stopped {
             bail!("it is still shared");
+        }
+        if offer.from != me {
+            if self
+                .with_doc(gid, |d| d.files())
+                .iter()
+                .any(|f| f.from == me && !f.stopped && f.hash == offer.hash)
+            {
+                bail!("you share it already");
+            }
+            let path = self
+                .with_state(|st| {
+                    st.received
+                        .iter()
+                        .find(|r| r.group == gid && r.file == fid)
+                        .map(|r| r.path.clone())
+                })
+                .context("you did not download it")?;
+            if !path.exists() {
+                bail!("{} is not there anymore", path.display());
+            }
+            return self
+                .offer_file(gid, path, Some(offer.name), &offer.kind, false)
+                .await;
         }
         let share = self
             .with_state(|st| {
@@ -902,6 +976,43 @@ impl Core {
         self.with_state(|st| st.shares.push(share));
         self.doc_changed(gid, false);
         Ok(fid.to_owned())
+    }
+
+    /// Take a file off our files tab (the others keep it). Not one we serve or are downloading;
+    /// a file of ours can then not be offered again. The downloaded copy stays where it is.
+    pub fn remove_file(&self, gid: &str, fid: &str) -> Result<()> {
+        self.require_group(gid)?;
+        let me = self.me();
+        let offer = self
+            .with_doc(gid, |d| d.file(fid))
+            .context("no such file")?;
+        if !offer.stopped && offer.from == me {
+            bail!("stop sharing it first");
+        }
+        if !offer.stopped && offer.hosts.contains(&me) {
+            bail!("stop hosting it first");
+        }
+        if self
+            .0
+            .sharing
+            .transfers
+            .lock()
+            .unwrap()
+            .get(&(gid.to_owned(), fid.to_owned()))
+            .is_some_and(|t| t.active)
+        {
+            bail!("it is still downloading");
+        }
+        self.with_state(|st| {
+            st.stopped_shares
+                .retain(|s| !(s.group == gid && s.file == fid));
+            if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid)
+                && !g.hidden_files.iter().any(|h| h == fid)
+            {
+                g.hidden_files.push(fid.to_owned());
+            }
+        });
+        Ok(())
     }
 
     /// Serve a file we downloaded to the rest of the group too, so it stays available when the
@@ -1370,7 +1481,7 @@ impl Core {
     /// apps, which every member fetches and serves whatever their settings.
     pub(super) fn auto_jobs(&self, gid: &str) {
         self.app_jobs(gid);
-        let Some((auto_download, auto_stop)) = self
+        let Some((auto_download, auto_stop, hidden)) = self
             .0
             .store
             .lock()
@@ -1379,7 +1490,7 @@ impl Core {
             .groups
             .iter()
             .find(|g| g.id == gid)
-            .map(|g| (g.auto_download, g.auto_stop))
+            .map(|g| (g.auto_download, g.auto_stop, g.hidden_files.clone()))
         else {
             return;
         };
@@ -1402,7 +1513,7 @@ impl Core {
                 {
                     let _ = self.stop_file(gid, &f.id);
                 }
-            } else if auto_download && !f.downloaded.contains_key(&me) {
+            } else if auto_download && !f.downloaded.contains_key(&me) && !hidden.contains(&f.id) {
                 let online = std::iter::once(&f.from)
                     .chain(&f.hosts)
                     .filter(|id| **id != me)

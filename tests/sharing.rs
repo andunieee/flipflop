@@ -240,6 +240,66 @@ async fn manual_download_and_manual_stop() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn downloads_are_shared_again_and_files_leave_the_tab() {
+    let (a, da) = node("alice").await;
+    let (b, _db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    b.set_group_settings(&gid, Some(false), None, None);
+
+    let src = da.path().join("notes.txt");
+    std::fs::write(&src, b"notes").unwrap();
+    let fid = a
+        .offer_file(&gid, src.clone(), None, "file", false)
+        .await
+        .unwrap();
+    assert_eq!(a.group_view(&gid).unwrap().files[0].shared_from, Some(src));
+    assert!(
+        a.remove_file(&gid, &fid).is_err(),
+        "still shared: stop sharing first"
+    );
+    until("offer visible", || {
+        b.group_view(&gid).unwrap().files.len() == 1
+    })
+    .await;
+    assert!(b.group_view(&gid).unwrap().files[0].shared_from.is_none());
+    b.download_file(&gid, &fid).await.unwrap();
+
+    // the sender stops: whoever downloaded it can offer it again, as their own
+    a.stop_file(&gid, &fid).unwrap();
+    until("stopped", || b.group_view(&gid).unwrap().files[0].stopped).await;
+    assert!(b.group_view(&gid).unwrap().files[0].can_reoffer);
+    let again = b.reoffer_file(&gid, &fid).await.unwrap();
+    assert_ne!(again, fid);
+    until("alice sees bob's offer", || {
+        a.group_view(&gid)
+            .unwrap()
+            .files
+            .iter()
+            .any(|f| f.id == again && f.from_name == "bob" && !f.stopped)
+    })
+    .await;
+    let old = |c: &Core| {
+        c.group_view(&gid)
+            .unwrap()
+            .files
+            .into_iter()
+            .find(|f| f.id == fid)
+    };
+    assert!(!old(&b).unwrap().can_reoffer, "already offered again");
+    assert!(b.reoffer_file(&gid, &fid).await.is_err());
+
+    // removed from bob's tab only
+    assert!(old(&b).unwrap().can_remove);
+    b.remove_file(&gid, &fid).unwrap();
+    assert!(old(&b).is_none());
+    assert!(old(&a).is_some());
+    assert!(b.remove_file(&gid, &again).is_err(), "bob shares it");
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn members_find_each_other_through_the_group() {
     let (a, _da) = node("alice").await;
     let (b, _db) = node("bob").await;
