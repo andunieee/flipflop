@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -95,6 +96,42 @@ fun Txt(
         maxLines = if (elide) 1 else maxLines,
         overflow = if (elide) TextOverflow.Ellipsis else TextOverflow.Clip,
         letterSpacing = spacing,
+    )
+}
+
+/**
+ * Read-only [Txt] that can be selected. On desktop it is a read-only text field, so on Linux its
+ * selection goes to PRIMARY too (see [rememberPrimarySelection]); on touch it is plain text.
+ */
+@Composable
+fun SelectableTxt(
+    text: String,
+    size: TextUnit = Theme.d.fontMd,
+    color: Color = Theme.c.text,
+    weight: Int = 400,
+    modifier: Modifier = Modifier,
+    align: TextAlign? = null,
+    maxLines: Int = Int.MAX_VALUE,
+    elide: Boolean = false,
+    spacing: TextUnit = TextUnit.Unspecified,
+) {
+    if (isTouch) {
+        SelectionContainer(modifier) { Txt(text, size, color, weight, Modifier.fillMaxWidth(), align, maxLines, elide, spacing) }
+        return
+    }
+    var value by remember { mutableStateOf(TextFieldValue(text)) }
+    if (value.text != text) value = TextFieldValue(text)
+    val change = { new: TextFieldValue -> value = new }
+    val primary = rememberPrimarySelection(value, change, readOnly = true)
+    BasicTextField(
+        value = value,
+        onValueChange = change,
+        onTextLayout = { primary.layout = it },
+        readOnly = true,
+        maxLines = if (elide) 1 else maxLines,
+        textStyle = TextStyle(color = color, fontSize = size, fontWeight = FontWeight(weight), textAlign = align ?: TextAlign.Start, letterSpacing = spacing),
+        cursorBrush = SolidColor(Color.Transparent),
+        modifier = modifier.fillMaxWidth().then(primary.modifier),
     )
 }
 

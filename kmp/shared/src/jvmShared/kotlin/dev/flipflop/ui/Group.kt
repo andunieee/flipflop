@@ -195,11 +195,12 @@ private fun TextCard(t: TextRow, nav: Nav) {
     val d = Theme.d
     Card {
         Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
+            // Everything here is plain text, so let it be selected (and copied) like one.
             Row(horizontalArrangement = Arrangement.spacedBy(d.space2), verticalAlignment = Alignment.CenterVertically) {
-                Txt(if (t.mine) t.name + " (you)" else t.name, d.fontSm, Theme.c.accentText, 650, Modifier.weight(1f), elide = true)
-                Txt(t.time, d.fontXs, Theme.c.textFaint)
+                SelectableTxt(if (t.mine) t.name + " (you)" else t.name, d.fontSm, Theme.c.accentText, 650, Modifier.weight(1f), elide = true)
+                SelectableTxt(t.time, d.fontXs, Theme.c.textFaint)
             }
-            Txt(t.text, d.fontMd, Theme.c.textStrong)
+            SelectableTxt(t.text, d.fontMd, Theme.c.textStrong)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.space2, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                 if (t.mine) IconButton(Icons.trash, danger = true) { app.deleteText(t.id) }
                 if (t.isLink) SecondaryButton("Open", icon = Icons.open) { app.openLink(t.text) }
