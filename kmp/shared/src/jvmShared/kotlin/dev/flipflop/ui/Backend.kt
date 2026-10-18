@@ -15,10 +15,10 @@ import uniffi.flipflop.isTouch
 import java.io.File
 
 /**
- * Text and/or [files] files another app shared with us (Android), waiting for the user to pick a group
- * or peer; [deliver] sends them to that group once it is open.
+ * Text and/or [files] files and [folders] folders another app shared with us (Android) or dropped on the
+ * window (desktop), waiting for the user to pick a group or peer; [deliver] sends them to that group once it is open.
  */
-class Share(val text: String, val files: Int, val deliver: (group: String) -> Unit)
+class Share(val text: String, val files: Int, val folders: Int = 0, val deliver: (group: String) -> Unit)
 
 /** The Rust node and what it tells us, as flows the UI observes. */
 class Backend(dataDir: String) {
@@ -43,6 +43,12 @@ class Backend(dataDir: String) {
 
     /** What was shared with us, until it goes somewhere (or the user cancels). */
     var share by mutableStateOf<Share?>(null)
+
+    /** Files are being dragged over the window (desktop). */
+    var dropHover by mutableStateOf(false)
+
+    /** Files and folders dropped on the window (desktop), for the UI to send on. */
+    val drops = MutableSharedFlow<List<String>>(extraBufferCapacity = 16)
 
     /** "system" | "light" | "dark"; kept in the data dir. */
     var theme: String

@@ -493,6 +493,11 @@ impl Inner {
     }
 }
 
+/// What counts as a photo or video when picking or dropping files on the desktop.
+const MEDIA_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "heic", "mp4", "mkv", "mov", "webm",
+];
+
 #[uniffi::export]
 impl App {
     /// Start the node in `data_dir`. Commands do nothing until it is up (`UiState::node_ready`).
@@ -919,13 +924,7 @@ impl App {
             self.inner.rt.spawn(async move {
                 let mut dialog = rfd::AsyncFileDialog::new().set_title("Offer to the group");
                 if media {
-                    dialog = dialog.add_filter(
-                        "Photos and videos",
-                        &[
-                            "jpg", "jpeg", "png", "gif", "webp", "heic", "mp4", "mkv", "mov",
-                            "webm",
-                        ],
-                    );
+                    dialog = dialog.add_filter("Photos and videos", MEDIA_EXTENSIONS);
                 }
                 for file in dialog.pick_files().await.unwrap_or_default() {
                     let kind = if media { "media" } else { "file" };
@@ -939,6 +938,29 @@ impl App {
                     );
                 }
             });
+        }
+    }
+
+    /// Offer files and folders dropped on the window to `group` (desktop): folders as folders, photos and videos as media.
+    pub fn offer_paths(&self, group: String, paths: Vec<String>) {
+        let _g = self.inner.enter();
+        let Some(core) = self.inner.core() else {
+            return;
+        };
+        for path in paths.into_iter().map(PathBuf::from) {
+            let media = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| MEDIA_EXTENSIONS.contains(&e.to_lowercase().as_str()));
+            let kind = if path.is_dir() {
+                "folder"
+            } else if media {
+                "media"
+            } else {
+                "file"
+            };
+            self.inner
+                .offer(&core, group.clone(), path, None, kind, false);
         }
     }
 

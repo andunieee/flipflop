@@ -88,6 +88,7 @@ private fun Shell(s: UiState, nav: Nav) {
 
     // Rust asks to go somewhere; a group that went away takes its page with it.
     LaunchedEffect(nav) { backend.navigation.collect { nav.go(it) } }
+    LaunchedEffect(nav) { backend.drops.collect { nav.dropped(it) } }
     LaunchedEffect(s.openGroup, nav.page) {
         if (nav.page == "group" && s.openGroup.isEmpty()) nav.go(nav.listPage)
     }
@@ -134,6 +135,7 @@ private fun Shell(s: UiState, nav: Nav) {
         nav.edit?.let { EditDialog(it, nav) }
         if (nav.appPickerOpen) AppPicker(nav)
         backend.share?.let { SharePicker(s, it, nav) }
+        if (backend.dropHover) DropHint(s, nav)
     }
 }
 
@@ -294,6 +296,32 @@ private fun Scrim(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
+/** Files dragged over the window (desktop): dropping them sends them to the group showing, or asks where they go. */
+@Composable
+private fun DropHint(s: UiState, nav: Nav) {
+    val c = Theme.c
+    val d = Theme.d
+    val group = if (nav.groupShowing()) {
+        s.groups.firstOrNull { it.id == s.openGroup }?.title ?: s.peers.firstOrNull { it.groupId == s.openGroup }?.title
+    } else null
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)).padding(d.pagePadding), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.fillMaxSize().clip(RoundedCornerShape(d.radiusLg)).background(c.windowBg.copy(alpha = 0.92f))
+                .border(2.dp, c.accent, RoundedCornerShape(d.radiusLg)),
+            verticalArrangement = Arrangement.spacedBy(d.space3, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(Icons.share, 40.dp, c.accent)
+            if (group != null) {
+                Txt("Drop to share with $group", d.fontXl, c.textStrong, 700, align = TextAlign.Center)
+            } else {
+                Txt("Drop to share", d.fontXl, c.textStrong, 700)
+                Txt("Then pick a group or peer to send it to", d.fontSm, c.textMuted)
+            }
+        }
+    }
+}
+
 /** Rename / delete a peer or a group. */
 @Composable
 private fun EditDialog(edit: Edit, nav: Nav) {
@@ -363,7 +391,7 @@ private fun AppPicker(nav: Nav) {
 /** A group or a paired peer's page, as a place to share to. */
 private class Target(val id: String, val title: String, val detail: String, val online: Boolean, val peer: Boolean)
 
-/** Where to send what another app shared with us (Android): online groups and peers first, fully offline ones last. */
+/** Where to send what another app shared with us (Android) or was dropped on the window (desktop): online groups and peers first, fully offline ones last. */
 @Composable
 private fun SharePicker(s: UiState, share: Share, nav: Nav) {
     val c = Theme.c
@@ -377,6 +405,7 @@ private fun SharePicker(s: UiState, share: Share, nav: Nav) {
     val what = listOfNotNull(
         if (share.text.isNotEmpty()) "a text" else null,
         when (share.files) { 0 -> null; 1 -> "a file"; else -> "${share.files} files" },
+        when (share.folders) { 0 -> null; 1 -> "a folder"; else -> "${share.folders} folders" },
     ).joinToString(" and ")
     Scrim({ nav.backend.share = null }) {
         Column(

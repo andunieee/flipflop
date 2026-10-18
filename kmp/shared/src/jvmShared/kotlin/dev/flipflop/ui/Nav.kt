@@ -64,8 +64,23 @@ class Nav(val backend: Backend) {
     fun shareTo(groupId: String) {
         val share = backend.share ?: return
         backend.share = null
-        openGroup(groupId, if (share.files > 0) "files" else "texts")
+        openGroup(groupId, if (share.files + share.folders > 0) "files" else "texts")
         share.deliver(groupId)
+    }
+
+    /** Is a group's page showing (where dropped files go straight to)? */
+    fun groupShowing(): Boolean = page == "group" && backend.state.value?.openGroup?.isNotEmpty() == true
+
+    /** Files and folders dropped on the window: to the group whose page is showing, else ask where, as for a share. */
+    fun dropped(paths: List<String>) {
+        if (paths.isEmpty()) return
+        if (groupShowing()) {
+            groupTab = "files"
+            app.offerPaths(backend.state.value!!.openGroup, paths)
+            return
+        }
+        val folders = paths.count { java.io.File(it).isDirectory }
+        backend.share = Share("", paths.size - folders, folders) { group -> app.offerPaths(group, paths) }
     }
 
     /** Android Back: dialog → scan → group → Home. Returns false when nothing is left to close. */
