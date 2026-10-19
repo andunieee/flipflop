@@ -33,11 +33,10 @@ class Nav(val backend: Backend) {
         app.pageChanged(page)
     }
 
-    /** Open a group's page, on [tab] if given. */
+    /** Open a group's page, on [tab] if given, else its first tab. */
     fun openGroup(id: String, tab: String? = null) {
-        val implied = backend.state.value?.peers?.any { it.groupId == id } == true
         app.openGroup(id)
-        groupTab = tab ?: if (implied) "info" else "files"
+        groupTab = tab ?: "files"
         inviteChoice = 0
         go("group")
     }
