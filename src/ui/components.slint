@@ -149,6 +149,7 @@ export component PageTitle inherits VerticalLayout {
         font-weight: 700;
         color: Theme.text-strong;
     }
+
     if root.subtitle != "": Text {
         text: root.subtitle;
         font-size: Theme.font-sm;
@@ -170,9 +171,14 @@ export component SectionHeader inherits HorizontalLayout {
             height: 28px;
             border-radius: 8px;
             background: Theme.accent-soft;
-            Icon { source: root.icon; size: 16px; tint: Theme.accent-text; }
+            Icon {
+                source: root.icon;
+                size: 16px;
+                tint: Theme.accent-text;
+            }
         }
     }
+
     Text {
         text: root.label;
         font-size: Theme.font-md;
@@ -231,7 +237,10 @@ export component ProgressBar inherits Rectangle {
         width: parent.width * clamp(root.value, 0.0, 1.0);
         border-radius: parent.border-radius;
         background: root.tint;
-        animate width { duration: 150ms; easing: ease-out; }
+        animate width {
+            duration: 150ms;
+            easing: ease-out;
+        }
     }
 }
 
@@ -289,6 +298,7 @@ export component Avatar inherits Rectangle {
         border-radius: root.size / 2;
         background: root.tint;
     }
+
     if root.icon.width > 0: Icon {
         source: root.icon;
         size: root.size * 0.55;
@@ -403,7 +413,11 @@ component ButtonBase inherits Rectangle {
 
         if root.icon.width > 0: VerticalLayout {
             alignment: center;
-            Icon { source: root.icon; size: 18px; tint: root.ink; }
+            Icon {
+                source: root.icon;
+                size: 18px;
+                tint: root.ink;
+            }
         }
         if root.label != "": Text {
             text: root.label;
@@ -474,6 +488,7 @@ export component IconButton inherits Rectangle {
         clicked => { root.clicked(); }
         mouse-cursor: root.enabled ? pointer : default;
     }
+
     Icon {
         source: root.icon;
         size: State.touch ? 20px : 17px;

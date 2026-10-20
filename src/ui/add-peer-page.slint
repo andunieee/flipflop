@@ -1,8 +1,19 @@
 import { LineEdit } from "std-widgets.slint";
 import { State, Logic, PeerRow } from "globals.slint";
 import {
-    Theme, Card, HintText, StatusText, SectionHeader, PageTitle, Avatar,
-    Icons, PrimaryButton, SecondaryButton, GhostButton, IconButton, ScrollView,
+    Theme,
+    Card,
+    HintText,
+    StatusText,
+    SectionHeader,
+    PageTitle,
+    Avatar,
+    Icons,
+    PrimaryButton,
+    SecondaryButton,
+    GhostButton,
+    IconButton,
+    ScrollView,
 } from "components.slint";
 
 component SuggestionRow inherits Rectangle {
@@ -38,6 +49,7 @@ component SuggestionRow inherits Rectangle {
                 font-weight: 600;
                 overflow: elide;
             }
+
             Text {
                 text: root.entry.detail;
                 color: root.entry.is-request ? Theme.accent-text : Theme.text-muted;
@@ -50,11 +62,18 @@ component SuggestionRow inherits Rectangle {
             spacing: Theme.space-1;
             VerticalLayout {
                 alignment: center;
-                GhostButton { label: "Decline"; clicked => { Logic.decline-suggestion(root.entry.endpoint-id); } }
+                GhostButton {
+                    label: "Decline";
+                    clicked => { Logic.decline-suggestion(root.entry.endpoint-id); }
+                }
             }
+
             VerticalLayout {
                 alignment: center;
-                PrimaryButton { label: "Accept"; clicked => { Logic.accept-suggestion(root.entry.endpoint-id); } }
+                PrimaryButton {
+                    label: "Accept";
+                    clicked => { Logic.accept-suggestion(root.entry.endpoint-id); }
+                }
             }
         }
         if root.entry.is-suggestion: VerticalLayout {
@@ -75,7 +94,9 @@ export component AddPeerPage inherits Rectangle {
             alignment: start;
 
             // Phones reach this page from the peer list: a way back.
-            if !State.compact: PageTitle { title: "Add a peer"; }
+            if !State.compact: PageTitle {
+                title: "Add a peer";
+            }
             if State.compact: HorizontalLayout {
                 spacing: Theme.space-2;
                 VerticalLayout {
@@ -89,7 +110,10 @@ export component AddPeerPage inherits Rectangle {
                         }
                     }
                 }
-                PageTitle { title: "Add a peer"; }
+
+                PageTitle {
+                    title: "Add a peer";
+                }
             }
 
             // Outcome of the last pairing attempt (address or nearby).
@@ -99,7 +123,10 @@ export component AddPeerPage inherits Rectangle {
                 HorizontalLayout {
                     padding: Theme.space-3;
                     padding-left: Theme.space-4;
-                    StatusText { label: State.pairing-status; error: State.pairing-error; }
+                    StatusText {
+                        label: State.pairing-status;
+                        error: State.pairing-error;
+                    }
                 }
             }
 
@@ -109,8 +136,15 @@ export component AddPeerPage inherits Rectangle {
                     padding: Theme.card-padding;
                     spacing: Theme.space-3;
 
-                    SectionHeader { label: "Scan a QR code"; icon: Icons.qr; }
-                    HintText { label: "Point the camera at the QR code on the other device."; }
+                    SectionHeader {
+                        label: "Scan a QR code";
+                        icon: Icons.qr;
+                    }
+
+                    HintText {
+                        label: "Point the camera at the QR code on the other device.";
+                    }
+
                     Rectangle {
                         height: self.width;
                         border-radius: Theme.radius;
@@ -123,6 +157,7 @@ export component AddPeerPage inherits Rectangle {
                             image-fit: cover;
                         }
                     }
+
                     HorizontalLayout {
                         alignment: end;
                         GhostButton {
@@ -139,8 +174,14 @@ export component AddPeerPage inherits Rectangle {
                     padding: Theme.card-padding;
                     spacing: Theme.space-3;
 
-                    SectionHeader { label: "Nearby and requests"; icon: Icons.nearby; }
-                    if State.nearby-note != "": HintText { label: State.nearby-note; }
+                    SectionHeader {
+                        label: "Nearby and requests";
+                        icon: Icons.nearby;
+                    }
+
+                    if State.nearby-note != "": HintText {
+                        label: State.nearby-note;
+                    }
                     if State.suggestions.length == 0: Rectangle {
                         height: 56px;
                         border-radius: Theme.radius;
@@ -154,7 +195,9 @@ export component AddPeerPage inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
-                    for node in State.suggestions: SuggestionRow { entry: node; }
+                    for node in State.suggestions: SuggestionRow {
+                        entry: node;
+                    }
                 }
             }
 
@@ -164,7 +207,11 @@ export component AddPeerPage inherits Rectangle {
                     padding: Theme.card-padding;
                     spacing: Theme.space-3;
 
-                    SectionHeader { label: "Connect with an address"; icon: Icons.link; }
+                    SectionHeader {
+                        label: "Connect with an address";
+                        icon: Icons.link;
+                    }
+
                     HorizontalLayout {
                         spacing: Theme.space-2;
                         LineEdit {
@@ -173,12 +220,14 @@ export component AddPeerPage inherits Rectangle {
                             horizontal-stretch: 1;
                             accepted => { Logic.pair-with-pasted(); }
                         }
+
                         PrimaryButton {
                             label: State.pairing-busy ? "Connecting…" : "Connect";
                             enabled: State.add-ticket-input != "" && !State.pairing-busy;
                             clicked => { Logic.pair-with-pasted(); }
                         }
                     }
+
                     if State.touch && !State.scanning: HorizontalLayout {
                         alignment: start;
                         SecondaryButton {
@@ -197,7 +246,11 @@ export component AddPeerPage inherits Rectangle {
                     padding: Theme.card-padding;
                     spacing: Theme.space-3;
 
-                    SectionHeader { label: "Your address"; icon: Icons.device; }
+                    SectionHeader {
+                        label: "Your address";
+                        icon: Icons.device;
+                    }
+
                     HorizontalLayout {
                         spacing: Theme.space-2;
                         Rectangle {
@@ -221,12 +274,14 @@ export component AddPeerPage inherits Rectangle {
                                 }
                             }
                         }
+
                         SecondaryButton {
                             label: "Copy";
                             icon: Icons.copy;
                             enabled: State.my-ticket != "";
                             clicked => { Logic.copy-my-ticket(); }
                         }
+
                         SecondaryButton {
                             label: State.show-qr ? "Hide QR" : "QR code";
                             icon: Icons.qr;
@@ -234,6 +289,7 @@ export component AddPeerPage inherits Rectangle {
                             clicked => { Logic.toggle-my-qr(); }
                         }
                     }
+
                     if State.show-qr: HorizontalLayout {
                         alignment: center;
                         Image {
