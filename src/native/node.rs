@@ -34,6 +34,7 @@ use crate::native::paired_connections::{invite_wait_timeout, PairedConnectionMan
 use crate::native::pairing_util::{build_control_connect_addr, set_presence};
 use crate::native::rate_limit::UnpairedRateLimiter;
 use crate::native::runtime::NodeRuntime;
+use crate::native::shared_doc::SharedDocs;
 use crate::native::shares::{NodeShare, ShareRegistry};
 use crate::native::types::ReceiveResult;
 
@@ -344,7 +345,8 @@ impl ControlProtocol {
                 }
                 ControlMessage::WhoAreYou
                 | ControlMessage::Identity { .. }
-                | ControlMessage::PairRequest { .. } => {
+                | ControlMessage::PairRequest { .. }
+                | ControlMessage::DocSync { .. } => {
                     // Discovery / pair-request messages; ignore on pairing-host sessions
                 }
             }
@@ -530,6 +532,17 @@ impl ControlProtocol {
                     .register_inbound(&endpoint_id, conn.clone())
                     .await;
                 registered = true;
+            }
+
+            if let ControlMessage::DocSync { data } = &msg {
+                if peer_is_paired {
+                    self.ctx
+                        .paired_connections
+                        .docs()
+                        .receive(&endpoint_id, data, &conn)
+                        .await;
+                }
+                continue;
             }
 
             let unpaired_now = self
@@ -971,6 +984,7 @@ impl NodeService {
             access.clone(),
             presence.clone(),
             app_handle.clone(),
+            Arc::new(SharedDocs::new(data_dir, app_handle.clone())),
         ));
 
         let shares = Arc::new(ShareRegistry::open(&data_dir.join("outgoing")).await?);
@@ -1537,6 +1551,40 @@ impl NodeService {
         let paired = self.access.read().await.allowed.contains(&remote);
         let message = ControlMessage::QuickShareDeclined { id: id.to_string() };
         self.deliver_message(endpoint_id, message, paired).await
+    }
+
+    /// The text of the document shared with a paired peer.
+    pub fn shared_doc_text(&self, endpoint_id: &str) -> anyhow::Result<String> {
+        self.paired_connections.docs().text(endpoint_id)
+    }
+
+    /// Makes the document shared with a paired peer read `text` (an edit
+    /// made here), saved at once. `Ok(false)` when it already did. Follow
+    /// with [`Self::push_shared_doc`] to send the change.
+    pub fn set_shared_doc_text(&self, endpoint_id: &str, text: &str) -> anyhow::Result<bool> {
+        let paired = self
+            .paired_store
+            .get(endpoint_id)?
+            .is_some_and(|d| d.pairing_status.is_active());
+        anyhow::ensure!(paired, "unknown paired device");
+        self.paired_connections.docs().set_text(endpoint_id, text)
+    }
+
+    /// Sends the paired peer its missing changes to the shared document if
+    /// it is online; otherwise they follow when the two next connect.
+    pub async fn push_shared_doc(&self, endpoint_id: &str) {
+        if let Some(conn) = self.paired_connections.live_session(endpoint_id).await {
+            self.paired_connections.docs().push(endpoint_id, &conn).await;
+        }
+    }
+
+    /// [`Self::set_shared_doc_text`], then [`Self::push_shared_doc`].
+    pub async fn edit_shared_doc(&self, endpoint_id: &str, text: &str) -> anyhow::Result<bool> {
+        let changed = self.set_shared_doc_text(endpoint_id, text)?;
+        if changed {
+            self.push_shared_doc(endpoint_id).await;
+        }
+        Ok(changed)
     }
 
     /// Delivers a single `Invite` to `remote_endpoint_id`. Shared by the paired

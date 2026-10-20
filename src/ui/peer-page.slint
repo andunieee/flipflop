@@ -499,6 +499,110 @@ component SendCard inherits Card {
     }
 }
 
+// Switches between a peer's page (send, receive, history) and the document
+// shared with them.
+component PeerTab inherits Rectangle {
+    in property <string> label;
+    in property <string> key;
+    in property <image> icon;
+    property <bool> active: State.peer-tab == root.key;
+
+    horizontal-stretch: 1;
+    height: State.touch ? Theme.control-height + 4px : Theme.control-height;
+    border-radius: Theme.radius-sm + 2px;
+    background: root.active ? Theme.accent-soft
+        : ta.pressed ? Theme.chip-bg-press
+        : ta.has-hover ? Theme.chip-bg-hover
+        : Theme.chip-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.accent-border : Theme.border;
+    animate background { duration: 90ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            if State.peer-tab != root.key {
+                State.peer-tab = root.key;
+                Logic.peer-tab-changed(root.key);
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: Theme.space-2;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                source: root.icon;
+                size: 16px;
+                tint: root.active ? Theme.accent-text : Theme.text-muted;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text-strong : Theme.text-muted;
+            font-weight: root.active ? 700 : 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component PeerTabs inherits HorizontalLayout {
+    spacing: Theme.space-2;
+    PeerTab { label: "Transfers"; key: "main"; icon: Icons.send; }
+    PeerTab { label: "Document"; key: "doc"; icon: Icons.file; }
+}
+
+// The text document shared with the selected peer. Edits are saved here at
+// once and sent whenever both devices are online.
+component DocCard inherits Card {
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+
+        HorizontalLayout {
+            spacing: Theme.space-3;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 10px;
+                    background: Theme.accent-soft;
+                    Icon { source: Icons.file; size: 18px; tint: Theme.accent-text; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "Shared with " + State.selected-name;
+                    color: Theme.text-strong;
+                    font-weight: 650;
+                    overflow: elide;
+                }
+                Text {
+                    text: State.selected-online
+                        ? "Online: changes sync as you type."
+                        : "Offline: changes sync when " + State.selected-name + " is back online.";
+                    color: State.selected-online ? Theme.online : Theme.text-muted;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        TextEdit {
+            text <=> State.doc-text;
+            placeholder-text: "Write something both of you can edit…";
+            wrap: word-wrap;
+            height: State.compact ? 320px : 420px;
+            edited(text) => { Logic.doc-edited(text); }
+        }
+    }
+}
+
 component HistoryHeader inherits HorizontalLayout {
     padding-top: Theme.space-2;
     SectionTitle { label: "History"; horizontal-stretch: 1; }
@@ -686,6 +790,7 @@ component GuestLinkCard inherits Card {
 // Desktop / wide layout: the selected peer next to the sidebar.
 component WidePeerView inherits Rectangle {
     property <bool> has-peer: State.selected-name != "";
+    property <bool> in-doc: State.peer-tab == "doc" && !State.selected-guest;
     property <bool> confirm-forget: false;
     // A pending "Forget?" never carries over to another peer.
     property <string> selected-id: State.selected-id;
@@ -751,14 +856,20 @@ component WidePeerView inherits Rectangle {
             if State.rename-mode: RenameRow { }
             if !root.has-peer: EmptyPeersCard { }
 
+            if root.has-peer && !State.selected-guest: PeerTabs { }
+            if root.has-peer && root.in-doc: DocCard { }
+
             if root.has-peer && State.selected-guest: GuestLinkCard { }
-            if root.has-peer: SendCard { }
+            if root.has-peer && !root.in-doc: SendCard { }
 
-            for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
+            if !root.in-doc: VerticalLayout {
+                spacing: Theme.space-4;
+                for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
+            }
 
-            if root.has-peer: HistoryHeader { }
-            if root.has-peer && State.history.length == 0: NoHistory { }
-            if root.has-peer && State.history.length > 0: VerticalLayout {
+            if root.has-peer && !root.in-doc: HistoryHeader { }
+            if root.has-peer && !root.in-doc && State.history.length == 0: NoHistory { }
+            if root.has-peer && !root.in-doc && State.history.length > 0: VerticalLayout {
                 spacing: 6px;
                 for entry in State.history: HistoryItem { entry: entry; }
             }
@@ -769,6 +880,7 @@ component WidePeerView inherits Rectangle {
 // Phone layout: one peer's own screen, opened from the peer list. Everything
 // scrolls together; Forget lives in its own section at the very bottom.
 component PhonePeerView inherits Rectangle {
+    property <bool> in-doc: State.peer-tab == "doc" && !State.selected-guest;
     property <bool> confirm-forget: false;
     property <string> selected-id: State.selected-id;
     changed selected-id => { root.confirm-forget = false; }
@@ -821,14 +933,23 @@ component PhonePeerView inherits Rectangle {
 
             if State.rename-mode: RenameRow { }
 
+            if !State.selected-guest: PeerTabs { }
+            if root.in-doc: DocCard { }
+
             if State.selected-guest: GuestLinkCard { }
-            SendCard { }
+            if !root.in-doc: SendCard { }
 
-            for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
+            if !root.in-doc: VerticalLayout {
+                spacing: Theme.space-4;
+                for transfer in State.visible-transfers: TransferCard { transfer: transfer; }
+            }
 
-            HistoryHeader { }
-            if State.history.length == 0: NoHistory { }
-            for entry in State.history: HistoryItem { entry: entry; }
+            if !root.in-doc: HistoryHeader { }
+            if !root.in-doc && State.history.length == 0: NoHistory { }
+            if !root.in-doc: VerticalLayout {
+                spacing: Theme.space-4;
+                for entry in State.history: HistoryItem { entry: entry; }
+            }
 
             // Danger zone, out of the way of everyday actions.
             VerticalLayout {

@@ -75,6 +75,9 @@ pub enum ControlMessage {
     },
     /// The receiver turned a `QuickShare` down (accepting is the download).
     QuickShareDeclined { id: String },
+    /// One message of the Automerge sync protocol for the document shared
+    /// with a paired peer (base64). Paired peers only.
+    DocSync { data: String },
 }
 
 impl ControlMessage {
@@ -93,6 +96,7 @@ impl ControlMessage {
             Self::PairRequest { .. } => "pair-request",
             Self::QuickShare { .. } => "quick-share",
             Self::QuickShareDeclined { .. } => "quick-share-declined",
+            Self::DocSync { .. } => "doc-sync",
         }
     }
 }
@@ -192,14 +196,26 @@ impl PairingTicket {
     }
 }
 
+/// Largest control message, except a document sync.
+const MAX_CONTROL: usize = 1024 * 1024;
+/// Largest document sync (base64 of an Automerge sync message): a first sync
+/// carries the whole history.
+const MAX_DOC_SYNC: usize = 32 * 1024 * 1024;
+/// How a serialized `DocSync` begins (serde writes the tag first).
+const DOC_SYNC_PREFIX: &[u8] = br#"{"type":"doc-sync""#;
+
 pub async fn write_message(
     send: &mut (impl tokio::io::AsyncWrite + Unpin),
     message: &ControlMessage,
 ) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
     let body = serde_json::to_vec(message)?;
-    const MAX: usize = 1024 * 1024;
-    anyhow::ensure!(body.len() <= MAX, "control message too large");
+    let max = if matches!(message, ControlMessage::DocSync { .. }) {
+        MAX_DOC_SYNC
+    } else {
+        MAX_CONTROL
+    };
+    anyhow::ensure!(body.len() <= max, "control message too large");
     tracing::debug!(
         target: "dashbeam::_events::control::msg_out",
         kind = message.kind(),
@@ -219,9 +235,21 @@ pub async fn read_message(
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
-    anyhow::ensure!(len > 0 && len <= 1024 * 1024, "invalid control message length");
+    anyhow::ensure!(len > 0 && len <= MAX_DOC_SYNC, "invalid control message length");
     let mut body = vec![0u8; len];
-    recv.read_exact(&mut body).await?;
+    if len > MAX_CONTROL {
+        // Only a document sync may be this large: check its tag before
+        // reading the rest.
+        let head = DOC_SYNC_PREFIX.len().min(len);
+        recv.read_exact(&mut body[..head]).await?;
+        anyhow::ensure!(
+            body[..head] == DOC_SYNC_PREFIX[..head] && head == DOC_SYNC_PREFIX.len(),
+            "invalid control message length"
+        );
+        recv.read_exact(&mut body[head..]).await?;
+    } else {
+        recv.read_exact(&mut body).await?;
+    }
     let message: ControlMessage = serde_json::from_slice(&body)?;
     tracing::debug!(
         target: "dashbeam::_events::control::msg_in",
@@ -269,6 +297,36 @@ mod nearby_message_tests {
             }
             other => panic!("expected Identity, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn large_doc_sync_round_trips_but_other_large_messages_do_not() {
+        let big = "A".repeat(3 * 1024 * 1024);
+        let (mut client, mut server) = tokio::io::duplex(8 * 1024 * 1024);
+        let sync = ControlMessage::DocSync { data: big.clone() };
+        write_message(&mut client, &sync).await.unwrap();
+        match read_message(&mut server).await.unwrap() {
+            ControlMessage::DocSync { data } => assert_eq!(data, big),
+            other => panic!("expected DocSync, got {other:?}"),
+        }
+
+        let other = ControlMessage::Identity {
+            endpoint_id: big,
+            display_name: String::new(),
+            device_type: String::new(),
+            os: String::new(),
+        };
+        assert!(write_message(&mut client, &other).await.is_err());
+
+        // A peer that skips the writer's check is refused on read.
+        let body = serde_json::to_vec(&other).unwrap();
+        use tokio::io::AsyncWriteExt;
+        client
+            .write_all(&(body.len() as u32).to_be_bytes())
+            .await
+            .unwrap();
+        client.write_all(&body).await.unwrap();
+        assert!(read_message(&mut server).await.is_err());
     }
 
     #[test]
@@ -329,6 +387,9 @@ mod nearby_message_tests {
                 sender_name: String::new(),
                 device_type: String::new(),
                 os: String::new(),
+            },
+            ControlMessage::DocSync {
+                data: String::new(),
             },
         ];
 

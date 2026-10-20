@@ -181,6 +181,12 @@ fn nearby_row(n: &crate::engine::NearbyDevice) -> PeerRow {
 
 /// Mirror a peer row into the selected-peer header fields (or clear them).
 pub(crate) fn show_selected(state: &State<'_>, row: Option<&PeerRow>) {
+    // Another peer opens on its first tab, not on the last peer's document.
+    let next_id = row.map(|r| r.endpoint_id.clone()).unwrap_or_default();
+    if state.get_selected_id() != next_id {
+        state.set_peer_tab("main".into());
+        state.set_doc_text("".into());
+    }
     match row {
         Some(row) => {
             state.set_selected_id(row.endpoint_id.clone());
@@ -198,6 +204,29 @@ pub(crate) fn show_selected(state: &State<'_>, row: Option<&PeerRow>) {
             state.set_selected_initials("".into());
             state.set_selected_guest(false);
         }
+    }
+}
+
+/// Puts the document shared with the selected peer into the Document tab.
+/// With `only`, just when that is the selected peer (it changed remotely).
+/// The text box is only touched if the text differs, so typing is undisturbed
+/// by syncs that bring nothing new.
+fn show_doc(ctx: &AppCtx, only: Option<&str>) {
+    let (Some(ui), Some(node)) = (ctx.weak.upgrade(), ctx.node()) else {
+        return;
+    };
+    let state = ui.global::<State>();
+    let id = state.get_selected_id().to_string();
+    if id.is_empty() || state.get_selected_guest() || only.is_some_and(|only| only != id) {
+        return;
+    }
+    match node.shared_doc_text(&id) {
+        Ok(text) => {
+            if state.get_doc_text() != text.as_str() {
+                state.set_doc_text(text.into());
+            }
+        }
+        Err(e) => tracing::warn!("shared document for {id}: {e:#}"),
     }
 }
 
@@ -609,6 +638,15 @@ fn handle_main_event(ctx: &AppCtx, name: &str, payload: Option<&str>) {
         "paired-invite-received" => {
             transfers::accept_invite(ctx, parsed.unwrap_or_default());
         }
+        "shared-doc-changed" => {
+            let id = parsed
+                .as_ref()
+                .and_then(|v| v.get("endpoint_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_lowercase();
+            show_doc(ctx, Some(&id));
+        }
         "quick-share-received" => {
             transfers::quick_offered(ctx, parsed.unwrap_or_default());
         }
@@ -816,6 +854,38 @@ fn register_peers(ctx: &AppCtx) {
             transfers::sync_peer_activity(&ui);
             guest::show_link(&ctx, &ui);
             refresh_history(&ctx);
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        logic.on_peer_tab_changed(move |tab: SharedString| {
+            if tab == "doc" {
+                show_doc(&ctx, None);
+            }
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        logic.on_doc_edited(move |text: SharedString| {
+            let (Some(ui), Some(node)) = (ctx.weak.upgrade(), ctx.node()) else {
+                return;
+            };
+            let id = ui.global::<State>().get_selected_id().to_string();
+            if id.is_empty() {
+                return;
+            }
+            // Saved right here, so edits apply in the order they were made;
+            // only sending them waits on the network.
+            match node.set_shared_doc_text(&id, &text) {
+                Ok(true) => {
+                    ctx.rt.spawn(async move { node.push_shared_doc(&id).await });
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!("edit shared document of {id}: {e:#}");
+                    toast(&ui, &format!("Could not save the document: {e}"), true);
+                }
+            }
         });
     }
     {

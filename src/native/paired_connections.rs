@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::native::device_identity::{DeviceIdentity, PairedDeviceStore};
 use crate::native::node::AccessState;
+use crate::native::shared_doc::SharedDocs;
 use crate::native::pairing_util::{
     build_control_connect_addr, emit_paired_invite_received,
     emit_paired_invite_response, set_presence,
@@ -37,6 +38,7 @@ pub struct PairedConnectionManager {
     access: Arc<RwLock<AccessState>>,
     presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
     app_handle: AppHandle,
+    docs: Arc<SharedDocs>,
     sessions: Arc<RwLock<HashMap<String, Connection>>>,
     waiters: Arc<Mutex<HashMap<String, SessionWaiter>>>,
     tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
@@ -50,6 +52,7 @@ impl PairedConnectionManager {
         access: Arc<RwLock<AccessState>>,
         presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
         app_handle: AppHandle,
+        docs: Arc<SharedDocs>,
     ) -> Self {
 
         Self {
@@ -59,11 +62,17 @@ impl PairedConnectionManager {
             access,
             presence,
             app_handle,
+            docs,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             waiters: Arc::new(Mutex::new(HashMap::new())),
             tasks: Arc::new(Mutex::new(HashMap::new())),
             shutdown: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The documents shared with paired peers.
+    pub fn docs(&self) -> &Arc<SharedDocs> {
+        &self.docs
     }
 
     pub fn attach_runtime(&self, runtime: Arc<Mutex<crate::native::runtime::NodeRuntime>>) {
@@ -301,6 +310,7 @@ impl PairedConnectionManager {
             access: self.access.clone(),
             presence: self.presence.clone(),
             app_handle: self.app_handle.clone(),
+            docs: self.docs.clone(),
             sessions: self.sessions.clone(),
             waiters: self.waiters.clone(),
             tasks: self.tasks.clone(),
@@ -525,6 +535,9 @@ impl PairedConnectionManager {
                         &message,
                     );
                 }
+                ControlMessage::DocSync { data } => {
+                    self.docs.receive(&remote_id, &data, conn).await;
+                }
                 _other => {
 
                 }
@@ -626,6 +639,12 @@ impl PairedConnectionManager {
         let now = crate::protocol::identity::unix_now_ms();
         let _ = self.paired_store.touch(key, now);
         self.notify_waiters(key).await;
+        // A new link: bring the shared document up to date over it.
+        let docs = self.docs.clone();
+        let peer = key.to_string();
+        if let Some(conn) = self.sessions.read().await.get(key).cloned() {
+            tokio::spawn(async move { docs.connected(&peer, &conn).await });
+        }
     }
 
     async fn remove_session(&self, key: &str) {

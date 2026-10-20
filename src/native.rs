@@ -14,6 +14,7 @@ mod rate_limit;
 pub mod receive;
 pub mod runtime;
 pub mod secret_store;
+pub mod shared_doc;
 pub mod shares;
 pub mod storage;
 pub mod types;
