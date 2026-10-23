@@ -34,6 +34,7 @@ use crate::native::paired_connections::{invite_wait_timeout, PairedConnectionMan
 use crate::native::pairing_util::{build_control_connect_addr, set_presence};
 use crate::native::rate_limit::UnpairedRateLimiter;
 use crate::native::runtime::NodeRuntime;
+use crate::native::group_service::GroupService;
 use crate::native::shared_doc::SharedDocs;
 use crate::native::shares::{NodeShare, ShareRegistry};
 use crate::native::types::ReceiveResult;
@@ -41,6 +42,9 @@ use crate::native::types::ReceiveResult;
 #[derive(Debug)]
 pub(crate) struct AccessState {
     pub(crate) allowed: HashSet<EndpointId>,
+    /// Members of our groups we are not necessarily paired with: let in for
+    /// group traffic only.
+    pub(crate) group_peers: HashSet<EndpointId>,
     pub(crate) pairing_host_open: bool,
     pub(crate) discoverability: Discoverability,
 }
@@ -94,7 +98,7 @@ impl EndpointHooks for PairedOnlyHook {
         let (allowed, pairing_host_open, discoverability) = {
             let access = self.access.read().await;
             (
-                access.allowed.contains(&remote),
+                access.allowed.contains(&remote) || access.group_peers.contains(&remote),
                 access.pairing_host_open,
                 access.discoverability,
             )
@@ -346,7 +350,11 @@ impl ControlProtocol {
                 ControlMessage::WhoAreYou
                 | ControlMessage::Identity { .. }
                 | ControlMessage::PairRequest { .. }
-                | ControlMessage::DocSync { .. } => {
+                | ControlMessage::DocSync { .. }
+                | ControlMessage::GroupSync { .. }
+                | ControlMessage::GroupFileRequest { .. }
+                | ControlMessage::GroupFileOffer { .. }
+                | ControlMessage::GroupFileDenied { .. } => {
                     // Discovery / pair-request messages; ignore on pairing-host sessions
                 }
             }
@@ -470,6 +478,19 @@ impl ControlProtocol {
                     continue;
                 }
             };
+
+            // Group traffic is open to group members as well as paired peers,
+            // and to nothing else.
+            if msg.is_group() {
+                peer_is_paired = peer_is_paired || self.is_allowed(&remote).await;
+                let groups = self.ctx.paired_connections.groups().clone();
+                if !peer_is_paired && !groups.is_group_peer(&remote).await {
+                    conn.close(403u32.into(), b"not permitted for unpaired peer");
+                    break;
+                }
+                groups.handle_message(&endpoint_id, &conn, msg, peer_is_paired).await;
+                continue;
+            }
 
             // Re-read the allowlist before refusing: nearby pairing commits on
             // a sibling connection, so this session can be accepted before the
@@ -865,6 +886,7 @@ pub struct NodeService {
     pub(crate) pairing_expire_task: Mutex<Option<JoinHandle<()>>>,
     pub(crate) paired_connections: Arc<PairedConnectionManager>,
     connections_supervisor: Mutex<Option<JoinHandle<()>>>,
+    groups_supervisor: Mutex<Option<JoinHandle<()>>>,
     presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
     pub(crate) app_handle: AppHandle,
     relay_mode: Mutex<RelayMode>,
@@ -962,6 +984,7 @@ impl NodeService {
 
         let access = Arc::new(RwLock::new(AccessState {
             allowed: allowed.clone(),
+            group_peers: HashSet::new(),
             pairing_host_open: false,
             discoverability,
         }));
@@ -978,6 +1001,15 @@ impl NodeService {
             Arc::new(std::sync::RwLock::new(None));
         let unpaired_limiter = Arc::new(std::sync::Mutex::new(UnpairedRateLimiter::new()));
 
+        let shares = Arc::new(ShareRegistry::open(&data_dir.join("outgoing")).await?);
+        let group_service = Arc::new(GroupService::new(
+            data_dir,
+            identity.clone(),
+            paired_store.clone(),
+            access.clone(),
+            app_handle.clone(),
+            shares.clone(),
+        )?);
         let paired_connections = Arc::new(PairedConnectionManager::new(
             identity.clone(),
             paired_store.clone(),
@@ -985,9 +1017,9 @@ impl NodeService {
             presence.clone(),
             app_handle.clone(),
             Arc::new(SharedDocs::new(data_dir, app_handle.clone())),
+            group_service.clone(),
         ));
 
-        let shares = Arc::new(ShareRegistry::open(&data_dir.join("outgoing")).await?);
 
         let home_relay_url = Arc::new(std::sync::RwLock::new(None));
         let guest_inbox = GuestInbox::default();
@@ -1015,6 +1047,8 @@ impl NodeService {
         let runtime = Arc::new(Mutex::new(runtime));
         paired_connections.attach_runtime(runtime.clone());
         let connections_supervisor = paired_connections.start();
+        group_service.attach_runtime(runtime.clone());
+        let groups_supervisor = group_service.start();
         let bluetooth_arrivals = bluetooth.as_ref().map(|hub| {
             spawn_bluetooth_arrivals(hub, paired_store.clone(), paired_connections.clone())
         });
@@ -1049,6 +1083,7 @@ impl NodeService {
             pairing_expire_task: Mutex::new(None),
             paired_connections,
             connections_supervisor: Mutex::new(Some(connections_supervisor)),
+            groups_supervisor: Mutex::new(Some(groups_supervisor)),
             presence,
             app_handle,
             relay_mode: Mutex::new(relay_mode),
@@ -1077,6 +1112,11 @@ impl NodeService {
         self.paired_connections.nudge_all().await;
     }
 
+    /// The groups this device is in.
+    pub fn groups(&self) -> &Arc<GroupService> {
+        self.paired_connections.groups()
+    }
+
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         // Same lock the network transitions hold, so a shutdown can't race an
         // in-flight rebuild in either direction.
@@ -1091,6 +1131,10 @@ impl NodeService {
         if let Some(handle) = self.bluetooth_arrivals.lock().await.take() {
             handle.abort();
         }
+        if let Some(handle) = self.groups_supervisor.lock().await.take() {
+            handle.abort();
+        }
+        self.paired_connections.groups().shutdown().await;
         self.paired_connections.shutdown().await;
         let runtime = self.runtime.lock().await;
         runtime.router.shutdown().await?;

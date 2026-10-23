@@ -14,7 +14,10 @@ use slint::platform::software_renderer::{
 };
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, VecModel};
-use flipflop::{AppRow, AppWindow, HistoryRow, OutboxRow, PeerRow, QuickOffer, State, TransferRow};
+use flipflop::{
+    AppRow, AppWindow, GroupFileRow, GroupRow, HistoryRow, MemberRow, OutboxRow, PeerRow, QuickOffer,
+    State, TransferRow,
+};
 
 struct Headless(Rc<MinimalSoftwareWindow>);
 
@@ -171,6 +174,85 @@ fn populate(state: &State<'_>) {
     state.set_relay_urls("https://relay1.example.com\nhttps://relay2.example.com".into());
     state.set_relay_test_status("Relay check failed: connection refused".into());
     state.set_relay_test_failed(true);
+
+    state.set_groups(model(vec![
+        GroupRow {
+            id: "g1".into(),
+            title: "Anna's phone, parents".into(),
+            detail: "3 members".into(),
+            online: true,
+            ..Default::default()
+        },
+        GroupRow {
+            id: "g2".into(),
+            title: "Work laptop, Marta".into(),
+            detail: "Invitation".into(),
+            invitation: true,
+            ..Default::default()
+        },
+    ]));
+    state.set_group_invitations(1);
+    show_group(state, false);
+}
+
+fn show_group(state: &State<'_>, invitation: bool) {
+    let member = |name: &str, initials: &str, detail: &str, pending: bool, online: bool| MemberRow {
+        endpoint_id: name.into(),
+        name: name.into(),
+        initials: initials.into(),
+        detail: detail.into(),
+        pending,
+        online,
+    };
+    state.set_selected_group_id("g1".into());
+    state.set_group_title("Anna's phone, parents".into());
+    state.set_group_invitation(invitation);
+    state.set_group_inviter("Anna's phone".into());
+    state.set_group_detail(if invitation { "Invitation" } else { "3 members" }.into());
+    state.set_group_members(model(vec![
+        member("You", "Y", "Office desktop", false, true),
+        member("Anna's phone", "AP", "Online", false, true),
+        member("parents", "P", "Invited by Anna's phone", true, false),
+    ]));
+    state.set_group_files(model(vec![
+        GroupFileRow {
+            id: "f1".into(),
+            name: "holiday-photos.zip".into(),
+            size: "84 MB".into(),
+            detail: "Shared by Anna's phone · 2 of 3 have it".into(),
+            available: true,
+            ..Default::default()
+        },
+        GroupFileRow {
+            id: "f2".into(),
+            name: "recipes.pdf".into(),
+            size: "1.2 MB".into(),
+            detail: "Shared by you · 1 of 3 have it".into(),
+            mine: true,
+            have: true,
+            ..Default::default()
+        },
+        GroupFileRow {
+            id: "f3".into(),
+            name: "minutes.docx".into(),
+            size: "220 KB".into(),
+            detail: "Shared by parents · 1 of 3 have it".into(),
+            downloading: true,
+            available: true,
+            ..Default::default()
+        },
+    ]));
+    state.set_group_transfers(model(vec![TransferRow {
+        key: "recv-g".into(),
+        peer_id: "group:g1".into(),
+        active: true,
+        title: "minutes.docx".into(),
+        progress: 0.3,
+        progress_label: "30% · 66 KB of 220 KB".into(),
+        status: "Transferring…".into(),
+        ..Default::default()
+    }]));
+    state.set_group_invitable(model(vec![peer("d", "Work laptop", "WL", false)]));
 }
 
 /// An open browser link with a browser connected, selected.
@@ -251,6 +333,20 @@ fn main() {
         render(&window, desktop, &out.join(format!("{page}.ppm")));
     }
 
+    for (name, invitation, invite_open) in [
+        ("group", false, false),
+        ("group-invite", false, true),
+        ("group-invitation", true, false),
+    ] {
+        show_group(&state, invitation);
+        state.set_group_invite_open(invite_open);
+        state.set_page("group".into());
+        render(&window, desktop, &out.join(format!("{name}.ppm")));
+    }
+    state.set_group_invite_open(false);
+    state.set_page("new-group".into());
+    render(&window, desktop, &out.join("new-group.ppm"));
+
     state.set_page("share-link".into());
     state.set_link_receive(true);
     state.set_link_web(true);
@@ -303,6 +399,10 @@ fn main() {
     let phone = (412, 860);
     state.set_peer_open(true);
     for page in ["peer", "add-peer", "settings", "share"] {
+        state.set_page(page.into());
+        render(&window, phone, &out.join(format!("phone-{page}.ppm")));
+    }
+    for page in ["groups", "group", "new-group"] {
         state.set_page(page.into());
         render(&window, phone, &out.join(format!("phone-{page}.ppm")));
     }

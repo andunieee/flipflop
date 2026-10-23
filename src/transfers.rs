@@ -251,6 +251,16 @@ pub(crate) fn sync_peer_activity(ui: &AppWindow) {
     let quick: Vec<TransferRow> = state.get_transfers().iter().filter(|t| t.quick).collect();
     set_rows(&state.get_quick_transfers(), quick, |rows| state.set_quick_transfers(rows));
 
+    let group_key = group_peer_key(&state.get_selected_group_id());
+    let group_rows: Vec<TransferRow> = state
+        .get_transfers()
+        .iter()
+        .filter(|t| t.peer_id == group_key.as_str())
+        .collect();
+    set_rows(&state.get_group_transfers(), group_rows, |rows| {
+        state.set_group_transfers(rows)
+    });
+
     let selected = state.get_selected_id();
     // Sends to a browser wait on its page; more can join them meanwhile.
     state.set_selected_sending(busy(&selected, true) && !guest::is_guest(&selected));
@@ -1179,6 +1189,23 @@ struct Invite {
     total_size: u64,
     sender_name: String,
     peer_id: String,
+    /// A file of a group, fetched on request rather than sent to us.
+    group: Option<GroupDownload>,
+}
+
+/// The group file a download is for.
+#[derive(Clone)]
+pub(crate) struct GroupDownload {
+    pub group_id: String,
+    pub file_id: String,
+    pub name: String,
+    pub size: u64,
+    pub hash: String,
+}
+
+/// The row key prefix under which a group's downloads show.
+pub(crate) fn group_peer_key(group_id: &str) -> String {
+    format!("group:{group_id}")
 }
 
 fn parse_invite_payload(v: &serde_json::Value) -> Invite {
@@ -1194,7 +1221,41 @@ fn parse_invite_payload(v: &serde_json::Value) -> Invite {
         total_size: v.get("total_size").and_then(|x| x.as_u64()).unwrap_or(0),
         sender_name: str_of("sender_name"),
         peer_id: str_of("remote_endpoint_id").to_lowercase(),
+        group: None,
     }
+}
+
+/// Where a group file is saved: its own folder, so the saved name is known
+/// (nothing there to clash with) even when two files share a name.
+fn group_save_dir(ctx: &AppCtx, file_id: &str) -> PathBuf {
+    let dir = ctx
+        .settings
+        .lock()
+        .unwrap()
+        .downloads_path()
+        .unwrap_or_else(|| platform::default_data_dir().join("downloads"))
+        .join("groups")
+        .join(file_id.chars().take(8).collect::<String>());
+    std::path::absolute(&dir).unwrap_or(dir)
+}
+
+/// Downloads a file of a group from `holder`, who offered `ticket`.
+/// UI thread.
+pub(crate) fn receive_group_file(
+    ctx: &AppCtx,
+    holder: &str,
+    ticket: String,
+    group: GroupDownload,
+) {
+    let invite = Invite {
+        ticket,
+        file_count: 1,
+        total_size: group.size,
+        sender_name: String::new(),
+        peer_id: holder.to_lowercase(),
+        group: Some(group.clone()),
+    };
+    receive(ctx, invite, group.name, false);
 }
 
 /// Display name for an inviting peer: our stored name, else the name the
@@ -1270,7 +1331,10 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
         &ui,
         TransferRow {
             key: key.clone().into(),
-            peer_id: invite.peer_id.clone().into(),
+            peer_id: match &invite.group {
+                Some(g) => group_peer_key(&g.group_id).into(),
+                None => invite.peer_id.clone().into(),
+            },
             sending: false,
             active: true,
             quick,
@@ -1302,7 +1366,10 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
             })
             .filter(|_| !quick);
         let peer_name = invite_peer_name(stored_name, &invite.sender_name, &id);
-        let save_dir = save_dir(&ctx, &peer_name, &id);
+        let save_dir = match &invite.group {
+            Some(g) => group_save_dir(&ctx, &g.file_id),
+            None => save_dir(&ctx, &peer_name, &id),
+        };
         let history_enabled = ctx.settings.lock().unwrap().history_enabled;
         if let Err(e) = std::fs::create_dir_all(&save_dir) {
             tracing::warn!(save = %save_dir.display(), "receive: cannot create save dir: {e}");
@@ -1314,7 +1381,7 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
             fail(&weak, &key, msg);
         };
 
-        if !quick {
+        if !quick && invite.group.is_none() {
             if let Err(e) = node.respond_paired_invite(&id, true).await {
                 tracing::warn!(%id, "receive: accept handshake failed: {e}");
                 return give_up(format!("Could not accept files from {peer_name}: {e}"));
@@ -1348,7 +1415,9 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
             close_when_sent: None,
             received: Some(received.clone()),
         }));
-        toast_later(&weak, format!("{peer_name} is sending you files"), false);
+        if invite.group.is_none() {
+            toast_later(&weak, format!("{peer_name} is sending you files"), false);
+        }
         post_update(&weak, &key, |row| row.status = "Connecting…".into());
 
         let result = node
@@ -1362,6 +1431,11 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
             .remove(&key)
             .is_none();
         let ctx_ui = ctx.clone();
+        // A group file only counts once it is what the group says it is.
+        let result = match (&invite.group, result) {
+            (Some(g), Ok(done)) => verify_group_file(&node, g, &save_dir).await.map(|()| done),
+            (_, result) => result,
+        };
         match result {
             Ok(_) => {
                 // Pasted text goes into the history row (the file stays
@@ -1370,7 +1444,15 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
                 if let Some(text) = &pasted {
                     recorder.set_text(text.clone());
                 }
+                let group_name = invite.group.as_ref().map(|g| g.name.clone());
                 let _ = weak.upgrade_in_event_loop(move |ui| {
+                    if let Some(name) = group_name {
+                        remove_row(&ui, &key);
+                        toast(&ui, &format!("Saved {name}"), false);
+                        refresh_history(&ctx_ui);
+                        crate::group_ui::refresh(&ctx_ui);
+                        return;
+                    }
                     if quick {
                         // No peer page to keep the record: the row stays.
                         finish_quick_receive(&ui, &key, &peer_name, &save_dir, pasted);
@@ -1393,6 +1475,7 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
                     remove_row(&ui, &key);
                     toast(&ui, "Receive cancelled", false);
                     refresh_history(&ctx_ui);
+                    crate::group_ui::refresh(&ctx_ui);
                 });
             }
             Err(e) => {
@@ -1414,10 +1497,33 @@ fn receive(ctx: &AppCtx, invite: Invite, title: String, quick: bool) {
                         row.error = msg.into();
                     });
                     refresh_history(&ctx_ui);
+                    crate::group_ui::refresh(&ctx_ui);
                 });
             }
         }
     });
+}
+
+/// Checks a downloaded group file against the group's listing, and if it
+/// matches, records that we hold it too. Deletes it if it does not match.
+async fn verify_group_file(
+    node: &Arc<crate::engine::NodeService>,
+    group: &GroupDownload,
+    save_dir: &Path,
+) -> anyhow::Result<()> {
+    let path = save_dir.join(&group.name);
+    let (expected, check) = (group.hash.clone(), path.clone());
+    let actual = tokio::task::spawn_blocking(move || {
+        crate::native::group_service::hash_file(&check)
+    })
+    .await??;
+    if actual != expected {
+        let _ = std::fs::remove_file(&path);
+        anyhow::bail!("the file does not match what the group lists");
+    }
+    node.groups()
+        .record_downloaded(&group.group_id, &group.file_id, &path)
+        .await
 }
 
 // -------------------------------------------------------------- quick share

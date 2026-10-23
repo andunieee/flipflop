@@ -1,0 +1,472 @@
+import { State, Logic, GroupRow, MemberRow, GroupFileRow, PeerRow } from "globals.slint";
+import { TransferCard } from "peer-page.slint";
+import {
+    Theme,
+    Card,
+    HintText,
+    SectionHeader,
+    PageTitle,
+    Avatar,
+    Badge,
+    Divider,
+    Icon,
+    Icons,
+    PrimaryButton,
+    SecondaryButton,
+    GhostButton,
+    DangerButton,
+    IconButton,
+    ScrollView,
+} from "components.slint";
+
+
+// One group in a list; opens its page. An invitation can be answered right
+// here.
+export component GroupListItem inherits Rectangle {
+    in property <GroupRow> group;
+
+    height: root.group.invitation ? 124px : 68px;
+    border-radius: Theme.radius-lg;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: group.invitation ? Theme.accent-border : Theme.border;
+
+    VerticalLayout {
+        Rectangle {
+            height: 68px;
+            border-radius: Theme.radius-lg;
+            background: ta.pressed ? Theme.card-bg-hover : transparent;
+            animate background { duration: 90ms; }
+
+            ta := TouchArea {
+                clicked => {
+                    Logic.select-group(root.group.id);
+                    State.page = "group";
+                    Logic.page-changed("group");
+                }
+                mouse-cursor: pointer;
+            }
+
+            HorizontalLayout {
+                padding-left: Theme.space-3;
+                padding-right: Theme.space-2;
+                spacing: Theme.space-3;
+
+                VerticalLayout {
+                    alignment: center;
+                    Avatar {
+                        icon: Icons.groups;
+                        size: 42px;
+                        show-presence: true;
+                        online: root.group.online;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.group.title;
+                        color: Theme.text-strong;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.group.detail;
+                        color: root.group.invitation ? Theme.accent-text : Theme.text-muted;
+                        font-size: Theme.font-sm;
+                        overflow: elide;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Icon { source: Icons.chevron-right; size: 20px; tint: Theme.text-faint; }
+                }
+            }
+        }
+
+        if root.group.invitation: HorizontalLayout {
+            padding-left: Theme.space-3;
+            padding-right: Theme.space-3;
+            padding-bottom: Theme.space-3;
+            spacing: Theme.space-2;
+            PrimaryButton {
+                horizontal-stretch: 1;
+                label: "Accept";
+                clicked => { Logic.answer-group-invite(root.group.id, true); }
+            }
+            SecondaryButton {
+                horizontal-stretch: 1;
+                label: "Decline";
+                clicked => { Logic.answer-group-invite(root.group.id, false); }
+            }
+        }
+    }
+}
+
+component MemberItem inherits HorizontalLayout {
+    in property <MemberRow> member;
+    padding: Theme.space-2 + 2px;
+    padding-left: Theme.space-3;
+    padding-right: Theme.space-3;
+    spacing: Theme.space-3;
+
+    VerticalLayout {
+        alignment: center;
+        Avatar {
+            initials: root.member.initials;
+            size: 34px;
+            show-presence: !root.member.pending;
+            online: root.member.online;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        horizontal-stretch: 1;
+        Text {
+            text: root.member.name;
+            color: Theme.text-strong;
+            font-weight: 600;
+            overflow: elide;
+        }
+        Text {
+            text: root.member.detail;
+            color: Theme.text-muted;
+            font-size: Theme.font-xs;
+            overflow: elide;
+        }
+    }
+    if root.member.pending: VerticalLayout {
+        alignment: center;
+        Badge { label: "Invited"; tone: "warn"; }
+    }
+}
+
+component InvitablePeer inherits HorizontalLayout {
+    in property <PeerRow> peer;
+    padding: Theme.space-2 + 2px;
+    padding-left: Theme.space-3;
+    padding-right: Theme.space-3;
+    spacing: Theme.space-3;
+
+    VerticalLayout {
+        alignment: center;
+        Avatar { initials: root.peer.initials; size: 34px; }
+    }
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        Text {
+            text: root.peer.name;
+            color: Theme.text-strong;
+            font-weight: 600;
+            overflow: elide;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        SecondaryButton {
+            label: "Invite";
+            clicked => { Logic.invite-to-group(root.peer.endpoint-id); }
+        }
+    }
+}
+
+component FileItem inherits HorizontalLayout {
+    in property <GroupFileRow> file;
+    padding: Theme.space-2 + 2px;
+    padding-left: Theme.space-3;
+    padding-right: Theme.space-3;
+    spacing: Theme.space-3;
+
+    VerticalLayout {
+        alignment: center;
+        Icon { source: Icons.file; size: 22px; tint: Theme.text-muted; }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        horizontal-stretch: 1;
+        Text {
+            text: root.file.name;
+            color: Theme.text-strong;
+            font-weight: 600;
+            overflow: elide;
+        }
+        Text {
+            text: root.file.size + " · " + root.file.detail;
+            color: Theme.text-muted;
+            font-size: Theme.font-xs;
+            overflow: elide;
+        }
+    }
+    if root.file.have: VerticalLayout {
+        alignment: center;
+        SecondaryButton {
+            label: "Open";
+            clicked => { Logic.group-open-file(root.file.id); }
+        }
+    }
+    if !root.file.have: VerticalLayout {
+        alignment: center;
+        PrimaryButton {
+            label: root.file.downloading ? "Downloading…" : root.file.available ? "Download" : "Offline";
+            enabled: root.file.available && !root.file.downloading;
+            clicked => { Logic.group-download-file(root.file.id); }
+        }
+    }
+    if root.file.mine || root.file.have: VerticalLayout {
+        alignment: center;
+        IconButton {
+            icon: Icons.trash;
+            danger: true;
+            clicked => { Logic.group-remove-file(root.file.id); }
+        }
+    }
+}
+
+// An open group: who is in it, who else to add, and what it shares.
+export component GroupPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-3;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: Theme.space-3;
+                VerticalLayout {
+                    alignment: center;
+                    Avatar { icon: Icons.groups; size: 48px; }
+                }
+                PageTitle {
+                    horizontal-stretch: 1;
+                    title: State.group-title;
+                    subtitle: State.group-detail;
+                }
+            }
+
+            if State.group-invitation: Card {
+                background: Theme.accent-soft;
+                border-color: Theme.accent-border;
+                VerticalLayout {
+                    padding: Theme.space-3;
+                    spacing: Theme.space-3;
+                    Text {
+                        text: State.group-inviter + " invited you to this group. Everyone in it can see who is in it and the files it shares.";
+                        color: Theme.text-strong;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.space-2;
+                        alignment: start;
+                        PrimaryButton {
+                            label: "Accept";
+                            clicked => { Logic.answer-group-invite(State.selected-group-id, true); }
+                        }
+                        SecondaryButton {
+                            label: "Decline";
+                            clicked => {
+                                Logic.answer-group-invite(State.selected-group-id, false);
+                                State.page = State.groups-home();
+                                Logic.page-changed(State.groups-home());
+                            }
+                        }
+                    }
+                }
+            }
+
+            Card {
+                VerticalLayout {
+                    padding: Theme.space-3;
+                    spacing: Theme.space-1;
+                    HorizontalLayout {
+                        SectionHeader {
+                            horizontal-stretch: 1;
+                            label: "Members";
+                            icon: Icons.peers;
+                        }
+                        if !State.group-invitation: VerticalLayout {
+                            alignment: center;
+                            GhostButton {
+                                label: State.group-invite-open ? "Done" : "Add someone";
+                                clicked => { State.group-invite-open = !State.group-invite-open; }
+                            }
+                        }
+                    }
+                    for member in State.group-members: MemberItem { member: member; }
+                }
+            }
+
+            if State.group-invite-open && !State.group-invitation: Card {
+                VerticalLayout {
+                    padding: Theme.space-3;
+                    spacing: Theme.space-1;
+                    SectionHeader {
+                        label: "Invite one of your peers";
+                        icon: Icons.add-peer;
+                    }
+                    if State.group-invitable.length == 0: HintText {
+                        text: "Everyone you have paired with is already here.";
+                    }
+                    for peer in State.group-invitable: InvitablePeer { peer: peer; }
+                }
+            }
+
+            Card {
+                VerticalLayout {
+                    padding: Theme.space-3;
+                    spacing: Theme.space-1;
+                    HorizontalLayout {
+                        SectionHeader {
+                            horizontal-stretch: 1;
+                            label: "Files";
+                            icon: Icons.file;
+                        }
+                        if !State.group-invitation: VerticalLayout {
+                            alignment: center;
+                            GhostButton {
+                                label: "Share a file";
+                                icon: Icons.send;
+                                clicked => { Logic.group-add-file(); }
+                            }
+                        }
+                    }
+                    if State.group-files.length == 0: HintText {
+                        text: "No files shared in this group yet.";
+                    }
+                    for file in State.group-files: FileItem { file: file; }
+                }
+            }
+
+            for transfer in State.group-transfers: TransferCard { transfer: transfer; }
+
+            if !State.group-invitation: HorizontalLayout {
+                alignment: start;
+                DangerButton {
+                    label: "Leave group";
+                    clicked => {
+                        Logic.leave-group();
+                        State.page = State.groups-home();
+                        Logic.page-changed(State.groups-home());
+                    }
+                }
+            }
+        }
+    }
+}
+
+component NewGroupPeer inherits HorizontalLayout {
+    in property <PeerRow> peer;
+    padding: Theme.space-2 + 2px;
+    padding-left: Theme.space-3;
+    padding-right: Theme.space-3;
+    spacing: Theme.space-3;
+
+    VerticalLayout {
+        alignment: center;
+        Avatar { initials: root.peer.initials; size: 34px; show-presence: true; online: root.peer.online; }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        horizontal-stretch: 1;
+        Text {
+            text: root.peer.name;
+            color: Theme.text-strong;
+            font-weight: 600;
+            overflow: elide;
+        }
+        Text {
+            text: root.peer.online ? "Online" : "Offline";
+            color: root.peer.online ? Theme.online : Theme.text-muted;
+            font-size: Theme.font-xs;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        PrimaryButton {
+            label: "Start group";
+            clicked => { Logic.create-group(root.peer.endpoint-id); }
+        }
+    }
+}
+
+// Starting a group: pick one of the peers you already approved. They get an
+// invitation, and once they accept, either of you can invite more people.
+export component NewGroupPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-3;
+            alignment: start;
+
+            PageTitle {
+                title: "New group";
+                subtitle: "Pick a peer to start with. They have to accept before anything is shared, and anyone in the group can invite others later.";
+            }
+
+            Card {
+                VerticalLayout {
+                    padding: Theme.space-3;
+                    spacing: Theme.space-1;
+                    if State.peers.length == 0: HintText {
+                        text: "Pair with a peer first.";
+                    }
+                    for peer in State.peers: NewGroupPeer {
+                        peer: peer;
+                        visible: !peer.guest;
+                        height: peer.guest ? 0px : self.preferred-height;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Phone layout: the Groups tab.
+export component GroupsPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.page-padding;
+            spacing: Theme.space-3;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: Theme.space-3;
+                PageTitle {
+                    horizontal-stretch: 1;
+                    title: "Groups";
+                    subtitle: State.groups.length == 0 ? "Share files between three or more of you." : "";
+                }
+                VerticalLayout {
+                    alignment: center;
+                    SecondaryButton {
+                        label: "New group";
+                        icon: Icons.add-peer;
+                        clicked => {
+                            State.page = "new-group";
+                            Logic.page-changed("new-group");
+                        }
+                    }
+                }
+            }
+
+            if State.groups.length == 0: Card {
+                VerticalLayout {
+                    padding: Theme.space-3;
+                    spacing: Theme.space-2;
+                    SectionHeader {
+                        label: "No groups yet";
+                        icon: Icons.peers;
+                    }
+                    HintText {
+                        text: "Start one with a peer you have already paired with. They get an invitation, and once they accept, either of you can invite more people.";
+                    }
+                }
+            }
+            for group in State.groups: GroupListItem { group: group; }
+        }
+    }
+}

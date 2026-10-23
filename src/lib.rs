@@ -9,6 +9,7 @@ pub mod app;
 pub mod emitter;
 pub mod engine;
 pub mod format;
+pub mod group_ui;
 pub mod guest;
 pub mod native;
 pub mod protocol;

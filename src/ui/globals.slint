@@ -19,6 +19,47 @@ export struct PeerRow {
     receiving: bool,
 }
 
+// A group in the sidebar.
+export struct GroupRow {
+    id: string,
+    // the other members' names: "Alice, Bob"
+    title: string,
+    // "3 members", or "Invitation"
+    detail: string,
+    // we were invited and have not answered
+    invitation: bool,
+    // someone else in it is online
+    online: bool,
+}
+
+export struct MemberRow {
+    endpoint-id: string,
+    name: string,
+    initials: string,
+    // "You", "Invited by Alice", "Online", "Offline"
+    detail: string,
+    // not accepted yet
+    pending: bool,
+    online: bool,
+}
+
+// A file listed in a group; the bytes stay with its holders.
+export struct GroupFileRow {
+    id: string,
+    name: string,
+    size: string,
+    // "Alice · 2 of 3 members have it"
+    detail: string,
+    // we listed it
+    mine: bool,
+    // we have a copy
+    have: bool,
+    // someone online who has it, so it can be downloaded now
+    available: bool,
+    // a download of it is running
+    downloading: bool,
+}
+
 // One send or receive, shown on its peer's page until dismissed.
 export struct TransferRow {
     // unique per transfer; passed back to stop/cancel/dismiss
@@ -103,11 +144,34 @@ export global State {
     in-out property <string> toast-text: "";
     in-out property <bool> toast-error: false;
 
+    // Where leaving a group's pages leads: phones keep groups on a tab.
+    public pure function groups-home() -> string {
+        root.compact ? "groups" : "peer"
+    }
+
     // sidebar
     in-out property <string> my-name: "";
     in-out property <bool> node-ready: false;
     in-out property <[PeerRow]> peers;
     in-out property <string> presence-label: "";
+
+    // groups: the sidebar list, and the open group's page
+    // navigation adds "group" and "new-group" to `page`
+    in-out property <[GroupRow]> groups;
+    in-out property <string> selected-group-id: "";
+    in-out property <string> group-title: "";
+    in-out property <string> group-detail: "";
+    // the open group is an invitation we have not answered
+    in-out property <bool> group-invitation: false;
+    in-out property <string> group-inviter: "";
+    in-out property <[MemberRow]> group-members;
+    in-out property <[GroupFileRow]> group-files;
+    // the open group's downloads under way or failed
+    in-out property <[TransferRow]> group-transfers;
+    // our approved peers who are not in the open group
+    in-out property <[PeerRow]> group-invitable;
+    in-out property <bool> group-invite-open: false;
+    in-out property <int> group-invitations: 0;
 
     // add-peer page
     in-out property <[PeerRow]> suggestions;
@@ -245,6 +309,21 @@ export global Logic {
     callback delete-row(string);
     callback open-row(string);
     callback share-row(string);
+
+    // groups: open one, start one with an approved peer, invite another,
+    // answer an invitation, leave
+    callback select-group(string);
+    callback create-group(string);
+    callback invite-to-group(string);
+    // (group id, accept)
+    callback answer-group-invite(string, bool);
+    callback leave-group();
+    // files of the open group: share one of ours, download one, open our
+    // copy, stop sharing one (ours: remove it; theirs: stop serving our copy)
+    callback group-add-file();
+    callback group-download-file(string);
+    callback group-open-file(string);
+    callback group-remove-file(string);
 
     // add peer
     callback pair-with-pasted();

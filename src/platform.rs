@@ -109,6 +109,16 @@ pub fn pick_downloads_folder() -> Option<PathBuf> {
     None
 }
 
+/// Files (no folders) to share in a group. Empty = cancelled. Blocks on a
+/// native dialog, so call it off the UI thread.
+#[cfg(not(target_os = "android"))]
+pub fn pick_group_files() -> Vec<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose files to share in the group")
+        .pick_files()
+        .unwrap_or_default()
+}
+
 /// Folder to store received files in. `None` keeps the default.
 #[cfg(not(target_os = "android"))]
 pub fn pick_downloads_folder() -> Option<PathBuf> {

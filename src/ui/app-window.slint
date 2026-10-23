@@ -1,10 +1,11 @@
 import { Palette } from "std-widgets.slint";
-import { State, Logic, PeerRow } from "globals.slint";
+import { State, Logic, PeerRow, GroupRow } from "globals.slint";
 import {
     Theme,
     Dot,
     Avatar,
     Overline,
+    IconButton,
     Icon,
     Icons,
     LogoMark,
@@ -13,6 +14,7 @@ import {
 import { PeerPage, AppPickerSheet } from "peer-page.slint";
 import { PeersListPage } from "peers-list-page.slint";
 import { AddPeerPage } from "add-peer-page.slint";
+import { GroupPage, NewGroupPage, GroupsPage } from "group-page.slint";
 import { SettingsPage } from "settings-page.slint";
 import {
     QuickSharePage,
@@ -154,6 +156,58 @@ component PeerButton inherits Rectangle {
                 size: 15px;
                 tint: Theme.info;
             }
+        }
+    }
+}
+
+// One group in the sidebar.
+component GroupButton inherits Rectangle {
+    in property <GroupRow> group;
+    property <bool> selected: State.page == "group" && State.selected-group-id == root.group.id;
+
+    height: 44px;
+    border-radius: Theme.radius;
+    background: root.selected ? Theme.accent-soft
+        : ta.pressed ? Theme.chip-bg-hover
+        : ta.has-hover ? Theme.chip-bg
+        : transparent;
+    animate background { duration: 90ms; }
+
+    ta := TouchArea {
+        clicked => {
+            Logic.select-group(root.group.id);
+            State.page = "group";
+            Logic.page-changed("group");
+        }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-2;
+        padding-right: Theme.space-3;
+        spacing: Theme.space-2 + 2px;
+
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                icon: Icons.groups;
+                size: 28px;
+                show-presence: true;
+                online: root.group.online;
+            }
+        }
+        Text {
+            text: root.group.title;
+            color: root.selected ? Theme.text-strong : Theme.text;
+            font-size: Theme.font-md;
+            font-weight: root.selected ? 600 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        if root.group.invitation: VerticalLayout {
+            alignment: center;
+            Dot { size: 8px; online: true; }
         }
     }
 }
@@ -306,6 +360,9 @@ export component AppWindow inherits Window {
                 Logic.rename-peer-cancel();
             } else if root.compact && State.page == "peer" && root.peer-screen {
                 State.peer-open = false;
+            } else if root.compact && (State.page == "group" || State.page == "new-group") {
+                State.page = "groups";
+                Logic.page-changed("groups");
             } else if State.page != "peer" {
                 State.page = "peer";
                 Logic.page-changed("peer");
@@ -459,6 +516,43 @@ export component AppWindow inherits Window {
                                 for peer in State.peers: PeerButton {
                                     peer: peer;
                                 }
+
+                                HorizontalLayout {
+                                    padding-left: Theme.space-3;
+                                    padding-top: Theme.space-4;
+                                    padding-bottom: Theme.space-1;
+                                    Overline {
+                                        label: "GROUPS";
+                                        horizontal-stretch: 1;
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        IconButton {
+                                            icon: Icons.add-peer;
+                                            height: 26px;
+                                            width: 26px;
+                                            clicked => {
+                                                State.page = "new-group";
+                                                Logic.page-changed("new-group");
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if State.groups.length == 0: HorizontalLayout {
+                                    padding-left: Theme.space-3;
+                                    padding-right: Theme.space-3;
+                                    Text {
+                                        text: "Groups share files between three or more of you.";
+                                        color: Theme.text-faint;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                for group in State.groups: GroupButton {
+                                    group: group;
+                                }
                             }
                         }
 
@@ -491,6 +585,18 @@ export component AppWindow inherits Window {
                         height: 100%;
                     }
                     if State.page == "add-peer": AddPeerPage {
+                        width: 100%;
+                        height: 100%;
+                    }
+                    if root.compact && State.page == "groups": GroupsPage {
+                        width: 100%;
+                        height: 100%;
+                    }
+                    if State.page == "group": GroupPage {
+                        width: 100%;
+                        height: 100%;
+                    }
+                    if State.page == "new-group": NewGroupPage {
                         width: 100%;
                         height: 100%;
                     }
@@ -535,6 +641,14 @@ export component AppWindow inherits Window {
                         icon: Icons.peers;
                         badge: State.outbox-count;
                         also-active: State.page == "add-peer";
+                    }
+
+                    TabButton {
+                        label: "Groups";
+                        key: "groups";
+                        icon: Icons.groups;
+                        badge: State.group-invitations;
+                        also-active: State.page == "group" || State.page == "new-group";
                     }
 
                     TabButton {
