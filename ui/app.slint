@@ -1,0 +1,337 @@
+import { Button, LineEdit, ListView, Palette, ScrollView, VerticalBox } from "std-widgets.slint";
+
+export struct PeerItem {
+    id: string,
+    name: string,
+    lan: bool,
+    ble: bool,
+    connected: bool,
+}
+
+export struct ChatLine {
+    mine: bool,
+    text: string,
+}
+
+component Badge inherits Rectangle {
+    in property <string> text;
+    in property <color> tint: #3b82f6;
+    background: tint.with-alpha(0.18);
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: tint.with-alpha(0.6);
+    Text {
+        text: root.text;
+        color: root.tint;
+        font-size: 11px;
+        horizontal-alignment: center;
+        x: 6px;
+        width: parent.width - 12px;
+    }
+    min-width: label.preferred-width + 12px;
+    height: 20px;
+    label := Text {
+        text: root.text;
+        font-size: 11px;
+        visible: false;
+    }
+}
+
+component Tab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked;
+    background: active ? #3b82f6.with-alpha(0.2) : transparent;
+    Text {
+        text: root.text;
+        font-size: 15px;
+        font-weight: root.active ? 700 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "flipflop";
+    preferred-width: 420px;
+    preferred-height: 720px;
+    min-width: 320px;
+    min-height: 480px;
+
+    in-out property <string> my-name;
+    in property <string> status;
+    in property <string> ble-status;
+    in property <[PeerItem]> peers;
+    in property <image> qr;
+    in property <string> ticket;
+    in property <[ChatLine]> chat;
+    in-out property <string> chat-peer-id;
+    in property <string> chat-peer-name;
+    in property <image> camera-frame;
+    in-out property <bool> scanning;
+    in property <bool> live-camera;
+    in-out property <int> tab: 0;
+
+    callback rename(string);
+    callback connect(string);
+    callback disconnect(string);
+    callback open-chat(string);
+    callback close-chat();
+    callback send(string);
+    callback connect-ticket(string);
+    callback scan();
+    callback cancel-scan();
+
+    VerticalLayout {
+        padding: 12px;
+        padding-top: 12px + root.safe-area-insets.top;
+        padding-bottom: 12px + root.safe-area-insets.bottom;
+        padding-left: 12px + root.safe-area-insets.left;
+        padding-right: 12px + root.safe-area-insets.right;
+        spacing: 10px;
+
+        // Identity
+        VerticalLayout {
+            spacing: 4px;
+            Text {
+                text: "This device";
+                font-size: 12px;
+                opacity: 0.7;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                name-edit := LineEdit {
+                    text <=> root.my-name;
+                    placeholder-text: "Device name";
+                    accepted(t) => { root.rename(t); }
+                }
+                Button {
+                    text: "Save";
+                    clicked => { root.rename(name-edit.text); }
+                }
+            }
+        }
+
+        if root.scanning && root.live-camera: VerticalLayout {
+            spacing: 8px;
+            vertical-stretch: 1;
+            Text {
+                text: "Point the camera at a flipflop QR code";
+                horizontal-alignment: center;
+            }
+            Image {
+                source: root.camera-frame;
+                image-fit: contain;
+                vertical-stretch: 1;
+            }
+            Button {
+                text: "Cancel";
+                clicked => { root.cancel-scan(); }
+            }
+        }
+
+        if !(root.scanning && root.live-camera) && root.chat-peer-id != "": VerticalLayout {
+            spacing: 8px;
+            vertical-stretch: 1;
+            HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "‹ Back";
+                    clicked => { root.close-chat(); }
+                }
+                Text {
+                    text: root.chat-peer-name;
+                    font-size: 16px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            ListView {
+                vertical-stretch: 1;
+                for line in root.chat: Rectangle {
+                    height: bubble.preferred-height + 8px;
+                    bubble := Rectangle {
+                        x: line.mine ? parent.width - self.width : 0px;
+                        y: 4px;
+                        width: min(parent.width * 0.8, msg.preferred-width + 20px);
+                        height: msg.preferred-height + 12px;
+                        border-radius: 10px;
+                        background: line.mine ? #3b82f6 : #6b7280.with-alpha(0.35);
+                        msg := Text {
+                            x: 10px;
+                            y: 6px;
+                            width: parent.width - 20px;
+                            text: line.text;
+                            wrap: word-wrap;
+                            color: line.mine ? white : Palette.foreground;
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                msg-edit := LineEdit {
+                    placeholder-text: "Message";
+                    accepted(t) => {
+                        root.send(t);
+                        self.text = "";
+                    }
+                }
+                Button {
+                    text: "Send";
+                    clicked => {
+                        root.send(msg-edit.text);
+                        msg-edit.text = "";
+                    }
+                }
+            }
+        }
+
+        if !(root.scanning && root.live-camera) && root.chat-peer-id == "": VerticalLayout {
+            spacing: 8px;
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                spacing: 4px;
+                height: 40px;
+                Tab {
+                    text: "Nearby";
+                    active: root.tab == 0;
+                    clicked => { root.tab = 0; }
+                }
+                Tab {
+                    text: "Add by QR";
+                    active: root.tab == 1;
+                    clicked => { root.tab = 1; }
+                }
+            }
+
+            if root.tab == 0: VerticalLayout {
+                spacing: 6px;
+                vertical-stretch: 1;
+                if root.peers.length == 0: Text {
+                    text: "No one around yet.\nOther flipflop devices on this network or in Bluetooth range show up here.";
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                    opacity: 0.7;
+                    vertical-stretch: 1;
+                    vertical-alignment: center;
+                }
+                if root.peers.length > 0: ListView {
+                    vertical-stretch: 1;
+                    for peer in root.peers: Rectangle {
+                        height: 64px;
+                        HorizontalLayout {
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            spacing: 8px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 4px;
+                                Text {
+                                    text: peer.name;
+                                    font-size: 16px;
+                                    overflow: elide;
+                                }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    alignment: start;
+                                    if peer.connected: Badge {
+                                        text: "connected";
+                                        tint: #22c55e;
+                                    }
+                                    if peer.lan: Badge { text: "LAN"; }
+                                    if peer.ble: Badge {
+                                        text: "BLE";
+                                        tint: #a855f7;
+                                    }
+                                }
+                            }
+                            if peer.connected: Button {
+                                text: "Chat";
+                                primary: true;
+                                clicked => { root.open-chat(peer.id); }
+                            }
+                            if peer.connected: Button {
+                                text: "Drop";
+                                clicked => { root.disconnect(peer.id); }
+                            }
+                            if !peer.connected: Button {
+                                text: "Connect";
+                                primary: true;
+                                clicked => { root.connect(peer.id); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.tab == 1: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    Text {
+                        text: "Let another device scan this code:";
+                        horizontal-alignment: center;
+                    }
+                    Rectangle {
+                        height: min(root.width - 48px, 300px);
+                        background: white;
+                        border-radius: 8px;
+                        Image {
+                            source: root.qr;
+                            image-fit: contain;
+                            width: parent.width - 8px;
+                            height: parent.height - 8px;
+                        }
+                    }
+                    Button {
+                        text: "Scan a QR code";
+                        primary: true;
+                        clicked => { root.scan(); }
+                    }
+                    Text {
+                        text: "…or paste a ticket:";
+                        opacity: 0.7;
+                    }
+                    ticket-edit := LineEdit {
+                        placeholder-text: "paste ticket here";
+                        accepted(t) => { root.connect-ticket(t); }
+                    }
+                    Button {
+                        text: "Connect with ticket";
+                        clicked => { root.connect-ticket(ticket-edit.text); }
+                    }
+                    Text {
+                        text: "My ticket (select to copy):";
+                        opacity: 0.7;
+                    }
+                    LineEdit {
+                        text: root.ticket;
+                        read-only: true;
+                    }
+                }
+            }
+        }
+
+        // Footer
+        Text {
+            text: root.status;
+            font-size: 12px;
+            opacity: 0.8;
+            overflow: elide;
+        }
+        Text {
+            text: root.ble-status;
+            font-size: 11px;
+            opacity: 0.6;
+            overflow: elide;
+        }
+    }
+}
