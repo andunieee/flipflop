@@ -12,6 +12,18 @@ mod android {
         objects::{JClass, JObject, JString, JValue},
     };
 
+    /// Read an Android system property.
+    pub fn system_property(name: &str) -> Option<String> {
+        use std::ffi::{CStr, CString, c_char, c_int};
+        unsafe extern "C" {
+            fn __system_property_get(name: *const c_char, value: *mut c_char) -> c_int;
+        }
+        let name = CString::new(name).ok()?;
+        let mut buf = [0 as c_char; 92]; // PROP_VALUE_MAX
+        let len = unsafe { __system_property_get(name.as_ptr(), buf.as_mut_ptr()) };
+        (len > 0).then(|| unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned())
+    }
+
     struct ActivityRef(jni::objects::GlobalRef);
     static ACTIVITY: OnceLock<ActivityRef> = OnceLock::new();
 

@@ -108,22 +108,21 @@ async fn run(core: Core, status: Arc<dyn Fn(String) + Send + Sync>) -> Result<()
             AdapterEvent::DeviceAdded(addr) => {
                 let (core, adapter, known) = (core.clone(), adapter.clone(), known.clone());
                 tokio::spawn(async move {
-                    // Re-read periodically so name/ticket changes propagate, until the device vanishes.
-                    for _ in 0..20 {
+                    // Read once: reconnecting to a device iroh-ble-transport may be using tears its link down.
+                    // Name changes reach connected peers through the iroh handshake instead.
+                    for attempt in 0..4 {
                         match read_peer(&adapter, addr, service, characteristic).await {
                             Ok(Some(payload)) => {
                                 if let Ok(t) = payload.t.parse::<iroh_tickets::endpoint::EndpointTicket>() {
                                     known.lock().unwrap().insert(addr, t.endpoint_addr().id);
                                 }
                                 core.ble_seen(payload);
+                                break;
                             }
-                            Ok(None) => {}
-                            Err(err) => tracing::debug!("ble read {addr}: {err:#}"),
+                            Ok(None) => break,
+                            Err(err) => tracing::debug!("ble read {addr} (attempt {attempt}): {err:#}"),
                         }
-                        tokio::time::sleep(Duration::from_secs(30)).await;
-                        if adapter.device(addr).is_err() {
-                            break;
-                        }
+                        tokio::time::sleep(Duration::from_secs(5)).await;
                     }
                 });
             }
@@ -149,7 +148,9 @@ async fn read_peer(
     if !device.uuids().await?.unwrap_or_default().contains(&service) {
         return Ok(None);
     }
-    if !device.is_connected().await? {
+    // Only tear down a link we opened ourselves; it may belong to the iroh BLE transport.
+    let we_connected = !device.is_connected().await?;
+    if we_connected {
         tokio::time::timeout(Duration::from_secs(15), device.connect())
             .await
             .context("connect timed out")??;
@@ -169,6 +170,8 @@ async fn read_peer(
         Ok(None)
     }
     .await;
-    let _ = device.disconnect().await;
+    if we_connected {
+        let _ = device.disconnect().await;
+    }
     result
 }

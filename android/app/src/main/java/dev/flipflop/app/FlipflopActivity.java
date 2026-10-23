@@ -50,13 +50,15 @@ import java.util.UUID;
  *
  * BLE protocol (shared with src/ble/linux.rs): every device runs a GATT server with one service
  * (SERVICE) and one readable characteristic (PAYLOAD) holding {"n": name, "t": ticket}, advertises
- * the service UUID, and scans for it. Found peers are read once per REREAD_MS and reported to Rust.
+ * the service UUID, and scans for it. Each peer is read once (re-reading would open and close a GATT
+ * connection to a device that iroh-ble-transport may be using, which tears its link down) and
+ * reported to Rust; peers that stop advertising are reported lost.
  */
 public class FlipflopActivity extends NativeActivity {
     private static final String TAG = "flipflop";
     static final UUID SERVICE = UUID.fromString("f11bf10b-0000-4f1f-9b0a-8e2d6e7a0001");
     static final UUID PAYLOAD = UUID.fromString("f11bf10b-0000-4f1f-9b0a-8e2d6e7a0002");
-    static final long REREAD_MS = 30_000;
+    static final long RETRY_MS = 5_000;
     static final long LOST_MS = 45_000;
     static final int REQ_BLE = 1;
 
@@ -289,7 +291,8 @@ public class FlipflopActivity extends NativeActivity {
     // ---- BLE: central (find peers and read their payload) ---------------------------------
 
     private final Map<String, Long> lastSeen = new HashMap<>();      // address -> last advert
-    private final Map<String, Long> lastRead = new HashMap<>();      // address -> last successful read
+    private final Map<String, Long> lastRead = new HashMap<>();      // address -> time of the successful read
+    private final Map<String, Long> retryAt = new HashMap<>();       // address -> earliest time to retry a failed read
     private final Map<String, Boolean> reported = new HashMap<>();   // addresses reported to Rust
     private final ArrayDeque<BluetoothDevice> readQueue = new ArrayDeque<>();
     private boolean reading = false;
@@ -301,8 +304,8 @@ public class FlipflopActivity extends NativeActivity {
             String addr = device.getAddress();
             long now = System.currentTimeMillis();
             lastSeen.put(addr, now);
-            Long read = lastRead.get(addr);
-            if ((read == null || now - read > REREAD_MS) && !readQueue.contains(device)) {
+            Long retry = retryAt.get(addr);
+            if (!lastRead.containsKey(addr) && (retry == null || now >= retry) && !readQueue.contains(device)) {
                 readQueue.add(device);
                 pumpReads();
             }
@@ -332,6 +335,7 @@ public class FlipflopActivity extends NativeActivity {
                 if (now - lastSeen.get(addr) > LOST_MS) {
                     lastSeen.remove(addr);
                     lastRead.remove(addr);
+                    retryAt.remove(addr);
                     if (reported.remove(addr) != null) nativeBleLost(addr);
                 }
             }
@@ -359,7 +363,7 @@ public class FlipflopActivity extends NativeActivity {
                     nativeBlePeer(addr, new String(result[0], StandardCharsets.UTF_8));
                 } else {
                     // retry soon, but don't hammer
-                    lastRead.put(addr, System.currentTimeMillis() - REREAD_MS + 5_000);
+                    retryAt.put(addr, System.currentTimeMillis() + RETRY_MS);
                 }
                 pumpReads();
             }
