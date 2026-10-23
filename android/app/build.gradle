@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
 
 android {
@@ -25,6 +26,11 @@ android {
     // libflipflop.so is produced by android/build.sh (cargo ndk) into src/main/jniLibs.
     sourceSets.main.jniLibs.srcDirs = ['src/main/jniLibs']
 
+    // blew's Kotlin BLE managers (copied from the crate by build.sh; BlewPlugin.kt is Tauri-only).
+    sourceSets.main.java.srcDirs += [rootProject.file('blew-kt')]
+
+    kotlinOptions { jvmTarget = '17' }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -33,5 +39,7 @@ android {
 
 dependencies {
     // Camera-based QR scanner activity (pure Java, no Google Play Services needed).
+    implementation 'androidx.core:core-ktx:1.9.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 }

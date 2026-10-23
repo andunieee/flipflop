@@ -146,6 +146,25 @@ public class FlipflopActivity extends NativeActivity {
         return new String[]{Manifest.permission.ACCESS_FINE_LOCATION};
     }
 
+    /** Called from Rust (any thread). */
+    public boolean blePermissionsGranted() {
+        for (String p : neededPermissions()) {
+            if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) return false;
+        }
+        return true;
+    }
+
+    /** Called from Rust. */
+    public void requestBlePermissions() {
+        runOnUiThread(() -> {
+            List<String> missing = new ArrayList<>();
+            for (String p : neededPermissions()) {
+                if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) missing.add(p);
+            }
+            if (!missing.isEmpty()) requestPermissions(missing.toArray(new String[0]), REQ_BLE);
+        });
+    }
+
     private void startBleIfPermitted() {
         if (!bleWanted || bleRunning) return;
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {

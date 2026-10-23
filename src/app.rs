@@ -23,6 +23,8 @@ struct UiState {
 }
 
 type State = Arc<Mutex<UiState>>;
+/// Filled once the background start-up has produced a [`Core`]; callbacks do nothing before that.
+type Slot = Arc<std::sync::OnceLock<Core>>;
 
 pub fn run(data_dir: PathBuf) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
@@ -33,33 +35,64 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
     ui.set_live_camera(cfg!(not(target_os = "android")));
     let state: State = Arc::default();
 
-    let core = {
-        let (weak, state) = (ui.as_weak(), state.clone());
-        rt.block_on(Core::start(&data_dir, move |event| on_event(&weak, &state, event)))?
-    };
-
+    // Core starts in the background: on Android the Bluetooth stack delivers its callbacks through
+    // the Java main thread, which only runs while this (native glue) thread keeps pumping the UI.
+    let slot: Slot = Arc::default();
     {
-        let weak = ui.as_weak();
-        crate::ble::start(core.clone(), move |text| {
-            let _ = weak.upgrade_in_event_loop(move |ui| ui.set_ble_status(text.into()));
+        let (slot, weak, state) = (slot.clone(), ui.as_weak(), state.clone());
+        let data_dir = data_dir.clone();
+        handle.spawn(async move {
+            let want_ble = tokio::task::spawn_blocking(crate::platform::ensure_ble_permission)
+                .await
+                .unwrap_or(false);
+            let events = (weak.clone(), state);
+            let core = match Core::start(&data_dir, want_ble, move |event| on_event(&events.0, &events.1, event)).await {
+                Ok(core) => core,
+                Err(err) => return set_status(&weak, format!("failed to start: {err:#}")),
+            };
+            let _ = slot.set(core.clone());
+
+            // Two BLE statuses share one line: the iroh transport (chat over Bluetooth) and our discovery.
+            let line = Arc::new(Mutex::new((format!("transport {}", core.ble_transport_status()), String::new())));
+            let show = {
+                let line = line.clone();
+                move |weak: &slint::Weak<MainWindow>| {
+                    let (t, d) = line.lock().unwrap().clone();
+                    let text = if d.is_empty() { t } else { format!("{d} · {t}") };
+                    let _ = weak.upgrade_in_event_loop(move |ui| ui.set_ble_status(text.into()));
+                }
+            };
+            show(&weak);
+            crate::ble::start(core, move |text| {
+                line.lock().unwrap().1 = text;
+                show(&weak);
+            });
         });
     }
 
     #[cfg(target_os = "android")]
     {
-        let (core, weak, handle) = (core.clone(), ui.as_weak(), handle.clone());
-        crate::platform::set_qr_handler(move |text| connect_ticket(&core, &weak, &handle, text));
+        let (slot, weak, handle) = (slot.clone(), ui.as_weak(), handle.clone());
+        crate::platform::set_qr_handler(move |text| {
+            if let Some(core) = slot.get() {
+                connect_ticket(core, &weak, &handle, text);
+            }
+        });
     }
 
     ui.on_rename({
-        let core = core.clone();
-        move |name| core.set_name(&name)
+        let slot = slot.clone();
+        move |name| {
+            if let Some(core) = slot.get() {
+                core.set_name(&name);
+            }
+        }
     });
 
     ui.on_connect({
-        let (core, weak, handle) = (core.clone(), ui.as_weak(), handle.clone());
+        let (slot, weak, handle) = (slot.clone(), ui.as_weak(), handle.clone());
         move |id| {
-            let Ok(id) = id.parse::<EndpointId>() else { return };
+            let (Some(core), Ok(id)) = (slot.get(), id.parse::<EndpointId>()) else { return };
             let (core, weak) = (core.clone(), weak.clone());
             set_status(&weak, "connecting…");
             handle.spawn(async move {
@@ -72,17 +105,21 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
     });
 
     ui.on_disconnect({
-        let core = core.clone();
+        let slot = slot.clone();
         move |id| {
-            if let Ok(id) = id.parse::<EndpointId>() {
+            if let (Some(core), Ok(id)) = (slot.get(), id.parse::<EndpointId>()) {
                 core.disconnect(id);
             }
         }
     });
 
     ui.on_connect_ticket({
-        let (core, weak, handle) = (core.clone(), ui.as_weak(), handle.clone());
-        move |text| connect_ticket(&core, &weak, &handle, text.to_string())
+        let (slot, weak, handle) = (slot.clone(), ui.as_weak(), handle.clone());
+        move |text| {
+            if let Some(core) = slot.get() {
+                connect_ticket(core, &weak, &handle, text.to_string());
+            }
+        }
     });
 
     ui.on_open_chat({
@@ -109,10 +146,10 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
     });
 
     ui.on_send({
-        let (core, weak, state, handle) = (core.clone(), ui.as_weak(), state.clone(), handle.clone());
+        let (slot, weak, state, handle) = (slot.clone(), ui.as_weak(), state.clone(), handle.clone());
         move |text| {
             let text = text.trim().to_string();
-            let Some(id) = state.lock().unwrap().selected else { return };
+            let (Some(core), Some(id)) = (slot.get(), state.lock().unwrap().selected) else { return };
             if text.is_empty() {
                 return;
             }
@@ -131,10 +168,11 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         use std::{cell::RefCell, rc::Rc};
         let scanner: Rc<RefCell<Option<crate::scan::Scanner>>> = Rc::default();
         ui.on_scan({
-            let (core, weak, handle, scanner) = (core.clone(), ui.as_weak(), handle.clone(), scanner.clone());
+            let (slot, weak, handle, scanner) = (slot.clone(), ui.as_weak(), handle.clone(), scanner.clone());
             move || {
+                let Some(core) = slot.get().cloned() else { return };
                 let (frame_weak, done_weak) = (weak.clone(), weak.clone());
-                let (core, handle) = (core.clone(), handle.clone());
+                let handle = handle.clone();
                 if let Some(ui) = weak.upgrade() {
                     ui.set_scanning(true);
                 }
@@ -173,7 +211,9 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
     }
 
     ui.run()?;
-    rt.block_on(core.shutdown());
+    if let Some(core) = slot.get() {
+        rt.block_on(core.shutdown());
+    }
     Ok(())
 }
 

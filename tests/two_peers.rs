@@ -12,7 +12,7 @@ async fn node(name: &str) -> (Core, Log, tempdir::Dir) {
     let dir = tempdir::Dir::new(name);
     let log: Log = Arc::default();
     let l = log.clone();
-    let core = Core::start(dir.path(), move |e| match e {
+    let core = Core::start(dir.path(), false, move |e| match e {
         Event::Peers(p) => l.lock().unwrap().0 = p,
         Event::Message { text, mine: false, .. } => l.lock().unwrap().1.push(text),
         _ => {}

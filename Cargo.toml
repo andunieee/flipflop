@@ -2,6 +2,8 @@
 name = "flipflop"
 version = "0.1.0"
 edition = "2024"
+# iroh-ble-transport and blew are AGPL-3.0-or-later, which this app inherits.
+license = "AGPL-3.0-or-later"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -11,7 +13,8 @@ name = "flipflop"
 path = "src/main.rs"
 
 [dependencies]
-iroh = "1.4.1"
+iroh = { version = "1.4.1", features = ["unstable-custom-transports"] }
+iroh-ble-transport = "0.5.1-beta.7"
 iroh-mdns-address-lookup = "0.6.1"
 iroh-tickets = "1.0.0"
 n0-future = "0.3.2"
@@ -40,6 +43,8 @@ slint = { version = "1.18", default-features = false, features = ["std", "compat
 android-activity = "0.6"
 jni = "0.21"
 ndk-context = "0.1"
+blew = "0.5.1-beta.8"
+jni22 = { package = "jni", version = "0.22" }
 android_logger = "0.15"
 log = "0.4"
 

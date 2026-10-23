@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     path::Path,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -14,6 +15,7 @@ use iroh::{
     endpoint::{Connection, presets},
     endpoint_info::UserData,
 };
+use iroh_ble_transport::BleTransport;
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use iroh_tickets::endpoint::EndpointTicket;
 use n0_future::StreamExt;
@@ -66,12 +68,15 @@ struct PeerEntry {
     announced_name: Option<String>, // from mDNS / BLE
     hello_name: Option<String>,     // from the connection handshake
     lan: bool,
-    ble: bool,
+    ble: bool,   // seen by our GATT name+ticket discovery
+    ble_t: bool, // known to the BLE transport (iroh can reach it over Bluetooth)
     conn: Option<Connection>,
 }
 
 struct Inner {
     endpoint: Endpoint,
+    ble_transport: Option<Arc<BleTransport>>,
+    ble_transport_status: String,
     memory: MemoryLookup,
     settings: Mutex<Settings>,
     peers: Mutex<BTreeMap<EndpointId, PeerEntry>>,
@@ -84,9 +89,12 @@ struct Inner {
 pub struct Core(Arc<Inner>);
 
 impl Core {
-    /// Must be called from within a tokio runtime.
+    /// Must be called from within a tokio runtime. With `ble_transport`, iroh also gets Bluetooth LE
+    /// as a network path (custom transports can only be added at bind time, so on Android the
+    /// Bluetooth permission must already be granted).
     pub async fn start(
         data_dir: &Path,
+        ble_transport: bool,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Core> {
         let settings = Settings::load(data_dir);
@@ -100,18 +108,37 @@ impl Core {
         // Subscribe before anything can be discovered: already-known peers are not re-announced.
         let lan_events = mdns.subscribe().await;
         let memory = MemoryLookup::new();
-        let endpoint = Endpoint::builder(presets::N0)
+
+        let (ble, ble_transport_status) = if ble_transport {
+            match BleTransport::builder().build(secret_key.public()).await {
+                Ok(ble) => (Some(ble), "on".to_string()),
+                Err(err) => {
+                    tracing::warn!("BLE transport unavailable: {err:?}");
+                    (None, format!("unavailable ({err})"))
+                }
+            }
+        } else {
+            (None, "off".to_string())
+        };
+
+        let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
             .alpns(vec![ALPN.to_vec()])
             .address_lookup(mdns.clone())
             .address_lookup(memory.clone())
-            .user_data_for_address_lookup(user_data(&name))
-            .bind()
-            .await
-            .context("binding iroh endpoint")?;
+            .user_data_for_address_lookup(user_data(&name));
+        if let Some(ble) = &ble {
+            builder = builder
+                .hooks(ble.dedup_hook())
+                .add_custom_transport(ble.as_custom_transport())
+                .address_lookup(ble.address_lookup());
+        }
+        let endpoint = builder.bind().await.context("binding iroh endpoint")?;
 
         let core = Core(Arc::new(Inner {
             endpoint,
+            ble_transport: ble,
+            ble_transport_status,
             memory,
             settings: Mutex::new(settings),
             peers: Mutex::default(),
@@ -126,6 +153,11 @@ impl Core {
 
     fn emit(&self, event: Event) {
         (self.0.on_event)(event);
+    }
+
+    /// `on`, `off` or `unavailable (reason)`: whether iroh can use Bluetooth as a path.
+    pub fn ble_transport_status(&self) -> &str {
+        &self.0.ble_transport_status
     }
 
     pub fn id(&self) -> EndpointId {
@@ -181,7 +213,7 @@ impl Core {
                     .or_else(|| p.announced_name.clone())
                     .unwrap_or_else(|| id.fmt_short().to_string()),
                 lan: p.lan,
-                ble: p.ble,
+                ble: p.ble || p.ble_t,
                 connected: p.conn.is_some(),
             })
             .collect();
@@ -199,7 +231,7 @@ impl Core {
             let mut peers = self.0.peers.lock().unwrap();
             let entry = peers.entry(id).or_default();
             f(entry);
-            if !entry.lan && !entry.ble && entry.conn.is_none() {
+            if !entry.lan && !entry.ble && !entry.ble_t && entry.conn.is_none() {
                 peers.remove(&id);
             }
         }
@@ -364,6 +396,26 @@ impl Core {
                 }
             }
         });
+
+        // Peers the BLE transport has identified (full endpoint id known) count as Bluetooth-reachable.
+        if let Some(ble) = self.0.ble_transport.clone() {
+            let this = self.clone();
+            tokio::spawn(async move {
+                let mut seen: std::collections::BTreeSet<EndpointId> = Default::default();
+                loop {
+                    let now: std::collections::BTreeSet<EndpointId> =
+                        ble.snapshot_peers().into_iter().filter_map(|p| p.verified_endpoint).collect();
+                    for id in now.difference(&seen) {
+                        this.update_peer(*id, |p| p.ble_t = true);
+                    }
+                    for id in seen.difference(&now) {
+                        this.update_peer(*id, |p| p.ble_t = false);
+                    }
+                    seen = now;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            });
+        }
 
         // Keep our shareable ticket current.
         let this = self.clone();
