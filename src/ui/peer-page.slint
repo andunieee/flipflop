@@ -1,4 +1,4 @@
-import { LineEdit, TextEdit, Switch } from "std-widgets.slint";
+import { LineEdit, TextEdit, Switch, CheckBox } from "std-widgets.slint";
 import { State, Logic, HistoryRow, TransferRow, AppRow } from "globals.slint";
 import {
     Theme,
@@ -770,6 +770,7 @@ component PresenceLine inherits HorizontalLayout {
 // The browser link's QR code, on white so any camera reads it.
 component GuestQr inherits Rectangle {
     in property <length> size: 168px;
+    in property <image> qr;
     width: root.size;
     height: root.size;
     border-radius: Theme.radius;
@@ -779,139 +780,136 @@ component GuestQr inherits Rectangle {
     Image {
         width: root.size - 12px;
         height: self.width;
-        source: State.guest-qr;
+        source: root.qr;
         image-rendering: pixelated;
     }
 }
 
 // "Let them send files to you", switched on the open link.
-component GuestUploadSwitch inherits HorizontalLayout {
-    spacing: Theme.space-3;
-    VerticalLayout {
-        alignment: center;
-        spacing: 2px;
-        horizontal-stretch: 1;
-        Text {
-            text: "Let them send you files";
-            color: Theme.text-strong;
-            font-weight: 600;
-        }
-
-        Text {
-            text: State.guest-upload
-                ? "The page has a form to send you files and text."
-                : "The page only offers what you send them.";
-            color: Theme.text-muted;
-            font-size: Theme.font-sm;
-            wrap: word-wrap;
-        }
+component GuestUploadSwitch inherits VerticalLayout {
+    spacing: 2px;
+    CheckBox {
+        text: "Let them send you files and text";
+        checked <=> State.guest-upload;
+        toggled => { Logic.guest-set-upload(self.checked); }
     }
 
-    VerticalLayout {
-        alignment: center;
-        Switch {
-            checked <=> State.guest-upload;
-            toggled => { Logic.guest-set-upload(self.checked); }
-        }
+    Text {
+        text: State.guest-upload
+            ? "The page has a form to send you files and text."
+            : "The page only offers what you send them.";
+        color: Theme.text-muted;
+        font-size: Theme.font-sm;
+        wrap: word-wrap;
     }
 }
 
-// The link itself: copy it, or switch to another of our addresses.
-component GuestLinkDetails inherits VerticalLayout {
+// One address of the link: copy it, or (same Wi-Fi) switch to another of ours.
+component GuestAddress inherits VerticalLayout {
+    in property <bool> web;
+    in property <string> url;
+    in property <image> qr;
+    in property <bool> more-addresses: false;
     spacing: Theme.space-3;
 
     SectionHeader {
-        label: State.guest-web ? "Browser link · anywhere" : "Browser link · same Wi-Fi";
-        icon: Icons.globe;
+        label: root.web ? "Anywhere" : "Same Wi-Fi";
+        icon: root.web ? Icons.globe : Icons.nearby;
     }
 
     HintText {
-        label: State.guest-web
-            ? "Open it in any browser, anywhere: it reaches this device over the internet, end-to-end encrypted. It works until you close it."
-            : "Open it in any browser on the same Wi-Fi (or your hotspot). It works until you close it.";
+        label: root.web
+            ? "Open it in any browser, anywhere: it reaches this device over the internet, end-to-end encrypted."
+            : "Open it in any browser on the same Wi-Fi (or your hotspot).";
     }
 
-    if State.guest-url == "": StatusText {
-        label: State.guest-web
+    if root.url == "": StatusText {
+        label: root.web
             ? "Not connected to the internet yet. The relay must be on (Settings)."
             : "No local network found. Connect to Wi-Fi or turn on your hotspot.";
         error: true;
     }
-    if State.guest-url != "": HorizontalLayout {
-        spacing: Theme.space-2;
-        Rectangle {
+    if root.url != "": HorizontalLayout {
+        spacing: Theme.space-4;
+        VerticalLayout {
             horizontal-stretch: 1;
-            border-radius: Theme.radius-sm + 2px;
-            background: Theme.inset-bg;
-            border-width: 1px;
-            border-color: Theme.border;
-            min-height: Theme.control-height;
-
+            spacing: Theme.space-3;
             HorizontalLayout {
-                padding-left: Theme.space-3;
-                padding-right: Theme.space-3;
-                Text {
-                    text: State.guest-url;
-                    color: Theme.text-strong;
-                    font-family: "monospace";
-                    font-size: Theme.font-sm;
-                    vertical-alignment: center;
-                    overflow: elide;
+                spacing: Theme.space-2;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Theme.radius-sm + 2px;
+                    background: Theme.inset-bg;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    min-height: Theme.control-height;
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-3;
+                        padding-right: Theme.space-3;
+                        Text {
+                            text: root.url;
+                            color: Theme.text-strong;
+                            font-family: "monospace";
+                            font-size: Theme.font-sm;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                SecondaryButton {
+                    label: "Copy";
+                    icon: Icons.copy;
+                    clicked => { Logic.guest-copy-url(root.web); }
+                }
+            }
+            if root.more-addresses: HorizontalLayout {
+                alignment: start;
+                GhostButton {
+                    label: "Not working? Try another address";
+                    icon: Icons.refresh;
+                    clicked => { Logic.guest-next-address(); }
                 }
             }
         }
-
-        SecondaryButton {
-            label: "Copy";
-            icon: Icons.copy;
-            clicked => { Logic.guest-copy-url(); }
+        if !State.compact: VerticalLayout {
+            alignment: start;
+            GuestQr { qr: root.qr; }
         }
     }
-    if State.guest-more-addresses: HorizontalLayout {
-        alignment: start;
-        GhostButton {
-            label: "Not working? Try another address";
-            icon: Icons.refresh;
-            clicked => { Logic.guest-next-address(); }
-        }
+    if root.url != "" && State.compact: HorizontalLayout {
+        alignment: center;
+        GuestQr { qr: root.qr; size: 200px; }
     }
 }
 
-// Shown on the guest's page: how to reach it.
+// Shown on the guest's page: how to reach it, both ways.
 component GuestLinkCard inherits Card {
     border-color: Theme.accent-border;
 
-    // A Rectangle takes its size from a layout child, not from `if`s.
     VerticalLayout {
         padding: Theme.card-padding;
-        if !State.compact: HorizontalLayout {
-            spacing: Theme.space-4;
-            if State.guest-url != "": VerticalLayout {
-                alignment: start;
-                GuestQr { }
-            }
-            GuestLinkDetails {
-                horizontal-stretch: 1;
-            }
+        spacing: Theme.space-4;
+        HintText {
+            label: "Give the guest either address. Both work until you close the link.";
         }
-        if State.compact: VerticalLayout {
-            spacing: Theme.space-3;
-            GuestLinkDetails { }
+        GuestAddress {
+            web: false;
+            url: State.guest-url;
+            qr: State.guest-qr;
+            more-addresses: State.guest-more-addresses;
+        }
+        Divider { }
 
-            if State.guest-url != "": HorizontalLayout {
-                alignment: center;
-                GuestQr {
-                    size: 200px;
-                }
-            }
+        GuestAddress {
+            web: true;
+            url: State.guest-web-url;
+            qr: State.guest-web-qr;
         }
-        VerticalLayout {
-            padding-top: Theme.space-4;
-            spacing: Theme.space-3;
-            Divider { }
+        Divider { }
 
-            GuestUploadSwitch { }
-        }
+        GuestUploadSwitch { }
     }
 }
 
@@ -1125,7 +1123,7 @@ component PhonePeerView inherits Rectangle {
                         spacing: 2px;
                         horizontal-stretch: 1;
                         Text {
-                            text: "Close the browser link";
+                            text: "Close the guest link";
                             color: Theme.text-strong;
                             font-weight: 600;
                         }

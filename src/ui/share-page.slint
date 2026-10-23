@@ -1,7 +1,8 @@
 // Sharing beyond paired peers: Quick share (a flipflop device nearby,
-// without pairing) and browser links (someone without flipflop). Desktop has
+// without pairing) and guest links (someone without flipflop). Desktop has
 // a page for each; phones put both on one page.
 
+import { CheckBox } from "std-widgets.slint";
 import { State, Logic, PeerRow, QuickOffer } from "globals.slint";
 import {
     Theme, Card, HintText, SectionHeader, PageTitle, Avatar, Icon, Icons, Overline,
@@ -190,63 +191,7 @@ component NearbyCard inherits Card {
     }
 }
 
-// One of two choices, as a tappable card.
-component OptionCard inherits Rectangle {
-    in property <string> title;
-    in property <string> subtitle;
-    in property <image> icon;
-    in property <bool> selected;
-    callback clicked;
-
-    // Pairs share the row evenly, whatever their text.
-    horizontal-stretch: 1;
-    preferred-width: 120px;
-    min-width: 0;
-    border-radius: Theme.radius;
-    background: root.selected ? Theme.accent-soft
-        : ta.has-hover ? Theme.card-bg-hover
-        : Theme.inset-bg;
-    border-width: root.selected ? 2px : 1px;
-    border-color: root.selected ? Theme.accent : Theme.border;
-    animate background { duration: 90ms; }
-
-    ta := TouchArea {
-        clicked => { root.clicked(); }
-        mouse-cursor: pointer;
-    }
-
-    VerticalLayout {
-        padding: Theme.space-3;
-        spacing: Theme.space-1;
-        HorizontalLayout {
-            spacing: Theme.space-2;
-            VerticalLayout {
-                alignment: center;
-                Icon {
-                    source: root.icon;
-                    size: 18px;
-                    tint: root.selected ? Theme.accent-text : Theme.text-muted;
-                }
-            }
-            Text {
-                text: root.title;
-                color: Theme.text-strong;
-                font-weight: 650;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-                overflow: elide;
-            }
-        }
-        Text {
-            text: root.subtitle;
-            color: Theme.text-muted;
-            font-size: Theme.font-xs;
-            wrap: word-wrap;
-        }
-    }
-}
-
-// A new browser link: where the other person is, and what it's for.
+// A new browser link: what it offers, and whether they can send to us.
 component LinkCreateCard inherits Card {
     // Has its own "what to send" (desktop); phones share the page's.
     in property <bool> with-composer: true;
@@ -258,62 +203,23 @@ component LinkCreateCard inherits Card {
         padding: Theme.card-padding;
         spacing: Theme.space-3;
 
-        SectionHeader { label: "New browser link"; icon: Icons.globe; }
+        SectionHeader { label: "New guest link"; icon: Icons.globe; }
         HintText { label: "For someone without flipflop: they open the link in any browser, no app needed."; }
 
-        Overline { label: "WHERE ARE THEY?"; }
-        HorizontalLayout {
-            spacing: Theme.space-2;
-            OptionCard {
-                title: "Same Wi-Fi";
-                subtitle: "On this network or your hotspot";
-                icon: Icons.nearby;
-                selected: !State.link-web;
-                clicked => { State.link-web = false; }
-            }
-            OptionCard {
-                title: "Anywhere";
-                subtitle: "Over the internet, end-to-end encrypted";
-                icon: Icons.globe;
-                selected: State.link-web;
-                clicked => { State.link-web = true; }
-            }
-        }
-
-        Overline { label: "WHAT FOR?"; }
-        HorizontalLayout {
-            spacing: Theme.space-2;
-            OptionCard {
-                title: "Send";
-                subtitle: "They download what you add";
-                icon: Icons.arrow-up;
-                selected: !State.link-receive;
-                clicked => { State.link-receive = false; }
-            }
-            OptionCard {
-                title: "Receive";
-                subtitle: "They send you files and text";
-                icon: Icons.arrow-down;
-                selected: State.link-receive;
-                clicked => { State.link-receive = true; }
-            }
-        }
-
-        if !State.link-receive && root.with-composer: VerticalLayout {
+        if root.with-composer: VerticalLayout {
             spacing: Theme.space-3;
             Overline { label: "WHAT TO SEND"; }
             Composer { }
         }
-        if !State.link-receive && !root.with-composer: HintText {
+        if !root.with-composer: HintText {
             label: root.has-content
                 ? "The link offers what's in “What to send” above."
                 : "Add something to “What to send” above first.";
         }
 
-        HintText {
-            label: State.link-receive
-                ? "The page can only send you things. Turn that off, or offer them files, from the link's page."
-                : "The page can only download. Let them send you files too from the link's page.";
+        CheckBox {
+            text: "Let them send you files and text";
+            checked <=> State.link-receive;
         }
 
         HorizontalLayout {
@@ -443,7 +349,7 @@ export component PhoneSharePage inherits Rectangle {
 
             PageTitle {
                 title: "Share";
-                subtitle: "With a device nearby, or anyone through a browser link. Nothing gets paired.";
+                subtitle: "With a device nearby, or anyone through a guest link. Nothing gets paired.";
             }
             if State.quick-incoming.length > 0: IncomingCard { }
             what := WhatToSendCard { }

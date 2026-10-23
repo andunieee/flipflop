@@ -262,11 +262,14 @@ fn show_guest(state: &State<'_>) {
     state.set_guest_url(url.into());
     state.set_guest_qr(slint::Image::from_rgb8(qr));
     state.set_guest_more_addresses(true);
+    let web_url = "https://andunieee.github.io/flipflop/#t=n3rp36io3ncgwvbr7wzq&e=ae9a9cc0cc827c4e764969d70f936f5ba53be4e2280aa2e31cb878c6fb92c947&r=https%3A%2F%2Fuse1-1.relay.n0.iroh.link.%2F";
+    state.set_guest_web_url(web_url.into());
+    state.set_guest_web_qr(slint::Image::from_rgb8(flipflop::qr::render(web_url).expect("qr")));
     state.set_guest_upload(false);
     let link = PeerRow {
         endpoint_id: "browser-n3rp36io".into(),
-        name: "Browser 1".into(),
-        detail: "Safari on iPhone · Same Wi-Fi · download only".into(),
+        name: "Guest 1".into(),
+        detail: "Safari on iPhone · download only".into(),
         online: true,
         guest: true,
         ..Default::default()
@@ -276,9 +279,9 @@ fn show_guest(state: &State<'_>) {
     state.set_peers(model(peers));
     state.set_links(model(vec![link]));
     state.set_selected_id("browser-n3rp36io".into());
-    state.set_selected_name("Browser 1".into());
+    state.set_selected_name("Guest 1".into());
     state.set_selected_initials("".into());
-    state.set_selected_detail("Safari on iPhone · Same Wi-Fi · download only".into());
+    state.set_selected_detail("Safari on iPhone · download only".into());
     state.set_selected_guest(true);
     state.set_visible_transfers(model(vec![TransferRow {
         key: "send-1".into(),
@@ -349,10 +352,8 @@ fn main() {
 
     state.set_page("share-link".into());
     state.set_link_receive(true);
-    state.set_link_web(true);
     render(&window, desktop, &out.join("share-link-receive.ppm"));
     state.set_link_receive(false);
-    state.set_link_web(false);
 
     state.set_page("peer".into());
     state.set_toast_text("Files from my-phone saved".into());
@@ -368,16 +369,11 @@ fn main() {
 
     show_guest(&state);
     render(&window, desktop, &out.join("guest.ppm"));
-    let web_url = "https://andunieee.github.io/flipflop/#t=n3rp36io3ncgwvbr7wzq&e=ae9a9cc0cc827c4e764969d70f936f5ba53be4e2280aa2e31cb878c6fb92c947&r=https%3A%2F%2Fuse1-1.relay.n0.iroh.link.%2F";
-    state.set_guest_web(true);
     state.set_guest_upload(true);
-    state.set_guest_url(web_url.into());
-    state.set_guest_qr(slint::Image::from_rgb8(flipflop::qr::render(web_url).expect("qr")));
-    state.set_guest_more_addresses(false);
-    render(&window, desktop, &out.join("guest-web.ppm"));
-    state.set_guest_web(false);
+    render(&window, desktop, &out.join("guest-upload.ppm"));
     show_guest(&state);
     state.set_guest_url("".into());
+    state.set_guest_web_url("".into());
     state.set_guest_more_addresses(false);
     render(&window, desktop, &out.join("guest-no-network.ppm"));
     state.set_selected_guest(false);
