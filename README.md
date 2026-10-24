@@ -8,6 +8,13 @@ Rust + Slint peer-to-peer app (desktop and Android). Peers connect with [iroh](h
 - **BLE transport**: [`iroh-ble-transport`](https://crates.io/crates/iroh-ble-transport) adds Bluetooth LE as an iroh network path next to IP and relay, so connections and chat can run over Bluetooth when there is no network. It only advertises a 12-byte key prefix, which is why discovery above is kept. It is experimental. On Android the transport is added when the endpoint is bound, so the Bluetooth permission is requested at start-up; if it is denied the transport stays off until the next launch.
 - **Name**: generated as `<hostname or model> (<os>)`, editable in the UI, persisted.
 
+## Contacts and groups
+
+- **Contacts**: every peer you connect to (or that connects to you) is saved with its public key and name. Saved contacts reconnect automatically, with backoff, and immediately when they show up on the LAN or over BLE. You can rename them locally (the peer's own name stays visible, dimmed) or remove them. A removed contact that keeps dialing you is still accepted but is not saved again; connecting to them yourself saves them again.
+- **Groups**: create a group, then add contacts. Each gets an invite and must accept. If they are offline, the invite is sent when they next connect. Declining is remembered per `(inviter, group)`: repeat invites for that pair are not shown (the inviter is quietly told no again), invites from other peers or to other groups still are.
+- **Group names** are haikus generated from the group's random id; you can set a local alias, and the haiku stays shown dimmed beneath it.
+- State lives in `state.json` next to the secret key.
+
 ## Run
 
     cargo run                      # desktop

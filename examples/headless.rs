@@ -11,10 +11,11 @@ async fn main() -> anyhow::Result<()> {
     let core = Core::start(&dir, true, |event| match event {
         Event::Peers(peers) => {
             for p in peers {
-                println!("peer {} {:?} lan={} ble={} connected={}", p.id, p.name, p.lan, p.ble, p.connected);
+                println!("peer {} {:?} alias={:?} saved={} lan={} ble={} connected={}", p.id, p.name, p.alias, p.saved, p.lan, p.ble, p.connected);
             }
             println!("--");
         }
+        Event::Groups(v) => println!("groups {} invites {}", v.groups.len(), v.invites.len()),
         Event::Ticket(t) => println!("ticket {t}"),
         Event::Name(n) => println!("name {n:?}"),
         Event::Message { peer, mine, text } => println!("msg {} {} {text:?}", peer.fmt_short(), if mine { "->" } else { "<-" }),

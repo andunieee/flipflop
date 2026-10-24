@@ -2,10 +2,43 @@ import { Button, LineEdit, ListView, Palette, ScrollView, VerticalBox } from "st
 
 export struct PeerItem {
     id: string,
-    name: string,
+    /// Alias if set, else the peer's own name.
+    title: string,
+    /// The peer's own name, shown dimmed when an alias hides it.
+    subtitle: string,
+    alias: string,
+    short: string,
     lan: bool,
     ble: bool,
     connected: bool,
+    saved: bool,
+}
+
+export struct GroupItem {
+    id: string,
+    title: string,
+    /// The haiku, shown dimmed when an alias replaces it as the title.
+    subtitle: string,
+    summary: string,
+}
+
+export struct InviteItem {
+    inviter-id: string,
+    group-id: string,
+    inviter-name: string,
+    group-title: string,
+}
+
+export struct MemberItem {
+    name: string,
+    status: string,
+    /// 0 joined, 1 invited, 2 waiting for them to be online, 3 declined
+    kind: int,
+}
+
+export struct CandidateItem {
+    id: string,
+    name: string,
 }
 
 export struct ChatLine {
@@ -65,6 +98,18 @@ export component MainWindow inherits Window {
     in property <string> status;
     in property <string> ble-status;
     in property <[PeerItem]> peers;
+    in property <[GroupItem]> groups;
+    in property <[InviteItem]> invites;
+    in-out property <string> open-group;
+    in property <string> group-title;
+    in property <string> group-haiku;
+    in property <string> group-alias;
+    in property <[MemberItem]> members;
+    in property <[CandidateItem]> candidates;
+    in-out property <string> edit-kind;
+    in-out property <string> edit-id;
+    in-out property <string> edit-original;
+    in-out property <string> edit-text;
     in property <image> qr;
     in property <string> ticket;
     in property <[ChatLine]> chat;
@@ -82,7 +127,14 @@ export component MainWindow inherits Window {
 
     callback rename(string);
     callback connect(string);
-    callback disconnect(string);
+    callback new-group();
+    callback open-group-id(string);
+    callback close-group();
+    callback add-to-group(string, string);
+    callback accept-invite(string, string);
+    callback reject-invite(string, string);
+    callback save-edit(string, string, string);
+    callback delete-edit(string, string);
     callback open-chat(string);
     callback close-chat();
     callback send(string);
@@ -204,22 +256,28 @@ export component MainWindow inherits Window {
                 spacing: 4px;
                 height: 40px;
                 Tab {
-                    text: "Nearby";
+                    text: "Peers";
                     active: root.tab == 0;
                     clicked => { root.tab = 0; }
                 }
                 Tab {
-                    text: "Add by QR";
+                    text: "Groups" + (root.invites.length > 0 ? " (" + root.invites.length + ")" : "");
                     active: root.tab == 1;
                     clicked => { root.tab = 1; }
                 }
+                Tab {
+                    text: "Add by QR";
+                    active: root.tab == 2;
+                    clicked => { root.tab = 2; }
+                }
             }
 
+            // ---- Peers ----
             if root.tab == 0: VerticalLayout {
                 spacing: 6px;
                 vertical-stretch: 1;
                 if root.peers.length == 0: Text {
-                    text: "No one around yet.\nOther flipflop devices on this network or in Bluetooth range show up here.";
+                    text: "No one around yet.\nOther flipflop devices on this network or in Bluetooth range show up here. Peers you connect to are saved and reconnect automatically.";
                     wrap: word-wrap;
                     horizontal-alignment: center;
                     opacity: 0.7;
@@ -229,7 +287,7 @@ export component MainWindow inherits Window {
                 if root.peers.length > 0: ListView {
                     vertical-stretch: 1;
                     for peer in root.peers: Rectangle {
-                        height: 64px;
+                        height: 72px;
                         HorizontalLayout {
                             padding-top: 6px;
                             padding-bottom: 6px;
@@ -237,10 +295,16 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 alignment: center;
-                                spacing: 4px;
+                                spacing: 3px;
                                 Text {
-                                    text: peer.name;
+                                    text: peer.title;
                                     font-size: 16px;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: (peer.subtitle != "" ? peer.subtitle + " · " : "") + peer.short;
+                                    font-size: 11px;
+                                    opacity: 0.55;
                                     overflow: elide;
                                 }
                                 HorizontalLayout {
@@ -249,6 +313,10 @@ export component MainWindow inherits Window {
                                     if peer.connected: Badge {
                                         text: "connected";
                                         tint: #22c55e;
+                                    }
+                                    if peer.saved && !peer.connected: Badge {
+                                        text: "offline";
+                                        tint: #6b7280;
                                     }
                                     if peer.lan: Badge { text: "LAN"; }
                                     if peer.ble: Badge {
@@ -262,21 +330,204 @@ export component MainWindow inherits Window {
                                 primary: true;
                                 clicked => { root.open-chat(peer.id); }
                             }
-                            if peer.connected: Button {
-                                text: "Drop";
-                                clicked => { root.disconnect(peer.id); }
-                            }
                             if !peer.connected: Button {
                                 text: "Connect";
-                                primary: true;
+                                primary: !peer.saved;
                                 clicked => { root.connect(peer.id); }
+                            }
+                            if peer.saved: Button {
+                                text: "Edit";
+                                clicked => {
+                                    root.edit-kind = "peer";
+                                    root.edit-id = peer.id;
+                                    root.edit-original = peer.subtitle != "" ? peer.subtitle : peer.title;
+                                    root.edit-text = peer.alias;
+                                }
                             }
                         }
                     }
                 }
             }
 
-            if root.tab == 1: ScrollView {
+            // ---- Groups: list ----
+            if root.tab == 1 && root.open-group == "": VerticalLayout {
+                spacing: 8px;
+                vertical-stretch: 1;
+                Button {
+                    text: "New group";
+                    primary: true;
+                    clicked => { root.new-group(); }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                    for invite in root.invites: Rectangle {
+                        height: 96px;
+                        background: #3b82f6.with-alpha(0.12);
+                        border-radius: 8px;
+                        VerticalLayout {
+                            padding: 8px;
+                            spacing: 6px;
+                            Text {
+                                text: invite.inviter-name + " invites you to join";
+                                font-size: 12px;
+                                opacity: 0.8;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: invite.group-title;
+                                font-size: 14px;
+                                wrap: word-wrap;
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Button {
+                                    text: "Accept";
+                                    primary: true;
+                                    clicked => { root.accept-invite(invite.inviter-id, invite.group-id); }
+                                }
+                                Button {
+                                    text: "Decline";
+                                    clicked => { root.reject-invite(invite.inviter-id, invite.group-id); }
+                                }
+                            }
+                        }
+                    }
+                    for group in root.groups: Rectangle {
+                        height: group.subtitle != "" ? 84px : 72px;
+                        VerticalLayout {
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            spacing: 3px;
+                            alignment: center;
+                            Text {
+                                text: group.title;
+                                font-size: 15px;
+                                wrap: word-wrap;
+                            }
+                            if group.subtitle != "": Text {
+                                text: group.subtitle;
+                                font-size: 11px;
+                                opacity: 0.55;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: group.summary;
+                                font-size: 11px;
+                                opacity: 0.7;
+                            }
+                        }
+                        TouchArea {
+                            clicked => { root.open-group-id(group.id); }
+                        }
+                    }
+                                    }
+                }
+                if root.groups.length == 0 && root.invites.length == 0: Text {
+                    text: "No groups yet. Create one, then add peers from your contacts; they get an invite and choose whether to join.";
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                    opacity: 0.7;
+                }
+            }
+
+            // ---- Groups: one group ----
+            if root.tab == 1 && root.open-group != "": VerticalLayout {
+                spacing: 8px;
+                vertical-stretch: 1;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: "‹ Back";
+                        clicked => { root.close-group(); }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: root.group-title;
+                            font-size: 15px;
+                            font-weight: 700;
+                            wrap: word-wrap;
+                        }
+                        if root.group-alias != "": Text {
+                            text: root.group-haiku;
+                            font-size: 11px;
+                            opacity: 0.55;
+                            wrap: word-wrap;
+                        }
+                    }
+                    Button {
+                        text: "Edit";
+                        clicked => {
+                            root.edit-kind = "group";
+                            root.edit-id = root.open-group;
+                            root.edit-original = root.group-haiku;
+                            root.edit-text = root.group-alias;
+                        }
+                    }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                    for member in root.members: Rectangle {
+                        height: 44px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: member.name;
+                                font-size: 15px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Badge {
+                                y: (parent.height - self.height) / 2;
+                                text: member.status;
+                                tint: member.kind == 0 ? #22c55e : member.kind == 1 ? #3b82f6 : member.kind == 2 ? #f59e0b : #ef4444;
+                            }
+                        }
+                    }
+                    if root.candidates.length > 0: Text {
+                        text: "Add from your contacts";
+                        font-size: 12px;
+                        opacity: 0.7;
+                        height: 36px;
+                        vertical-alignment: bottom;
+                    }
+                    for c in root.candidates: Rectangle {
+                        height: 48px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+                            Text {
+                                text: c.name;
+                                font-size: 15px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Button {
+                                text: "Add";
+                                clicked => { root.add-to-group(root.open-group, c.id); }
+                            }
+                        }
+                    }
+                                    }
+                }
+                if root.members.length == 0 && root.candidates.length == 0: Text {
+                    text: "Nobody here yet, and no contacts to add. Connect to a peer first.";
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                    opacity: 0.7;
+                }
+            }
+
+            // ---- Add by QR ----
+            if root.tab == 2: ScrollView {
                 vertical-stretch: 1;
                 VerticalLayout {
                     spacing: 10px;
@@ -337,6 +588,68 @@ export component MainWindow inherits Window {
             font-size: 11px;
             opacity: 0.6;
             overflow: elide;
+        }
+    }
+
+    if root.edit-kind != "": Rectangle {
+        background: #000000.with-alpha(0.55);
+        TouchArea {
+            clicked => { root.edit-kind = ""; }
+        }
+        Rectangle {
+            width: min(parent.width - 32px, 380px);
+            height: card.preferred-height + 24px;
+            y: root.safe-area-insets.top + 80px;
+            border-radius: 12px;
+            background: Palette.background;
+            border-width: 1px;
+            border-color: Palette.foreground.with-alpha(0.25);
+            TouchArea { }
+            card := VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Text {
+                    text: root.edit-kind == "peer" ? "Rename contact" : "Rename group";
+                    font-size: 16px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: root.edit-original;
+                    font-size: 12px;
+                    opacity: 0.55;
+                    wrap: word-wrap;
+                }
+                LineEdit {
+                    text <=> root.edit-text;
+                    placeholder-text: "Local name (empty restores the original)";
+                    accepted(t) => {
+                        root.save-edit(root.edit-kind, root.edit-id, t);
+                        root.edit-kind = "";
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: "Save";
+                        primary: true;
+                        clicked => {
+                            root.save-edit(root.edit-kind, root.edit-id, root.edit-text);
+                            root.edit-kind = "";
+                        }
+                    }
+                    Button {
+                        text: "Cancel";
+                        clicked => { root.edit-kind = ""; }
+                    }
+                    Button {
+                        text: root.edit-kind == "peer" ? "Remove" : "Delete";
+                        clicked => {
+                            root.delete-edit(root.edit-kind, root.edit-id);
+                            root.edit-kind = "";
+                        }
+                    }
+                }
+            }
         }
     }
 }
