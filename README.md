@@ -28,7 +28,7 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
 
 ## CLI
 
-`flipflop-cli` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop-cli`), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process can use a `--dir` at a time. `serve` keeps a node running (downloading, serving files) so offers stay available.
+`flipflop-cli` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process can use a `--dir` at a time (the GUI must be closed to run the CLI, or give one of them its own `FLIPFLOP_DIR`). `serve` keeps a node running (downloading, serving files) so offers stay available.
 
     flipflop-cli id                                  # id, name, ticket
     flipflop-cli peers                               # nearby peers and contacts

@@ -130,6 +130,8 @@ struct PeerEntry {
 }
 
 struct Inner {
+    /// Exclusive lock on the data dir, held for the life of the node.
+    dir_lock: std::fs::File,
     endpoint: Endpoint,
     ble_transport: Option<Arc<BleTransport>>,
     ble_transport_status: String,
@@ -160,6 +162,11 @@ impl Core {
         ble_transport: bool,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Core> {
+        std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
+        let dir_lock = std::fs::File::create(data_dir.join("lock")).context("opening lock file")?;
+        dir_lock.try_lock().map_err(|_| {
+            anyhow!("{} is in use by another flipflop (GUI or CLI); stop it, or set FLIPFLOP_DIR for a separate identity", data_dir.display())
+        })?;
         let settings = Settings::load(data_dir);
         let secret_key = settings.secret_key.clone();
         let name = settings.name.clone();
@@ -199,6 +206,7 @@ impl Core {
         let endpoint = builder.bind().await.context("binding iroh endpoint")?;
 
         let core = Core(Arc::new(Inner {
+            dir_lock: dir_lock,
             endpoint,
             ble_transport: ble,
             ble_transport_status,
@@ -987,5 +995,6 @@ impl Core {
     pub async fn shutdown(&self) {
         self.save_docs();
         self.0.endpoint.close().await;
+        let _ = self.0.dir_lock.unlock();
     }
 }
