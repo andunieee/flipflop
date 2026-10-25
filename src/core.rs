@@ -109,6 +109,8 @@ pub enum Event {
     Message { peer: EndpointId, mine: bool, text: String },
     /// The shared content of a group changed (files, texts, scratchpad, members, transfer progress).
     Group(GroupView),
+    /// What is new in each group since the user last looked (sent when it changes).
+    Home(Vec<Unseen>),
     Notice(String),
 }
 
@@ -326,6 +328,7 @@ impl Core {
         self.emit(Event::Peers(peers));
         self.emit(Event::Groups(groups));
         self.refresh_group_views();
+        self.emit_home();
     }
 
     pub fn peers(&self) -> Vec<Peer> {

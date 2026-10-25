@@ -108,6 +108,8 @@ pub(super) struct Sharing {
     shown: Mutex<HashMap<String, GroupView>>,
     /// Per group: the scratchpad text (hashed) as of our own last edit, which is not news to us.
     pub(super) own_pad: Mutex<HashMap<String, String>>,
+    /// The news last sent to the UI.
+    pub(super) home: Mutex<Vec<super::Unseen>>,
 }
 
 impl Sharing {
@@ -126,6 +128,7 @@ impl Sharing {
             download_dir: Mutex::new(download_dir),
             shown: Mutex::default(),
             own_pad: Mutex::default(),
+            home: Mutex::default(),
         }
     }
 
@@ -356,6 +359,7 @@ impl Core {
     fn publish_group(&self, gid: &str, scratch_local: bool) {
         let _ordered = self.0.publish_lock.lock().unwrap();
         self.emit_group(gid, scratch_local, true);
+        self.emit_home();
     }
 
     /// Emit a group's view if it differs from the last one sent (or `force`). The caller holds
@@ -390,6 +394,8 @@ impl Core {
         for gid in ids {
             self.emit_group(&gid, false, true);
         }
+        self.0.sharing.home.lock().unwrap().clear();
+        self.emit_home();
     }
 
     // ---- sync -------------------------------------------------------------------------
