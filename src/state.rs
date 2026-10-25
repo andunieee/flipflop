@@ -12,6 +12,9 @@ pub struct Contact {
     pub name: Option<String>,
     /// Local rename.
     pub alias: Option<String>,
+    /// We chose to pair with this peer (the "Add a peer" flow, or "Pair" in the peers menu).
+    #[serde(default)]
+    pub paired: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +46,23 @@ pub struct Group {
     /// Stop sharing our files once every member has downloaded them.
     #[serde(default)]
     pub auto_stop: bool,
+    /// The implied group of a pair of devices that paired with each other: the other device's id.
+    /// Its id derives from both device ids, and it is not listed among the groups.
+    #[serde(default)]
+    pub with: Option<String>,
+    /// What the user had seen of this group the last time they looked.
+    #[serde(default)]
+    pub seen: Seen,
+}
+
+/// The state of a group at the last look, to tell what is new since.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Seen {
+    pub files: Vec<String>,
+    pub texts: Vec<String>,
+    /// blake3 of the scratchpad text.
+    pub scratch: String,
+    pub members: Vec<String>,
 }
 
 fn yes() -> bool {
@@ -51,7 +71,7 @@ fn yes() -> bool {
 
 impl Group {
     pub fn new(id: String, members: Vec<Member>) -> Group {
-        Group { id, alias: None, members, auto_download: true, auto_stop: false }
+        Group { id, alias: None, members, auto_download: true, auto_stop: false, with: None, seen: Seen::default() }
     }
 }
 
@@ -93,6 +113,9 @@ pub struct State {
     /// them again; connecting to them ourselves does.
     #[serde(default)]
     pub forgotten: Vec<String>,
+    /// Peers that told us they paired with us.
+    #[serde(default)]
+    pub paired_us: Vec<String>,
     #[serde(default)]
     pub shares: Vec<Share>,
     /// Files we downloaded: where each one went.
