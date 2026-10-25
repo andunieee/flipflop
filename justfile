@@ -9,7 +9,7 @@ default:
 
 # run desktop app
 desktop *cargs:
-    cargo run -- {{cargs}}
+    cargo run --bin=flipflop -- {{cargs}}
 
 # build desktop (debug)
 build:
@@ -19,9 +19,9 @@ build:
 test:
     cargo test
 
-# headless CLI node for debugging
-headless *cargs:
-    cargo run --example headless -- {{cargs}}
+# command line client
+cli *cargs:
+    cargo run --bin flipflop-cli -- {{cargs}}
 
 # --- Android ---
 # wraps ./android/build.sh (cargo-ndk + gradle). Needs NDK 27, Android SDK, gradle.

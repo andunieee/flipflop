@@ -21,9 +21,21 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.provider.OpenableColumns;
+import android.webkit.MimeTypeMap;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -35,6 +47,13 @@ import android.util.Log;
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
 
+import org.json.JSONArray;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -61,6 +80,7 @@ public class FlipflopActivity extends NativeActivity {
     static final long RETRY_MS = 5_000;
     static final long LOST_MS = 45_000;
     static final int REQ_BLE = 1;
+    static final int REQ_PICK = 2;
 
     static {
         System.loadLibrary("flipflop");
@@ -68,12 +88,15 @@ public class FlipflopActivity extends NativeActivity {
 
     // implemented in src/platform.rs
     private static native void nativeQrScanned(String text);
+    private static native void nativeFilePicked(String kind, String path);
     private static native void nativeBlePeer(String address, String json);
     private static native void nativeBleLost(String address);
     private static native void nativeBleStatus(String text);
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private WifiManager.MulticastLock multicastLock;
+
+    private String pickKind = "file";
 
     private volatile byte[] payload = new byte[0];
     private boolean bleWanted = false;
@@ -94,6 +117,14 @@ public class FlipflopActivity extends NativeActivity {
             multicastLock.acquire();
         }
         super.onCreate(savedInstanceState);
+        // The app follows the system's light/dark choice; keep the system bar icons readable on it.
+        boolean night = (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        if (!night && Build.VERSION.SDK_INT >= 23) {
+            int flags = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= 26) flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
     }
 
     @Override
@@ -117,12 +148,172 @@ public class FlipflopActivity extends NativeActivity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQ_PICK) {
+            if (resultCode == RESULT_OK && data != null) stagePicked(data, pickKind);
+            return;
+        }
         IntentResult result = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
         if (result != null) {
             if (result.getContents() != null) nativeQrScanned(result.getContents());
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    // ---- file pickers, clipboard, links, apps, downloads ----------------------------------
+
+    /** Called from Rust: "file" picks anything, "media" photos and videos. */
+    public void pickFiles(String kind) {
+        runOnUiThread(() -> {
+            pickKind = kind;
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            intent.setType("*/*");
+            if ("media".equals(kind)) {
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
+            }
+            startActivityForResult(intent, REQ_PICK);
+        });
+    }
+
+    /** Copy what the user picked into app storage (the offerer serves it from there) and tell Rust. */
+    private void stagePicked(Intent data, String kind) {
+        List<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) {
+            for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        new Thread(() -> {
+            for (Uri uri : uris) {
+                try {
+                    String name = displayName(uri);
+                    File dir = new File(getFilesDir(), "staged/" + System.nanoTime());
+                    if (!dir.mkdirs()) continue;
+                    File out = new File(dir, name);
+                    try (InputStream in = getContentResolver().openInputStream(uri);
+                         OutputStream os = new FileOutputStream(out)) {
+                        copy(in, os);
+                    }
+                    nativeFilePicked(kind, out.getAbsolutePath());
+                } catch (Exception e) {
+                    Log.w(TAG, "could not read " + uri, e);
+                }
+            }
+        }, "flipflop-stage").start();
+    }
+
+    private String displayName(Uri uri) {
+        String name = null;
+        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) name = c.getString(0);
+        } catch (Exception ignored) {
+        }
+        if (name == null || name.isEmpty()) name = uri.getLastPathSegment();
+        if (name == null || name.isEmpty()) name = "file";
+        return name.replace('/', '_');
+    }
+
+    private static void copy(InputStream in, OutputStream out) throws java.io.IOException {
+        byte[] buf = new byte[64 * 1024];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+    }
+
+    /** Called from Rust: JSON array of [apk path, label, detail] for every launchable app. */
+    public String listApps() {
+        PackageManager pm = getPackageManager();
+        List<String[]> apps = new ArrayList<>();
+        for (ApplicationInfo info : pm.getInstalledApplications(0)) {
+            if (pm.getLaunchIntentForPackage(info.packageName) == null) continue;
+            String version = "";
+            try {
+                PackageInfo pi = pm.getPackageInfo(info.packageName, 0);
+                if (pi.versionName != null) version = " · " + pi.versionName;
+            } catch (Exception ignored) {
+            }
+            boolean split = info.splitSourceDirs != null && info.splitSourceDirs.length > 0;
+            apps.add(new String[]{info.sourceDir, String.valueOf(pm.getApplicationLabel(info)),
+                    info.packageName + version + (split ? " · split APK, may not install alone" : "")});
+        }
+        apps.sort((a, b) -> a[1].compareToIgnoreCase(b[1]));
+        JSONArray out = new JSONArray();
+        for (String[] a : apps) {
+            JSONArray row = new JSONArray();
+            for (String f : a) row.put(f);
+            out.put(row);
+        }
+        return out.toString();
+    }
+
+    /** Called from Rust. */
+    public void copyText(String text) {
+        runOnUiThread(() -> {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("flipflop", text));
+        });
+    }
+
+    /** Called from Rust. */
+    public String pasteText() {
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null || !cm.hasPrimaryClip() || cm.getPrimaryClip().getItemCount() == 0) return "";
+        CharSequence text = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+        return text == null ? "" : text.toString();
+    }
+
+    /** Called from Rust. */
+    public void openUrl(String url) {
+        runOnUiThread(() -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (Exception e) {
+                Log.w(TAG, "no app for " + url, e);
+            }
+        });
+    }
+
+    /**
+     * Called from Rust when a download finished in app storage: move it to the public
+     * Download/flipflop folder. Returns the file's new location, or "" if it stays where it is.
+     */
+    public String saveToDownloads(String path) {
+        File src = new File(path);
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                String mime = MimeTypeMap.getSingleton()
+                        .getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(Uri.encode(src.getName())));
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.Downloads.DISPLAY_NAME, src.getName());
+                values.put(MediaStore.Downloads.MIME_TYPE, mime == null ? "application/octet-stream" : mime);
+                values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/flipflop");
+                ContentResolver cr = getContentResolver();
+                Uri uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) return "";
+                try (InputStream in = new FileInputStream(src); OutputStream out = cr.openOutputStream(uri)) {
+                    copy(in, out);
+                }
+                String name = src.getName();
+                try (Cursor c = cr.query(uri, new String[]{MediaStore.Downloads.DISPLAY_NAME}, null, null, null)) {
+                    if (c != null && c.moveToFirst()) name = c.getString(0);
+                }
+                src.delete();
+                return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                        .getAbsolutePath() + "/flipflop/" + name;
+            }
+            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "flipflop");
+            if (!dir.isDirectory() && !dir.mkdirs()) return "";
+            File out = new File(dir, src.getName());
+            try (InputStream in = new FileInputStream(src); OutputStream os = new FileOutputStream(out)) {
+                copy(in, os);
+            }
+            src.delete();
+            return out.getAbsolutePath();
+        } catch (Exception e) {
+            Log.w(TAG, "could not save " + path + " to Downloads", e);
+            return "";
+        }
     }
 
     // ---- BLE: lifecycle & permissions -----------------------------------------------------

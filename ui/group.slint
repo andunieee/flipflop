@@ -1,0 +1,510 @@
+import {
+    State, Logic, Theme, Icons, Icon, IconTile, Card, Badge, Avatar, Dot, Overline, HintText, ProgressBar,
+    PrimaryButton, SecondaryButton, GhostButton, DangerButton, IconButton, ToggleRow, TabStrip, Area,
+    PadEditor, ScrollView, FileRow, TextRow, MemberRow, CandidateRow,
+} from "components.slint";
+
+component FileCard inherits Card {
+    in property <FileRow> f;
+
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-2;
+
+        HorizontalLayout {
+            spacing: Theme.space-3;
+            VerticalLayout {
+                alignment: start;
+                IconTile {
+                    size: 40px;
+                    icon: root.f.kind == 1 ? Icons.image : root.f.kind == 2 ? Icons.apps : Icons.file;
+                    tint: root.f.stopped ? Theme.chip-bg : Theme.accent-soft;
+                    ink: root.f.stopped ? Theme.text-faint : Theme.accent-text;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                Text {
+                    text: root.f.name;
+                    font-size: Theme.font-md;
+                    font-weight: 650;
+                    color: root.f.stopped ? Theme.text-muted : Theme.text-strong;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.f.size + " · " + root.f.meta;
+                    font-size: Theme.font-sm;
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                }
+                if root.f.audience != "": Text {
+                    text: root.f.audience;
+                    font-size: Theme.font-sm;
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if root.f.downloading: VerticalLayout {
+            spacing: 4px;
+            ProgressBar { value: root.f.progress; }
+            Text {
+                text: root.f.progress-label;
+                font-size: Theme.font-xs;
+                color: Theme.text-faint;
+            }
+        }
+        if root.f.error != "" && !root.f.downloading: Text {
+            text: root.f.error;
+            font-size: Theme.font-sm;
+            color: Theme.error;
+            wrap: word-wrap;
+        }
+        if root.f.saved-to != "": Text {
+            text: "Saved to " + root.f.saved-to;
+            font-size: Theme.font-xs;
+            color: Theme.text-faint;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            alignment: space-between;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                VerticalLayout {
+                    alignment: center;
+                    if root.f.stopped: Badge {
+                        label: "Not shared any more";
+                        tone: "muted";
+                    }
+                    if !root.f.stopped && root.f.mine: Badge {
+                        label: "Sharing";
+                        tone: "active";
+                    }
+                    if !root.f.stopped && !root.f.mine && root.f.have: Badge {
+                        label: "Downloaded";
+                        tone: "ok";
+                    }
+                    if !root.f.stopped && !root.f.mine && !root.f.have && !root.f.downloading && !root.f.can-download: Badge {
+                        label: "Sender offline";
+                        tone: "warn";
+                    }
+                    if root.f.downloading: Badge {
+                        label: "Downloading";
+                        tone: "active";
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-2;
+                if root.f.can-download: PrimaryButton {
+                    label: root.f.error != "" ? "Retry" : "Download";
+                    icon: Icons.arrow-down;
+                    clicked => { Logic.download-file(root.f.id); }
+                }
+                if root.f.mine && !root.f.stopped: DangerButton {
+                    label: "Stop sharing";
+                    clicked => { Logic.stop-file(root.f.id); }
+                }
+            }
+        }
+    }
+}
+
+component FilesTab inherits ScrollView {
+    VerticalLayout {
+        alignment: start;
+        spacing: Theme.space-3;
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-3;
+                HorizontalLayout {
+                    spacing: Theme.space-3;
+                    IconTile { icon: Icons.share; }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: "Offer something to the group";
+                            font-size: Theme.font-md;
+                            font-weight: 650;
+                            color: Theme.text-strong;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: "Members accept it, or get it automatically.";
+                            font-size: Theme.font-sm;
+                            color: Theme.text-muted;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    PrimaryButton {
+                        label: "File";
+                        icon: Icons.file;
+                        horizontal-stretch: 1;
+                        clicked => { Logic.pick("file"); }
+                    }
+                    SecondaryButton {
+                        label: "Photos & videos";
+                        icon: Icons.image;
+                        horizontal-stretch: 1;
+                        clicked => { Logic.pick("media"); }
+                    }
+                    if State.touch: SecondaryButton {
+                        label: "App";
+                        icon: Icons.apps;
+                        horizontal-stretch: 1;
+                        clicked => { Logic.pick("app"); }
+                    }
+                }
+            }
+        }
+
+        for f in State.files: FileCard { f: f; }
+
+        if State.files.length == 0: HintText {
+            label: "Nothing offered yet. Files you offer stay on your device until a member downloads them.";
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component TextCard inherits Card {
+    in property <TextRow> t;
+
+    VerticalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-2;
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            Text {
+                text: root.t.mine ? root.t.name + " (you)" : root.t.name;
+                font-size: Theme.font-sm;
+                font-weight: 650;
+                color: Theme.accent-text;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.t.time;
+                font-size: Theme.font-xs;
+                color: Theme.text-faint;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: root.t.text;
+            font-size: Theme.font-md;
+            color: Theme.text-strong;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            alignment: end;
+            if root.t.mine: IconButton {
+                icon: Icons.trash;
+                danger: true;
+                clicked => { Logic.delete-text(root.t.id); }
+            }
+            if root.t.is-link: SecondaryButton {
+                label: "Open";
+                icon: Icons.open;
+                clicked => { Logic.open-link(root.t.text); }
+            }
+            SecondaryButton {
+                label: "Copy";
+                icon: Icons.copy;
+                clicked => { Logic.copy-text(root.t.text); }
+            }
+        }
+    }
+}
+
+component TextsTab inherits ScrollView {
+    VerticalLayout {
+        alignment: start;
+        spacing: Theme.space-3;
+
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-2;
+                composer := Area {
+                    placeholder: "A link, a code, anything to paste on the other devices…";
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    alignment: end;
+                    SecondaryButton {
+                        label: "Paste";
+                        icon: Icons.clipboard;
+                        clicked => { composer.text = composer.text + Logic.paste(); }
+                    }
+                    PrimaryButton {
+                        label: "Send";
+                        icon: Icons.send;
+                        enabled: composer.text != "";
+                        clicked => {
+                            Logic.send-text(composer.text);
+                            composer.text = "";
+                        }
+                    }
+                }
+            }
+        }
+
+        for t in State.texts: TextCard { t: t; }
+
+        if State.texts.length == 0: HintText {
+            label: "Nothing here yet. What you send shows up on every member's device, labelled with yours.";
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component PadTab inherits VerticalLayout {
+    spacing: Theme.space-2;
+    property <int> cursor: pad.cursor;
+    property <int> anchor: pad.anchor;
+    property <bool> focused: pad.focused;
+    property <int> move-to: State.pad-set-cursor;
+    changed cursor => { State.pad-cursor = root.cursor; }
+    changed anchor => { State.pad-anchor = root.anchor; }
+    changed focused => { State.pad-focused = root.focused; }
+    changed move-to => {
+        if (root.move-to >= 0) {
+            pad.select(State.pad-anchor-to >= 0 ? State.pad-anchor-to : root.move-to, root.move-to);
+            State.pad-anchor-to = -1;
+            State.pad-set-cursor = -1;
+        }
+    }
+    init => { State.pad-set-cursor = -1; }
+    pad := PadEditor {
+        vertical-stretch: 1;
+        text <=> State.pad-text;
+        edited(t) => { Logic.pad-edited(t); }
+    }
+    HorizontalLayout {
+        spacing: Theme.space-2;
+        alignment: end;
+        SecondaryButton {
+            label: "Copy all";
+            icon: Icons.copy;
+            clicked => { Logic.copy-text(State.pad-text); }
+        }
+        SecondaryButton {
+            label: "Paste";
+            icon: Icons.clipboard;
+            clicked => { Logic.paste-pad(); }
+        }
+    }
+}
+
+component AppsTab inherits ScrollView {
+    VerticalLayout {
+        alignment: start;
+        Card {
+            VerticalLayout {
+                padding: Theme.space-5;
+                spacing: Theme.space-3;
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    IconTile {
+                        icon: Icons.apps;
+                        size: 56px;
+                    }
+                }
+                Text {
+                    text: "Apps are coming";
+                    font-size: Theme.font-lg;
+                    font-weight: 700;
+                    color: Theme.text-strong;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Soon the group will be able to share small WebAssembly apps, run them on every device and show their hypereffect.dev interface right here.";
+                    font-size: Theme.font-md;
+                    color: Theme.text-muted;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+component MemberLine inherits Rectangle {
+    in property <MemberRow> m;
+    height: Theme.control-height + 12px;
+    HorizontalLayout {
+        spacing: Theme.space-3;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                initials: root.m.initials;
+                size: 32px;
+                show-presence: true;
+                online: root.m.online || root.m.me;
+            }
+        }
+        Text {
+            text: root.m.me ? root.m.name + " (you)" : root.m.name;
+            font-size: Theme.font-md;
+            color: Theme.text-strong;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Badge {
+                label: root.m.status;
+                tone: root.m.tone;
+            }
+        }
+    }
+}
+
+component InfoTab inherits ScrollView {
+    VerticalLayout {
+        alignment: start;
+        spacing: Theme.space-3;
+
+        Overline { label: "MEMBERS"; }
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                for m in State.members: MemberLine { m: m; }
+                if State.members.length == 0: HintText { label: "Nobody yet."; }
+            }
+        }
+
+        if State.candidates.length > 0: Overline { label: "INVITE FROM YOUR PEERS"; }
+        if State.candidates.length > 0: Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                for c in State.candidates: Rectangle {
+                    height: Theme.control-height + 12px;
+                    HorizontalLayout {
+                        spacing: Theme.space-3;
+                        Text {
+                            text: c.name;
+                            font-size: Theme.font-md;
+                            color: Theme.text-strong;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            SecondaryButton {
+                                label: "Invite";
+                                clicked => { Logic.add-to-group(State.open-group, c.id); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Overline { label: "ON THIS DEVICE"; }
+        Card {
+            VerticalLayout {
+                padding: Theme.card-padding;
+                spacing: Theme.space-2;
+                ToggleRow {
+                    label: "Download every file automatically";
+                    hint: "New offers from the group are fetched as soon as the sender is reachable.";
+                    checked: State.auto-download;
+                    toggled(v) => { Logic.set-auto-download(v); }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                }
+                ToggleRow {
+                    label: "Stop sharing a file once everybody has it";
+                    hint: "Applies to the files you offer. You can always stop one by hand.";
+                    checked: State.auto-stop;
+                    toggled(v) => { Logic.set-auto-stop(v); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            SecondaryButton {
+                label: "Rename";
+                icon: Icons.edit;
+                clicked => {
+                    State.edit-kind = "group";
+                    State.edit-id = State.open-group;
+                    State.edit-original = State.group-haiku;
+                    State.edit-text = State.group-alias;
+                }
+            }
+        }
+    }
+}
+
+// One open group: header, tabs, and the tab's content.
+export component GroupPage inherits VerticalLayout {
+    spacing: Theme.space-3;
+    padding: Theme.page-padding;
+    padding-bottom: Theme.space-3;
+
+    HorizontalLayout {
+        spacing: Theme.space-2;
+        if State.touch: IconButton {
+            icon: Icons.arrow-left;
+            tint: Theme.text-strong;
+            clicked => { Logic.close-group(); }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: State.group-title;
+                font-size: Theme.font-xl;
+                font-weight: 700;
+                color: Theme.text-strong;
+                overflow: elide;
+            }
+            if State.group-alias != "": Text {
+                text: State.group-haiku;
+                font-size: Theme.font-sm;
+                color: Theme.text-muted;
+                overflow: elide;
+            }
+        }
+        IconButton {
+            icon: Icons.settings;
+            tint: State.group-tab == "info" ? Theme.accent-text : Theme.text-muted;
+            clicked => { State.group-tab = State.group-tab == "info" ? "files" : "info"; }
+        }
+    }
+
+    TabStrip {
+        labels: ["Files", "Texts", "Scratchpad", "Apps"];
+        keys: ["files", "texts", "pad", "apps"];
+        current: State.group-tab;
+        picked(k) => { State.group-tab = k; }
+    }
+
+    if State.group-tab == "files": FilesTab { vertical-stretch: 1; }
+    if State.group-tab == "texts": TextsTab { vertical-stretch: 1; }
+    if State.group-tab == "pad": PadTab { vertical-stretch: 1; }
+    if State.group-tab == "apps": AppsTab { vertical-stretch: 1; }
+    if State.group-tab == "info": InfoTab { vertical-stretch: 1; }
+}

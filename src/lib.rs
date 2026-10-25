@@ -1,6 +1,8 @@
 pub mod app;
 pub mod ble;
 pub mod core;
+pub mod format;
+pub mod groupdoc;
 pub mod haiku;
 pub mod platform;
 pub mod qr;
