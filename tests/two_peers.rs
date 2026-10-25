@@ -187,7 +187,7 @@ async fn group_invites_accept_offline_resend_and_rejection() {
     // --- online invite, accepted ---
     let g1 = a.create_group();
     let haiku = flipflop_haiku(&alog, &g1);
-    assert_eq!(haiku.matches(" / ").count(), 2, "{haiku}");
+    assert_eq!(haiku.split(' ').count(), 2, "{haiku}");
     a.add_to_group(&g1, b.id());
     until("bob sees invite", || blog.lock().unwrap().groups.invites.iter().any(|i| i.group == g1 && i.inviter == a.id() && i.haiku == haiku)).await;
     until("alice marked it sent", || member_state(&alog, &g1, &b) == Some(MemberState::Sent)).await;
