@@ -629,10 +629,6 @@ fn show_group(ui: &AppWindow, shared: &Shared, fresh: bool) {
     state.set_group_alias(info.alias.clone().unwrap_or_default().into());
     state.set_auto_download(info.auto_download);
     state.set_auto_stop(info.auto_stop);
-    state.set_candidates(model(
-        info.candidates.iter().map(|(id, name)| CandidateRow { id: id.to_string().into(), name: name.clone().into() }).collect(),
-    ));
-
     let view = shared.views.get(&info.id);
 
     // Members: who the document lists, then invitees that have not joined.
@@ -672,6 +668,14 @@ fn show_group(ui: &AppWindow, shared: &Shared, fresh: bool) {
             me: false,
         });
     }
+    // Members the document lists (e.g. everyone but the inviter, after accepting) are not candidates.
+    state.set_candidates(model(
+        info.candidates
+            .iter()
+            .filter(|(id, _)| !members.iter().any(|row| row.id.as_str() == id.to_string()))
+            .map(|(id, name)| CandidateRow { id: id.to_string().into(), name: name.clone().into() })
+            .collect(),
+    ));
     state.set_members(model(members));
 
     let Some(view) = view else { return };
