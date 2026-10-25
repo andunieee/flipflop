@@ -113,10 +113,12 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
         });
         let (slot, mirror, weak, handle) = (slot.clone(), mirror.clone(), ui.as_weak(), handle.clone());
         // A picked file is offered to whichever group is open.
-        crate::platform::set_file_handler(move |kind, path| {
+        crate::platform::set_file_handler(move |kind, path, name| {
             let Some(core) = slot.get().cloned() else { return };
             let Some(gid) = open_group_id(&mirror) else { return };
-            offer(&core, &weak, &handle, gid, PathBuf::from(path), None, &kind, true);
+            // A content:// URI is shared where it is; anything else is our own copy.
+            let staged = !path.starts_with("content://");
+            offer(&core, &weak, &handle, gid, PathBuf::from(path), Some(name).filter(|n| !n.is_empty()), &kind, staged);
         });
     }
 
