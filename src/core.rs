@@ -170,8 +170,9 @@ pub struct Core(Arc<Inner>);
 
 impl Core {
     /// Is another process running a node on this data dir?
+    #[cfg(not(target_os = "android"))]
     pub fn dir_in_use(data_dir: &Path) -> bool {
-        match std::fs::File::create(data_dir.join("lock")) {
+        match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(data_dir.join("lock")) {
             Ok(f) => matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
             Err(_) => false,
         }
@@ -186,10 +187,7 @@ impl Core {
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Core> {
         std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
-        let dir_lock = std::fs::File::create(data_dir.join("lock")).context("opening lock file")?;
-        dir_lock.try_lock().map_err(|_| {
-            anyhow!("{} is in use by another flipflop (GUI or CLI); stop it, or set FLIPFLOP_DIR for a separate identity", data_dir.display())
-        })?;
+        let dir_lock = lock_data_dir(data_dir)?;
         let settings = Settings::load(data_dir);
         let secret_key = settings.secret_key.clone();
         let name = settings.name.clone();
@@ -1093,6 +1091,31 @@ fn queue_reply(st: &mut State, peer: &str, group: &str, accept: bool) {
     st.replies.push(Reply { peer: peer.to_string(), group: group.to_string(), accept });
 }
 
+/// Take the data dir's exclusive lock (see [`Core::dir_in_use`]). Android has no second process to
+/// keep out, and its std cannot lock files.
+fn lock_data_dir(data_dir: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
+    let lock_path = data_dir.join("lock");
+    #[allow(unused_mut)]
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock_path).context("opening lock file")?;
+    #[cfg(not(target_os = "android"))]
+    {
+        file.try_lock().map_err(|e| match e {
+            std::fs::TryLockError::WouldBlock => {
+                let owner = std::fs::read_to_string(&lock_path).unwrap_or_default();
+                anyhow!("{} is in use by another flipflop (process {}; GUI or CLI): stop it, or set FLIPFLOP_DIR for a separate identity", data_dir.display(), owner.trim())
+            }
+            std::fs::TryLockError::Error(e) => anyhow!("locking {}: {e}", data_dir.display()),
+        })?;
+        // So that "in use" can say by whom.
+        use std::io::{Seek, Write};
+        let _ = file.set_len(0);
+        let _ = file.rewind();
+        let _ = write!(file, "{}", std::process::id());
+    }
+    Ok(file)
+}
+
 /// The id of the implied group of two devices: the same on both, whoever computes it.
 fn pair_group_id(a: &EndpointId, b: &EndpointId) -> String {
     let (lo, hi) = if a.as_bytes() <= b.as_bytes() { (a, b) } else { (b, a) };
@@ -1135,6 +1158,7 @@ impl Core {
     pub async fn shutdown(&self) {
         self.save_docs();
         self.0.endpoint.close().await;
+        #[cfg(not(target_os = "android"))]
         let _ = self.0.dir_lock.unlock();
     }
 }
