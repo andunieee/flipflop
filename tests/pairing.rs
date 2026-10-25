@@ -147,3 +147,51 @@ async fn unpairing_while_apart_is_announced_on_reconnect() {
     a2.shutdown().await;
     b.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unseen_news_per_group_until_looked_at() {
+    let (a, alog, da) = node("n-alice").await;
+    let (b, blog, _db) = node("n-bob").await;
+    until("alice ticket", || !a.ticket().is_empty()).await;
+    b.connect_ticket(&a.ticket()).await.unwrap();
+    until("alice hears bob", || peer(&alog, &b).is_some_and(|p| p.paired_us)).await;
+    a.pair(b.id());
+    until("implied", || implied(&alog).len() == 1 && implied(&blog).len() == 1).await;
+    let gid = implied(&alog).remove(0);
+    until("both in the doc", || b.group_view(&gid).is_some_and(|v| v.members.len() == 2)).await;
+    a.mark_all_seen();
+    b.mark_all_seen();
+    assert!(b.unseen().is_empty());
+
+    // Alice posts a text, a file and edits the scratchpad.
+    a.send_text(&gid, "first").unwrap();
+    let file = da.path().join("note.txt");
+    std::fs::write(&file, "hi").unwrap();
+    a.offer_file(&gid, file, None, "file", false).await.unwrap();
+    a.set_scratch(&gid, "pad text");
+    until("bob has the news", || {
+        let u = b.unseen();
+        u.len() == 1 && u[0].texts.len() == 1 && u[0].files.len() == 1 && u[0].scratch
+    })
+    .await;
+    let u = b.unseen().remove(0);
+    assert_eq!(u.group, gid);
+    assert_eq!(u.title, "n-alice", "an implied group is named after the other device");
+    assert_eq!(u.files[0].0, "note.txt");
+    assert_eq!(u.texts[0].1, "first");
+    // Alice has no news about her own posts.
+    assert!(a.unseen().is_empty());
+
+    // Looking at the group clears it; only later things are news again.
+    b.mark_seen(&gid);
+    assert!(b.unseen().is_empty());
+    a.send_text(&gid, "second").unwrap();
+    until("only the new text", || {
+        let u = b.unseen();
+        u.len() == 1 && u[0].texts.len() == 1 && u[0].texts[0].1 == "second" && u[0].files.is_empty() && !u[0].scratch
+    })
+    .await;
+
+    b.shutdown().await;
+    a.shutdown().await;
+}

@@ -106,6 +106,8 @@ pub(super) struct Sharing {
     download_dir: Mutex<PathBuf>,
     /// What the UI was last told per group, so unchanged views are not sent again.
     shown: Mutex<HashMap<String, GroupView>>,
+    /// Per group: the scratchpad text (hashed) as of our own last edit, which is not news to us.
+    pub(super) own_pad: Mutex<HashMap<String, String>>,
 }
 
 impl Sharing {
@@ -123,6 +125,7 @@ impl Sharing {
             transfers: Mutex::default(),
             download_dir: Mutex::new(download_dir),
             shown: Mutex::default(),
+            own_pad: Mutex::default(),
         }
     }
 
@@ -278,7 +281,7 @@ impl Core {
         self.has_group(gid).then(|| self.build_view(gid, false))
     }
 
-    fn build_view(&self, gid: &str, scratch_local: bool) -> GroupView {
+    pub(super) fn build_view(&self, gid: &str, scratch_local: bool) -> GroupView {
         let me = self.me();
         let (members, files, texts, scratch) =
             self.with_doc(gid, |d| (d.members(), d.files(), d.texts(), d.scratch()));
@@ -501,6 +504,8 @@ impl Core {
             return;
         }
         if self.with_doc(gid, |d| d.set_scratch(text)) {
+            let now = self.with_doc(gid, |d| d.scratch());
+            self.0.sharing.own_pad.lock().unwrap().insert(gid.to_owned(), super::unseen::hash(&now));
             self.doc_changed(gid, true);
         }
     }

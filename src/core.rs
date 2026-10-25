@@ -3,6 +3,7 @@
 //! subscribes through the event callback.
 
 mod sharing;
+mod unseen;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -33,6 +34,7 @@ use crate::{
 
 pub use crate::state::MemberState;
 pub use sharing::{DocMember, FileView, GroupView, TextView};
+pub use unseen::Unseen;
 
 pub const ALPN: &[u8] = b"flipflop/0";
 const MDNS_SERVICE: &str = "flipflop";
