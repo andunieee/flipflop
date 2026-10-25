@@ -377,6 +377,8 @@ component MemberLine inherits Rectangle {
 }
 
 component InfoTab inherits ScrollView {
+    // Leaving needs a second press.
+    property <bool> confirm-leave: false;
     VerticalLayout {
         alignment: start;
         spacing: Theme.space-3;
@@ -547,6 +549,21 @@ component InfoTab inherits ScrollView {
                     State.edit-text = State.group-alias;
                 }
             }
+            DangerButton {
+                label: root.confirm-leave ? "Really leave? Press again" : "Leave group";
+                icon: Icons.trash;
+                clicked => {
+                    if (root.confirm-leave) {
+                        root.confirm-leave = false;
+                        Logic.delete-edit("group", State.open-group);
+                    } else {
+                        root.confirm-leave = true;
+                    }
+                }
+            }
+        }
+        if !State.group-implied: HintText {
+            label: "Leaving removes the group from this device only. Files you downloaded stay where they are.";
         }
     }
 }
