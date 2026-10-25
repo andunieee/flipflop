@@ -550,7 +550,7 @@ component InfoTab inherits ScrollView {
                 }
             }
             DangerButton {
-                label: root.confirm-leave ? "Really leave? Press again" : "Leave group";
+                label: root.confirm-leave ? "Confirm leave" : "Leave group";
                 icon: Icons.trash;
                 clicked => {
                     if (root.confirm-leave) {
