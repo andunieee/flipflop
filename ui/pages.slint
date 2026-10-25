@@ -1,5 +1,5 @@
 import {
-    State, Logic, Theme, Icons, Icon, IconTile, Card, Badge, Avatar, Overline, HintText, PageTitle,
+    State, Logic, Theme, Icons, Icon, Dot, IconTile, Card, Badge, Overline, HintText, PageTitle,
     PrimaryButton, SecondaryButton, GhostButton, IconButton, Field, ScrollView, PeerRow, GroupRow, InviteRow, HomeRow,
 } from "components.slint";
 
@@ -42,19 +42,15 @@ component HomeCard inherits Card {
     background: ta.pressed ? Theme.chip-bg : ta.has-hover ? Theme.inset-bg : Theme.card-bg;
     animate background { duration: 90ms; }
     ta := TouchArea {
-        clicked => { Logic.open-group(root.item.group-id); }
+        clicked => {
+            Logic.open-group(root.item.group-id);
+            State.group-tab = root.item.tab;
+        }
         mouse-cursor: pointer;
     }
     HorizontalLayout {
         padding: Theme.card-padding;
         spacing: Theme.space-3;
-        VerticalLayout {
-            alignment: center;
-            Avatar {
-                icon: root.item.paired ? Icons.device : Icons.groups;
-                size: 40px;
-            }
-        }
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
@@ -72,6 +68,42 @@ component HomeCard inherits Card {
                 color: Theme.text;
                 wrap: word-wrap;
             }
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                source: Icons.chevron-right;
+                tint: Theme.text-faint;
+            }
+        }
+    }
+}
+
+// A group or paired peer that has someone online right now.
+component OnlineCard inherits Card {
+    in property <string> title;
+    in property <string> group-id;
+    background: ta.pressed ? Theme.chip-bg : ta.has-hover ? Theme.inset-bg : Theme.card-bg;
+    animate background { duration: 90ms; }
+    ta := TouchArea {
+        clicked => { Logic.open-group(root.group-id); }
+        mouse-cursor: pointer;
+    }
+    HorizontalLayout {
+        padding: Theme.card-padding;
+        spacing: Theme.space-3;
+        VerticalLayout {
+            alignment: center;
+            Dot { online: true; }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.title;
+            font-size: Theme.font-lg;
+            font-weight: 650;
+            color: Theme.text-strong;
+            vertical-alignment: center;
+            overflow: elide;
         }
         VerticalLayout {
             alignment: center;
@@ -110,8 +142,14 @@ export component HomePage inherits VerticalLayout {
             alignment: start;
             spacing: Theme.space-3;
             for invite in State.invites: InviteCard { invite: invite; }
+            if State.online.length > 0: Overline { label: "ONLINE NOW"; }
+            for row in State.online: OnlineCard {
+                title: row.title;
+                group-id: row.group-id;
+            }
+            if State.home.length > 0: Overline { label: "NEW"; }
             for item in State.home: HomeCard { item: item; }
-            if State.home.length == 0 && State.invites.length == 0: HintText {
+            if State.home.length == 0 && State.invites.length == 0 && State.online.length == 0: HintText {
                 label: "All caught up. New files, texts and members of your groups show up here.";
                 horizontal-alignment: center;
             }
@@ -131,24 +169,23 @@ component GroupCard inherits Card {
         padding: Theme.card-padding;
         spacing: Theme.space-3;
         VerticalLayout {
-            alignment: center;
-            Avatar {
-                icon: Icons.groups;
-                size: 40px;
-                show-presence: true;
-                online: root.group.online;
-            }
-        }
-        VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
             spacing: 2px;
-            Text {
-                text: root.group.title;
-                font-size: Theme.font-lg;
-                font-weight: 650;
-                color: Theme.text-strong;
-                wrap: word-wrap;
+            HorizontalLayout {
+                spacing: Theme.space-2;
+                VerticalLayout {
+                    alignment: center;
+                    Dot { online: root.group.online; }
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.group.title;
+                    font-size: Theme.font-lg;
+                    font-weight: 650;
+                    color: Theme.text-strong;
+                    wrap: word-wrap;
+                }
             }
             if root.group.subtitle != "": Text {
                 text: root.group.subtitle;
@@ -222,15 +259,6 @@ component PeerCard inherits Card {
         padding: Theme.card-padding;
         spacing: Theme.space-3;
         VerticalLayout {
-            alignment: center;
-            Avatar {
-                initials: root.peer.initials;
-                size: 40px;
-                show-presence: true;
-                online: root.peer.connected;
-            }
-        }
-        VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
             spacing: 3px;
@@ -255,6 +283,10 @@ component PeerCard inherits Card {
                 if root.peer.group-id == "" && root.peer.paired && !root.peer.paired-us: Badge { label: "waiting for them"; tone: "muted"; }
                 if root.peer.connected: Badge { label: "connected"; tone: "ok"; }
                 if root.peer.saved && !root.peer.connected: Badge { label: "offline"; tone: "muted"; }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
                 if root.peer.lan: Badge { label: "LAN"; tone: "active"; }
                 if root.peer.ble: Badge { label: "Bluetooth"; tone: "warn"; }
             }
@@ -294,9 +326,21 @@ export component PeersPage inherits VerticalLayout {
     padding-bottom: Theme.space-3;
     spacing: Theme.space-3;
 
-    PageTitle {
-        title: "Peers";
-        subtitle: "Devices nearby and the ones you saved. Pair with a peer, and when it pairs back you get a page of your own with it.";
+    HorizontalLayout {
+        spacing: Theme.space-3;
+        PageTitle {
+            horizontal-stretch: 1;
+            title: "Peers";
+            subtitle: "Devices nearby and the ones you saved. Pair with a peer, and when it pairs back you get a page of your own with it.";
+        }
+        VerticalLayout {
+            alignment: start;
+            PrimaryButton {
+                label: "Add";
+                icon: Icons.add-peer;
+                clicked => { State.page = "add"; }
+            }
+        }
     }
 
     ScrollView {

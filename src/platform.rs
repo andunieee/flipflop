@@ -112,6 +112,11 @@ mod android {
         call_string("openUrl", url);
     }
 
+    /// Open a downloaded file (in the public Downloads folder) with an app that can show it.
+    pub fn open_file(path: &str) {
+        call_string("openFile", path);
+    }
+
     /// Ask the Activity to show a system picker; `kind` is "file" or "media". The chosen files arrive
     /// through [`set_file_handler`].
     pub fn pick_files(kind: &str) {
@@ -267,6 +272,10 @@ mod desktop {
         if let Err(err) = open::that_detached(url) {
             tracing::warn!("could not open {url}: {err}");
         }
+    }
+
+    pub fn open_file(path: &str) {
+        open_url(path);
     }
 }
 

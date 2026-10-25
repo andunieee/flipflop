@@ -28,6 +28,19 @@ impl Unseen {
         self.files.is_empty() && self.texts.is_empty() && !self.scratch && self.joined.is_empty()
     }
 
+    /// The group tab that shows the first kind of news, in the order of `lines`.
+    pub fn tab(&self) -> &'static str {
+        if !self.files.is_empty() {
+            "files"
+        } else if !self.texts.is_empty() {
+            "texts"
+        } else if self.scratch {
+            "pad"
+        } else {
+            "info"
+        }
+    }
+
     /// One line per kind of news, e.g. "2 new files: a.png, b.pdf".
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![];

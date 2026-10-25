@@ -327,6 +327,7 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
     logic.on_paste(|| crate::platform::paste_text().into());
 
     logic.on_open_link(|url| crate::platform::open_url(url.trim()));
+    logic.on_open_file(|path| crate::platform::open_file(path.as_str()));
 
     logic.on_pad_edited({
         let (slot, mirror) = (slot.clone(), mirror.clone());
@@ -716,6 +717,14 @@ fn show_groups(ui: &AppWindow, shared: &Shared) {
             }
         })
         .collect();
+    let online: Vec<OnlineRow> = shared
+        .peers
+        .iter()
+        .map(peer_row)
+        .filter(|p| p.connected && !p.group_id.is_empty())
+        .map(|p| OnlineRow { group_id: p.group_id, title: p.title })
+        .chain(rows.iter().filter(|g| g.online).map(|g| OnlineRow { group_id: g.id.clone(), title: g.title.clone() }))
+        .collect();
     let invites: Vec<InviteRow> = shared
         .groups
         .invites
@@ -729,6 +738,7 @@ fn show_groups(ui: &AppWindow, shared: &Shared) {
         .collect();
     let state = ui.global::<State>();
     state.set_groups(model(rows));
+    state.set_online(model(online));
     state.set_invites(model(invites));
     state.set_home(model(
         shared
@@ -739,6 +749,7 @@ fn show_groups(ui: &AppWindow, shared: &Shared) {
                 title: n.title.clone().into(),
                 lines: n.lines().join("\n").into(),
                 paired: n.with.is_some(),
+                tab: n.tab().into(),
             })
             .collect(),
     ));

@@ -320,6 +320,34 @@ public class FlipflopActivity extends NativeActivity {
         });
     }
 
+    /** Called from Rust: open a file saved in the public Downloads folder with whatever app handles it. */
+    public void openFile(String path) {
+        runOnUiThread(() -> {
+            try {
+                Uri uri = null;
+                try (Cursor c = getContentResolver().query(MediaStore.Files.getContentUri("external"),
+                        new String[]{MediaStore.Files.FileColumns._ID}, MediaStore.Files.FileColumns.DATA + "=?",
+                        new String[]{path}, null)) {
+                    if (c != null && c.moveToFirst()) {
+                        uri = Uri.withAppendedPath(MediaStore.Files.getContentUri("external"), String.valueOf(c.getLong(0)));
+                    }
+                }
+                if (uri == null) {
+                    Log.w(TAG, "no content URI for " + path);
+                    return;
+                }
+                String mime = MimeTypeMap.getSingleton()
+                        .getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(Uri.encode(new File(path).getName())));
+                Intent view = new Intent(Intent.ACTION_VIEW);
+                view.setDataAndType(uri, mime == null ? "*/*" : mime);
+                view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(Intent.createChooser(view, null));
+            } catch (Exception e) {
+                Log.w(TAG, "could not open " + path, e);
+            }
+        });
+    }
+
     /**
      * Called from Rust when a download finished in app storage: move it to the public
      * Download/flipflop folder. Returns the file's new location, or "" if it stays where it is.

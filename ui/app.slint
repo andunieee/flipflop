@@ -1,6 +1,6 @@
 import { Palette } from "std-widgets.slint";
 import {
-    State, Logic, Theme, Icons, Icon, Avatar, Dot, Overline, Badge, HintText, LogoMark, IconButton,
+    State, Logic, Theme, Icons, Icon, Dot, Overline, Badge, HintText, LogoMark, IconButton,
     PrimaryButton, SecondaryButton, DangerButton, GhostButton, Field, Card, ScrollView, AppRow, GroupRow,
 } from "components.slint";
 import { GroupPage } from "group.slint";
@@ -96,12 +96,7 @@ component GroupButton inherits Rectangle {
         spacing: Theme.space-2 + 2px;
         VerticalLayout {
             alignment: center;
-            Avatar {
-                icon: Icons.groups;
-                size: 26px;
-                show-presence: true;
-                online: root.group.online;
-            }
+            Dot { online: root.group.online; }
         }
         Text {
             text: root.group.title;
@@ -208,6 +203,7 @@ export component AppWindow inherits Window {
     // Some devices report their navigation bar here, so only a tall inset counts as a keyboard.
     property <bool> keyboard-up: root.virtual-keyboard-size.height > 120px;
     property <bool> in-group: State.page == "group";
+    changed width => { State.window-width = self.width; }
     property <string> page: State.page;
     changed page => { Logic.page-changed(self.page); }
 
@@ -459,14 +455,8 @@ export component AppWindow inherits Window {
                     TabButton {
                         label: "Peers";
                         icon: Icons.peers;
-                        active: State.page == "peers" || (State.page == "group" && State.group-implied);
+                        active: State.page == "peers" || State.page == "add" || (State.page == "group" && State.group-implied);
                         clicked => { State.page = "peers"; }
-                    }
-                    TabButton {
-                        label: "Add";
-                        icon: Icons.add-peer;
-                        active: State.page == "add";
-                        clicked => { State.page = "add"; }
                     }
                     TabButton {
                         label: "Settings";
