@@ -64,6 +64,11 @@ pub fn run(data_dir: PathBuf) -> Result<()> {
                 Err(err) => return set_status(&weak, format!("failed to start: {err:#}")),
             };
             let _ = slot.set(core.clone());
+            // `flipflop-cli` hands its commands to us while the window is open.
+            #[cfg(not(target_os = "android"))]
+            if let Err(err) = crate::ipc::serve(&data_dir, core.clone()) {
+                tracing::warn!("command socket: {err:#}");
+            }
             core.publish_groups();
             {
                 let dir = core.download_dir().display().to_string();

@@ -154,6 +154,14 @@ struct Inner {
 pub struct Core(Arc<Inner>);
 
 impl Core {
+    /// Is another process running a node on this data dir?
+    pub fn dir_in_use(data_dir: &Path) -> bool {
+        match std::fs::File::create(data_dir.join("lock")) {
+            Ok(f) => matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+            Err(_) => false,
+        }
+    }
+
     /// Must be called from within a tokio runtime. With `ble_transport`, iroh also gets Bluetooth LE
     /// as a network path (custom transports can only be added at bind time, so on Android the
     /// Bluetooth permission must already be granted).
