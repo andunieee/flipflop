@@ -3,13 +3,13 @@
 //!
 //! Layout (all under the root map):
 //! - `members`: peer id -> device name. Every peer only writes its own entry.
-//! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, downloaded: { peer id -> ts } }
+//! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, downloaded: { peer id -> ts }, hosts: { peer id -> ts } }
 //! - `texts`:   `<millis>-<rand>` -> { from, name, text, ts }
 //! - `scratch`: a text object everyone edits.
 //!
 //! Entry keys start with the creation time, so key order is chronological.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use automerge::{
     ActorId, AutoCommit, AutomergeError, ObjId, ObjType, ROOT, ReadDoc, Value, sync,
@@ -33,6 +33,8 @@ pub struct FileOffer {
     pub stopped: bool,
     /// Peer id -> when they finished downloading.
     pub downloaded: BTreeMap<String, i64>,
+    /// Peers (other than the offerer) that also serve the bytes. Each only writes its own entry.
+    pub hosts: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,6 +161,7 @@ impl GroupDoc {
         self.doc.put(&f, "ts", now_ms()).unwrap();
         self.doc.put(&f, "stopped", false).unwrap();
         self.doc.put_object(&f, "downloaded", ObjType::Map).unwrap();
+        self.doc.put_object(&f, "hosts", ObjType::Map).unwrap();
         id
     }
 
@@ -183,6 +186,17 @@ impl GroupDoc {
         }
     }
 
+    /// Start or stop serving a file's bytes as `me`.
+    pub fn set_hosting(&mut self, id: &str, me: &str, on: bool) {
+        let Some(f) = self.file_obj(id) else { return };
+        let hosts = match self.doc.get(&f, "hosts") {
+            Ok(Some((Value::Object(_), h))) => h,
+            _ if on => self.doc.put_object(&f, "hosts", ObjType::Map).unwrap(),
+            _ => return,
+        };
+        let _ = if on { self.doc.put(&hosts, me, now_ms()) } else { self.doc.delete(&hosts, me) };
+    }
+
     pub fn file(&self, id: &str) -> Option<FileOffer> {
         self.file_obj(id).map(|obj| self.read_file(id.to_owned(), &obj))
     }
@@ -196,7 +210,12 @@ impl GroupDoc {
                 .collect(),
             _ => BTreeMap::new(),
         };
+        let hosts = match self.doc.get(f, "hosts") {
+            Ok(Some((Value::Object(_), h))) => self.doc.map_range(&h, ..).map(|item| item.key.to_string()).collect(),
+            _ => BTreeSet::new(),
+        };
         FileOffer {
+            hosts,
             id,
             name: self.str_of(f, "name"),
             size: self.int_of(f, "size").max(0) as u64,
@@ -369,6 +388,19 @@ mod tests {
         a.stop_file(&id);
         sync(&mut a, &mut b);
         assert!(b.file(&id).unwrap().stopped);
+    }
+
+    #[test]
+    fn receivers_can_host_a_file() {
+        let (mut a, mut b) = (GroupDoc::new(), GroupDoc::new());
+        let id = a.offer_file("alice", "A", "a.txt", 12, "abcd", "file");
+        sync(&mut a, &mut b);
+        b.set_hosting(&id, "bob", true);
+        sync(&mut a, &mut b);
+        assert!(a.file(&id).unwrap().hosts.contains("bob"));
+        b.set_hosting(&id, "bob", false);
+        sync(&mut a, &mut b);
+        assert!(a.file(&id).unwrap().hosts.is_empty());
     }
 
     #[test]

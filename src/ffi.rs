@@ -119,6 +119,12 @@ pub struct FileRow {
     pub audience: String,
     pub saved_to: String,
     pub error: String,
+    /// We downloaded it and could serve it to the others too.
+    pub can_host: bool,
+    /// We serve it to the others.
+    pub hosting: bool,
+    /// "Also from Bob, Carol"
+    pub hosts: String,
 }
 
 #[derive(Clone, Default, uniffi::Record)]
@@ -736,6 +742,16 @@ impl App {
         }
     }
 
+    /// Serve a downloaded file to the group too (`on`), or stop.
+    pub fn host_file(&self, id: String, on: bool) {
+        let _g = self.inner.enter();
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
+        let result = if on { core.host_file(&gid, &id) } else { core.unhost_file(&gid, &id) };
+        if let Err(err) = result {
+            self.inner.notice(format!("{err:#}"));
+        }
+    }
+
     pub fn download_file(&self, id: String) {
         let _g = self.inner.enter();
         let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else { return };
@@ -982,13 +998,16 @@ fn build_state(shared: &Shared) -> UiState {
                 mine: f.mine,
                 have: f.have,
                 stopped: f.stopped,
-                can_download: !f.mine && !f.have && !f.stopped && !downloading && f.offerer_online,
+                can_download: !f.mine && !f.have && !f.stopped && !downloading && f.source_online,
                 downloading,
                 progress: if total == 0 { 0.0 } else { done as f32 / total as f32 },
                 progress_label: format!("{} of {}", format::size(done), format::size(total)),
                 audience: if f.audience == 0 { String::new() } else { format!("{} of {} have it", f.downloaded_by.len(), f.audience) },
                 saved_to: f.saved_to.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
                 error: f.error.clone().unwrap_or_default(),
+                can_host: !f.mine && f.have && !f.stopped && !f.hosting && f.saved_to.is_some(),
+                hosting: f.hosting && !f.stopped,
+                hosts: if f.hosts.is_empty() || f.stopped { String::new() } else { format!("Also from {}", f.hosts.join(", ")) },
             }
         })
         .collect();
