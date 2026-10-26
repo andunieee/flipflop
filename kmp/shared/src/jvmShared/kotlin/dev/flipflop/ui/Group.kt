@@ -322,7 +322,17 @@ private fun InfoTab(s: UiState, nav: Nav) {
                 }
             }
         } else {
-            if (s.groupGuest) GuestLinkCards(s, nav)
+            if (s.groupGuest) {
+                GuestLinkCards(s, nav)
+            } else {
+                Overline("GUEST LINK")
+                Card {
+                    Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
+                        HintText("Let people with a browser into this group, no app needed. Generates a secret link; the members stay.")
+                        SecondaryButton("Turn into a guest group", icon = Icons.link) { app.enableGuestLink(false) }
+                    }
+                }
+            }
             Overline(if (s.groupGuest) "GUESTS AND MEMBERS" else "MEMBERS")
             Card {
                 Column(Modifier.padding(d.cardPadding)) {

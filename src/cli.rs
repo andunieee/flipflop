@@ -131,6 +131,13 @@ pub enum GuestCmd {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Turn an existing group into a guest group: prints its new addresses.
+    Enable {
+        group: String,
+        /// Let guests upload files.
+        #[arg(long)]
+        uploads: bool,
+    },
     /// Print the addresses of a guest link.
     Show { group: String },
     /// Allow or forbid uploads on a guest link.
@@ -347,6 +354,13 @@ async fn guest(core: &Core, cx: &Ctx, cmd: &GuestCmd, wait: Duration) -> Result<
                 core.rename_group(&id, name);
             }
             show_guest(core, cx, &id, wait).await?;
+        }
+        GuestCmd::Enable { group, uploads } => {
+            let info = find_group(core, group)?;
+            if !core.enable_guest_link(&info.id, *uploads) {
+                bail!("{group} is an implied group or already has a guest link");
+            }
+            show_guest(core, cx, &info.id, wait).await?;
         }
         GuestCmd::Show { group } => {
             let (info, _) = guest_group(core, group)?;

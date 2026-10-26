@@ -174,6 +174,23 @@ impl Core {
         id
     }
 
+    /// Turn an ordinary group into a guest group with a fresh link. Its members stay. Does nothing
+    /// (and returns false) for an implied group or a group that already has a link.
+    pub fn enable_guest_link(&self, gid: &str, uploads: bool) -> bool {
+        let token = random_hex(16);
+        let enabled = self.with_state(|st| match st.groups.iter_mut().find(|g| g.id == gid && g.with.is_none() && g.guest.is_none()) {
+            Some(g) => {
+                g.guest = Some(GuestLink { token, uploads });
+                true
+            }
+            None => false,
+        });
+        if enabled {
+            self.ensure_lan_server();
+        }
+        enabled
+    }
+
     /// Allow or forbid uploads on a guest link; the pages are told right away.
     pub fn set_guest_uploads(&self, gid: &str, on: bool) {
         let changed = self.with_state(|st| match st.groups.iter_mut().find(|g| g.id == gid).and_then(|g| g.guest.as_mut()) {
