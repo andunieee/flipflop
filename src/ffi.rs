@@ -324,10 +324,18 @@ impl Inner {
     /// the new one.
     fn looking_at(&self, now: Option<String>) {
         let left = std::mem::replace(&mut self.shared.lock().unwrap().viewed, now.clone());
-        if let Some(core) = self.core.get() {
-            for gid in left.into_iter().chain(now) {
-                core.mark_seen(&gid);
-            }
+        self.mark_seen(left.into_iter().chain(now).collect());
+    }
+
+    /// Catch the groups up. Never inline: events arrive while core holds its publish lock, and
+    /// marking a group seen publishes again.
+    fn mark_seen(&self, gids: Vec<String>) {
+        if let Some(core) = self.core() {
+            self.rt.spawn(async move {
+                for gid in gids {
+                    core.mark_seen(&gid);
+                }
+            });
         }
     }
 
@@ -391,8 +399,8 @@ impl Inner {
                     looking
                 };
                 self.emit();
-                if let (true, Some(core)) = (looking, self.core.get()) {
-                    core.mark_seen(&gid);
+                if looking {
+                    self.mark_seen(vec![gid]);
                 }
             }
             Event::Home(news) => self.change(|s| s.home = news),
