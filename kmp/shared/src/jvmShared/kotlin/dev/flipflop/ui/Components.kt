@@ -1,12 +1,14 @@
 package dev.flipflop.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -126,7 +128,7 @@ fun ClickCard(onClick: () -> Unit, modifier: Modifier = Modifier, content: @Comp
         modifier.fillMaxWidth().clip(shape)
             .background(if (pressed) c.chipBg else if (hover) c.insetBg else c.cardBg)
             .border(1.dp, c.border, shape)
-            .clickable(source, indication = null, onClick = onClick),
+            .hoverable(source).clickable(source, indication = null, onClick = onClick),
         content = content,
     )
 }
@@ -194,13 +196,15 @@ fun FfButton(
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val hovered by source.collectIsHoveredAsState()
-    val bg by animateColorAsState(if (!enabled) fill else if (pressed) press else if (hovered) hover else fill)
+    // A transparent fill keeps the hover colour's rgb so the fade doesn't pass through black.
+    val rest = if (fill == Color.Transparent) hover.copy(alpha = 0f) else fill
+    val bg by animateColorAsState(if (!enabled) rest else if (pressed) press else if (hovered) hover else rest, tween(120))
     val shape = RoundedCornerShape(d.radiusSm + 2.dp)
     var m = modifier.heightIn(min = d.controlHeight).widthIn(min = d.controlHeight).alpha(if (enabled) 1f else 0.45f)
         .clip(shape).background(bg)
     if (kind == ButtonKind.Secondary) m = m.border(BorderStroke(1.dp, c.borderStrong), shape)
     Row(
-        m.clickable(source, indication = null, enabled = enabled, onClick = onClick)
+        m.hoverable(source).clickable(source, indication = null, enabled = enabled, onClick = onClick)
             .padding(horizontal = if (label.isEmpty()) 0.dp else d.buttonPadding),
         horizontalArrangement = Arrangement.spacedBy(if (d.narrow) 6.dp else d.space2, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
@@ -235,7 +239,7 @@ fun IconButton(icon: DrawableResource, modifier: Modifier = Modifier, tint: Colo
     val bg = if (pressed) (if (danger) c.errorSoftPress else c.chipBgHover)
     else if (hovered) (if (danger) c.errorSoft else c.chipBg) else Color.Transparent
     Box(
-        modifier.size(size).clip(CircleShape).background(bg).clickable(source, indication = null, onClick = onClick),
+        modifier.size(size).clip(CircleShape).background(bg).hoverable(source).clickable(source, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, if (isTouch) 20.dp else 17.dp, if (danger) c.error else tint)
