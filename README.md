@@ -28,6 +28,19 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
 - **Scratchpad**: one big plain-text document everybody can edit; concurrent edits merge, and your cursor stays put when someone else edits.
 - **Apps**: placeholder. Planned: WebAssembly apps shared in the group, run on every device and rendered with a hypereffect.dev interface.
 
+## Guest links
+
+A guest link is a group that anyone with a browser joins, no app needed (*Groups → Guest link*, or `flipflop-cli guest new`). It is an ordinary group with its own document, plus a secret token. Each link comes as two addresses:
+
+- **Same network**: `http://<lan ip>:53530/<token>/`, served by the app itself (a small HTTP server that only runs while a guest link exists). Needs no internet. The page syncs the document over a WebSocket to that server.
+- **Anywhere**: `https://andunieee.github.io/flipflop/#t=<token>&e=<our endpoint id>&r=<our home relay>`. The same page, with iroh running in the browser (wasm): it dials us through our home relay and syncs the document over an iroh stream. The fragment never leaves the browser.
+
+Whoever opens a link is a member of the group, named after where they come from, such as `beautiful-iguana` (a hash of their iroh key, kept in the browser, or of their LAN address). The page has a copy of the group's Automerge document, so it does what the apps do: download the files on offer, upload a file (only if you allowed it when making the link, switchable any time), write and read texts, edit the scratchpad. Uploads are saved under `<downloads>/Guests` and offered to the group in the guest's name. You can make as many links as you like; closing one disconnects its guests and deletes its group.
+
+Anyone with a link can read and change everything in the group's document, so keep guest groups for guests, and share a link as you would the files in it.
+
+The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that compiles the very `src/groupdoc.rs` the app uses (plus iroh, for the full build). `just web` rebuilds it: the full page (`web/dist`, published to GitHub Pages by `.github/workflows/pages.yml`) and the build without iroh that the app embeds for the LAN (`src/core/guest/assets`, committed, so rebuild and commit it when `groupdoc.rs` or `web/` change).
+
 ## CLI
 
 `flipflop-cli` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process runs a node on a `--dir`. If the GUI (or a `serve`) already has it, the CLI checks the lock, finds the Unix socket (`ipc.sock` in the dir; a named pipe on Windows, untested) and sends the command there; the GUI runs it and the output comes back. Relative file paths are resolved in the CLI's working directory. `--downloads` is ignored in that case. Give one of them its own `FLIPFLOP_DIR` to keep two identities. `serve` keeps a node running (downloading, serving files) so offers stay available.
@@ -37,6 +50,8 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
     flipflop-cli connect <ticket>
     flipflop-cli group new | list | show G | invite G PEER | accept G | decline G | rename G NAME | leave G
     flipflop-cli group settings G --auto-download false --auto-stop true
+    flipflop-cli guest new [--uploads] [--name N]    # prints both addresses (while `serve` runs)
+    flipflop-cli guest list | show G | uploads G true|false | close G
     flipflop-cli file offer G ./photo.jpg            # stays online until everyone has it (or --wait)
     flipflop-cli file list G | get G FILE | stop G FILE
     flipflop-cli text send G "https://example.com" | list G | delete G ID
@@ -58,6 +73,7 @@ library itself (host for desktop, `cargo-ndk` for Android).
     just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity)
     just android                   # APK; `just install` to put it on a device
     cargo run --bin flipflop-cli -- --help
+    just web                       # rebuild the guest page's wasm (see Guest links)
     cargo test                     # unit tests + multi-node integration tests
 
 Android needs cargo-ndk, NDK 27 and an Android SDK with platform 35 (`kmp/local.properties`: `sdk.dir=...`).

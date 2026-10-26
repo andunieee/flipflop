@@ -51,13 +51,28 @@ pub struct GroupDoc {
     sync: HashMap<String, sync::State>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
+/// This module is also compiled into the guest page (`web/`), where there is no system clock.
+#[cfg(target_arch = "wasm32")]
+pub fn now_ms() -> i64 {
+    js_sys::Date::now() as i64
+}
+
 /// `n` random bytes, hex encoded. (Borrows iroh's key generator as a source of randomness.)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn random_hex(n: usize) -> String {
     iroh::SecretKey::generate().to_bytes()[..n].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn random_hex(n: usize) -> String {
+    let mut bytes = vec![0u8; n];
+    getrandom::fill(&mut bytes).expect("browser randomness");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn entry_key() -> String {

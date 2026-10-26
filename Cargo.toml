@@ -37,6 +37,13 @@ blake3 = "1"
 clap = { version = "4", features = ["derive", "env"] }
 uniffi = "0.32"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+# Guest links: a small HTTP + WebSocket server for browsers on the LAN.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 hostname = "0.4"

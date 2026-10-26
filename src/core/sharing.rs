@@ -174,7 +174,7 @@ impl Core {
     // ---- documents --------------------------------------------------------------------
 
     /// Run `f` on the group's document, loading it from disk (or starting it) first.
-    fn with_doc<R>(&self, gid: &str, f: impl FnOnce(&mut GroupDoc) -> R) -> R {
+    pub(super) fn with_doc<R>(&self, gid: &str, f: impl FnOnce(&mut GroupDoc) -> R) -> R {
         let sharing = &self.0.sharing;
         let mut docs = sharing.docs.lock().unwrap();
         let doc = docs.entry(gid.to_owned()).or_insert_with(|| {
@@ -275,7 +275,7 @@ impl Core {
     }
 
     /// Something in the document changed: save, show, sync and react.
-    fn doc_changed(&self, gid: &str, scratch_local: bool) {
+    pub(super) fn doc_changed(&self, gid: &str, scratch_local: bool) {
         self.0.sharing.dirty.lock().unwrap().insert(gid.to_owned());
         self.publish_group(gid, scratch_local);
         self.sync_soon(gid);
@@ -300,6 +300,7 @@ impl Core {
             .iter()
             .filter(|(_, p)| p.conn.is_some())
             .map(|(id, _)| id.to_string())
+            .chain(self.guests_online(gid))
             .collect();
         let received: HashMap<String, PathBuf> = self
             .0
@@ -363,7 +364,7 @@ impl Core {
         }
     }
 
-    fn publish_group(&self, gid: &str, scratch_local: bool) {
+    pub(super) fn publish_group(&self, gid: &str, scratch_local: bool) {
         let _ordered = self.0.publish_lock.lock().unwrap();
         self.emit_group(gid, scratch_local, true);
         self.emit_home();
@@ -438,6 +439,7 @@ impl Core {
     }
 
     fn sync_soon(&self, gid: &str) {
+        self.sync_guests(gid);
         let (this, gid) = (self.clone(), gid.to_owned());
         tokio::spawn(async move {
             for peer in this.group_peers(&gid) {
@@ -551,11 +553,26 @@ impl Core {
         Ok(fid)
     }
 
+    /// A guest uploaded a file (now at `path`): offer it to the group in their name, served from here.
+    pub(super) fn add_guest_offer(&self, gid: &str, guest: &str, guest_name: &str, path: PathBuf, name: &str, size: u64, hash: &str) -> String {
+        let me = self.me();
+        let fid = self.with_doc(gid, |d| {
+            let fid = d.offer_file(guest, guest_name, name, size, hash, "file");
+            d.set_hosting(&fid, &me, true);
+            d.mark_downloaded(&fid, &me);
+            fid
+        });
+        self.with_state(|st| st.shares.push(Share { group: gid.to_owned(), file: fid.clone(), path, staged: false }));
+        self.doc_changed(gid, false);
+        fid
+    }
+
     /// Stop offering one of our files; nobody can download it afterwards.
     pub fn stop_file(&self, gid: &str, file: &str) -> Result<()> {
         self.require_group(gid)?;
         let me = self.me();
-        if !self.with_doc(gid, |d| d.file(file).is_some_and(|f| f.from == me)) {
+        // A guest's upload is offered in their name, but we are the one serving it.
+        if !self.with_doc(gid, |d| d.file(file).is_some_and(|f| f.from == me || (super::guest::is_guest(&f.from) && f.hosts.contains(&me)))) {
             bail!("you are not sharing that file");
         }
         self.with_doc(gid, |d| d.stop_file(file));
@@ -847,7 +864,7 @@ impl Core {
 /// Does the peer on this connection answer? A connection to a peer that restarted looks alive
 /// until QUIC's idle timeout, so ask.
 /// Open what a share points at: a file path, or on Android a `content://` URI the user picked.
-fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
+pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(target_os = "android")]
     if path.to_str().is_some_and(|p| p.starts_with("content://")) {
         let fd = crate::platform::open_content_fd(&path.to_string_lossy()).ok_or_else(|| std::io::Error::other("the picked file is no longer readable"))?;
@@ -909,7 +926,7 @@ async fn send_bytes(conn: &Connection, bytes: &[u8]) -> Result<()> {
 }
 
 /// `dir/name`, or `dir/name (2).ext` and so on if that is taken. The name is reduced to a bare file name.
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
+pub(super) fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let name = clean_file_name(name);
     let first = dir.join(&name);
     if !first.exists() {
@@ -925,7 +942,7 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
         .expect("some name is free")
 }
 
-fn clean_file_name(name: &str) -> String {
+pub(super) fn clean_file_name(name: &str) -> String {
     let name = Path::new(name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let name: String = name.chars().filter(|c| !c.is_control() && *c != '\\').collect();
     let name = name.trim();

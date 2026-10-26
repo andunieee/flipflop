@@ -53,6 +53,13 @@ class Nav(val backend: Backend) {
         go("group")
     }
 
+    /** A new guest link: its group opens on the page that shows the link. */
+    fun newGuestLink() {
+        app.newGuestLink(false) ?: return
+        groupTab = "info"
+        go("group")
+    }
+
     /** Android Back: dialog → scan → group → Home. Returns false when nothing is left to close. */
     fun back(scanning: Boolean): Boolean {
         when {
