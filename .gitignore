@@ -1,7 +1,7 @@
 /target
-android/.gradle/
-android/build/
-android/app/build/
-android/app/src/main/jniLibs/
-android/local.properties
-android/blew-kt/
+kmp/.gradle/
+kmp/.kotlin/
+kmp/**/build/
+kmp/androidApp/src/main/jniLibs/
+kmp/androidApp/blew-kt/
+kmp/local.properties

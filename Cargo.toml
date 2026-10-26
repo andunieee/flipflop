@@ -9,8 +9,13 @@ license = "AGPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "flipflop"
-path = "src/main.rs"
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+# Only for generating the Kotlin bindings (see kmp/README.md).
+bindgen = ["uniffi/cli"]
 
 [dependencies]
 iroh = { version = "1.4.1", features = ["unstable-custom-transports"] }
@@ -30,10 +35,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 automerge = "0.12.0"
 blake3 = "1"
 clap = { version = "4", features = ["derive", "env"] }
+uniffi = "0.32"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-slint = "1.18"
 hostname = "0.4"
 dirs = "6"
 nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
@@ -46,17 +51,12 @@ bluer = { version = "0.17", features = ["bluetoothd"] }
 futures = "0.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
-slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-skia"] }
-android-activity = "0.6"
 jni = "0.21"
 ndk-context = "0.1"
 blew = "0.5.1-beta.8"
 jni22 = { package = "jni", version = "0.22" }
 android_logger = "0.15"
 log = "0.4"
-
-[build-dependencies]
-slint-build = "1.18"
 
 [profile.release]
 opt-level = "s"

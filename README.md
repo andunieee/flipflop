@@ -1,6 +1,6 @@
 # flipflop
 
-Rust + Slint peer-to-peer app (desktop and Android). Peers connect with [iroh](https://iroh.computer).
+Rust peer-to-peer app (desktop and Android) with a Kotlin Multiplatform (Compose) UI. Peers connect with [iroh](https://iroh.computer).
 
 - **LAN**: devices announce over mDNS (service `_flipflop._udp`) with their name; they appear under *Nearby*.
 - **QR**: *Add by QR* shows your ticket as a QR code and scans others' (webcam on desktop, system scanner on Android). Tickets can also be pasted.
@@ -45,13 +45,23 @@ Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs
 
 `G`, `PEER` and `FILE` can be an id prefix or part of a name. `--wait SECS` bounds how long a command waits for peers. `FLIPFLOP_DIR` and `FLIPFLOP_DOWNLOADS` set the directories.
 
+## Layout
+
+The core, networking and CLI are Rust (`src/`). The UI is Compose Multiplatform in `kmp/`, a pure view over
+a [UniFFI](https://mozilla.github.io/uniffi-rs/) bridge (`src/ffi.rs`): Rust builds a whole `UiState` and hands
+it to the UI on every change; the UI calls commands on `App`. `kmp/shared` is the UI (and the generated
+bindings), `kmp/desktopApp` the JVM desktop app, `kmp/androidApp` the Android app. Gradle builds the Rust
+library itself (host for desktop, `cargo-ndk` for Android).
+
 ## Run
 
-    cargo run                      # desktop GUI (FLIPFLOP_DIR=... for a separate identity)
+    just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity)
+    just android                   # APK; `just install` to put it on a device
     cargo run --bin flipflop-cli -- --help
     cargo test                     # unit tests + multi-node integration tests
-    ./android/build.sh [debug|release] [abi...]   # needs cargo-ndk, NDK 27, Android SDK, gradle
-    adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+
+Android needs cargo-ndk, NDK 27 and an Android SDK with platform 35 (`kmp/local.properties`: `sdk.dir=...`).
+The desktop app needs a JDK 17+ and loads `libflipflop` from the cargo target directory.
 
 Linux BLE needs BlueZ (`bluetoothd`) and libdbus.
 
