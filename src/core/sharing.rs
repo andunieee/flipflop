@@ -691,6 +691,10 @@ impl Core {
                 self.with_doc(gid, |d| d.mark_downloaded(fid, &me));
                 self.emit(Event::Notice(format!("downloaded {}", offer.name)));
                 self.doc_changed(gid, false);
+                if self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == gid && g.auto_rehost) {
+                    // Fails when the sender stopped sharing in the meantime; nothing to host then.
+                    let _ = self.host_file(gid, fid);
+                }
                 Ok(path)
             }
             Err(err) => {

@@ -182,6 +182,7 @@ pub struct UiState {
     pub pad_local: bool,
     pub auto_download: bool,
     pub auto_stop: bool,
+    pub auto_rehost: bool,
     /// The open group is a guest group, with these links ("" while not available) and whether guests may upload.
     pub group_guest: bool,
     pub guest_lan_url: String,
@@ -816,13 +817,19 @@ impl App {
 
     pub fn set_auto_download(&self, on: bool) {
         if let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) {
-            core.set_group_settings(&gid, Some(on), None);
+            core.set_group_settings(&gid, Some(on), None, None);
         }
     }
 
     pub fn set_auto_stop(&self, on: bool) {
         if let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) {
-            core.set_group_settings(&gid, None, Some(on));
+            core.set_group_settings(&gid, None, Some(on), None);
+        }
+    }
+
+    pub fn set_auto_rehost(&self, on: bool) {
+        if let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) {
+            core.set_group_settings(&gid, None, None, Some(on));
         }
     }
 
@@ -981,6 +988,7 @@ fn build_state(shared: &Shared) -> UiState {
     ui.group_peer = info.with.and_then(|w| shared.peers.iter().find(|p| p.id == w)).map(peer_row);
     ui.auto_download = info.auto_download;
     ui.auto_stop = info.auto_stop;
+    ui.auto_rehost = info.auto_rehost;
     ui.group_guest = info.guest.is_some();
     ui.guest_lan_url = info.guest.as_ref().and_then(|g| g.lan_url.clone()).unwrap_or_default();
     ui.guest_web_url = info.guest.as_ref().and_then(|g| g.web_url.clone()).unwrap_or_default();

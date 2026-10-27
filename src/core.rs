@@ -82,6 +82,7 @@ pub struct GroupInfo {
     pub candidates: Vec<(EndpointId, String)>,
     pub auto_download: bool,
     pub auto_stop: bool,
+    pub auto_rehost: bool,
     /// An implied group (see [`Core::pair`]): the other device. Not listed with the groups.
     pub with: Option<EndpointId>,
     /// A guest group: its link and its guests.
@@ -442,6 +443,7 @@ impl Core {
                     candidates,
                     auto_download: g.auto_download,
                     auto_stop: g.auto_stop,
+                    auto_rehost: g.auto_rehost,
                     with: g.with.as_ref().and_then(|w| w.parse().ok()),
                     guest: g.guest.as_ref().map(|link| self.guest_info(&g.id, link)),
                 })
@@ -790,12 +792,13 @@ impl Core {
         id
     }
 
-    /// Local, per-group: download offers automatically, and stop sharing what everybody has.
-    pub fn set_group_settings(&self, group: &str, auto_download: Option<bool>, auto_stop: Option<bool>) {
+    /// Local, per-group: download offers automatically, stop sharing what everybody has, and rehost what we download.
+    pub fn set_group_settings(&self, group: &str, auto_download: Option<bool>, auto_stop: Option<bool>, auto_rehost: Option<bool>) {
         self.with_state(|st| {
             if let Some(g) = st.groups.iter_mut().find(|g| g.id == group) {
                 g.auto_download = auto_download.unwrap_or(g.auto_download);
                 g.auto_stop = auto_stop.unwrap_or(g.auto_stop);
+                g.auto_rehost = auto_rehost.unwrap_or(g.auto_rehost);
             }
         });
         self.auto_jobs(group);
