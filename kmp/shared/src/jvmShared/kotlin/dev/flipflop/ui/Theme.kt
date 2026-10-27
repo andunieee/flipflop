@@ -19,6 +19,10 @@ class Palette(private val dark: Boolean) {
     val windowBg = c(0xFFf4faff, 0xFF0e1824)
     val sidebarBg = c(0xFFe6f3fd, 0xFF0a131c)
     val cardBg = c(0xFFffffff, 0xFF15222f)
+    /** Peer cards: a teal tint, so they differ from the white group cards. */
+    val peerBg = c(0xFFeefaf6, 0xFF14282a)
+    val peerBgHover = c(0xFFe0f4ed, 0xFF1a3336)
+    val peerBorder = c(0xFFbfe3d6, 0xFF245048)
     val insetBg = c(0xFFf2f8fd, 0xFF111c28)
     val border = c(0xFFd6e7f5, 0xFF223446)
     val borderStrong = c(0xFFb8d4ec, 0xFF2e4660)
