@@ -1,17 +1,19 @@
 name: Pages
 
-# The guest page for links from anywhere (web/): src/core/guest/page.html plus the group document and iroh in wasm,
-# at https://andunieee.github.io/flipflop/. Needs Settings → Pages → Source: "GitHub Actions".
+# The guest page for links from anywhere (web/): src/core/guest/page.html plus the group document and iroh in wasm.
+# Needs Settings → Pages → Source: "GitHub Actions". The site at https://andunieee.github.io/flipflop/ is:
+#   guest/vX.Y.Z/   one copy per release tag, built from that tag: what an app of that version links to
+#                   (src/core/guest.rs)
+#   /               an older build of the guest page, kept as it is for the apps that link to it. It is not in
+#                   this repository: every deploy replaces the whole site, so it is downloaded from the live
+#                   site and published again unchanged (ROOT_FILES below). Remove that step when the root
+#                   becomes a documentation site.
+# The earlier guest/ versions are brought back the same way.
 
 on:
   push:
-    branches: [master]
-    paths:
-      - "web/**"
-      - "src/core/guest/page.html"
-      - "src/groupdoc.rs"
-      - ".github/workflows/pages.yml"
-  workflow_dispatch:
+    tags: ["v*"]
+  workflow_dispatch: # redeploys the site as it is, without a new version
 
 permissions:
   contents: read
@@ -22,19 +24,32 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  ROOT_FILES: index.html sw.js flipflop_web.js flipflop_web_bg.wasm
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Tag is the Cargo.toml version
+        if: github.ref_type == 'tag'
+        run: |
+          crate="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          [ "v${crate}" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != Cargo.toml version ${crate}"; exit 1; }
 
       - uses: dtolnay/rust-toolchain@stable
+        if: github.ref_type == 'tag'
         with:
           targets: wasm32-unknown-unknown
 
       # The CLI must match the wasm-bindgen crate pinned in web/Cargo.toml.
       - name: wasm-bindgen version
+        if: github.ref_type == 'tag'
         id: bindgen
         run: |
           v=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' web/Cargo.toml)
@@ -42,19 +57,52 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - uses: taiki-e/install-action@v2
+        if: github.ref_type == 'tag'
         with:
           tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
 
       - uses: Swatinem/rust-cache@v2
+        if: github.ref_type == 'tag'
         with:
           workspaces: web
 
       - name: Build
-        run: web/build.sh _site
+        if: github.ref_type == 'tag'
+        run: web/build.sh "$PWD/build"
+
+      - name: Assemble the site
+        env:
+          SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: |
+          set -eu
+          mkdir -p site/guest
+          # fetch <path in the site> <file>: from the live site; fails the deploy rather than dropping a file
+          fetch() { mkdir -p "site/$1"; curl -fsSL "$SITE/$1${1:+/}$2" -o "site/$1${1:+/}$2"; }
+
+          # the page that is already at the root, untouched
+          for f in $ROOT_FILES; do fetch "" "$f"; done
+
+          # this release
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            mkdir -p "site/guest/${GITHUB_REF_NAME}"
+            cp build/* "site/guest/${GITHUB_REF_NAME}/"
+          fi
+
+          # the earlier releases
+          for tag in $(git tag --list 'v*'); do
+            [ -d "site/guest/$tag" ] && continue
+            ok=1
+            for f in $ROOT_FILES; do fetch "guest/$tag" "$f" 2>/dev/null || { ok=0; break; }; done
+            if [ $ok = 0 ]; then
+              echo "::warning::$tag is not published yet, skipping it"
+              rm -rf "site/guest/$tag"
+            fi
+          done
+          find site -type f | sort
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: web/_site
+          path: site
 
   deploy:
     needs: build

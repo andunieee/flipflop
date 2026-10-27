@@ -47,8 +47,9 @@ pub(super) use http::serve_tunnel;
 pub const GUEST_ALPN: &[u8] = b"flipflop/guest/1";
 /// The port of the LAN server when it is free (any free port otherwise).
 const LAN_PORT: u16 = 53530;
-/// Where the page for links from anywhere is published (GitHub Pages).
-const WEB_PAGE: &str = "https://andunieee.github.io/flipflop/";
+/// Where the page for links from anywhere is published (GitHub Pages): one copy per release, so a link opens
+/// the page built from the same source as the app that made it (see .github/workflows/pages.yml).
+const WEB_PAGE: &str = concat!("https://andunieee.github.io/flipflop/guest/v", env!("CARGO_PKG_VERSION"), "/");
 const TAG_CONTROL: u8 = 0;
 const TAG_SYNC: u8 = 1;
 /// Biggest message accepted from a guest.
