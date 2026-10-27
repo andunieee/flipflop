@@ -55,7 +55,9 @@ pub struct GroupDoc {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// This module is also compiled into the guest page (`web/`), where there is no system clock.
@@ -67,7 +69,10 @@ pub fn now_ms() -> i64 {
 /// `n` random bytes, hex encoded. (Borrows iroh's key generator as a source of randomness.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn random_hex(n: usize) -> String {
-    iroh::SecretKey::generate().to_bytes()[..n].iter().map(|b| format!("{b:02x}")).collect()
+    iroh::SecretKey::generate().to_bytes()[..n]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -86,18 +91,29 @@ impl GroupDoc {
     /// so independently created copies merge instead of fighting over the root objects.
     pub fn new() -> GroupDoc {
         let mut doc = AutoCommit::new().with_actor(ActorId::from(vec![0u8; 16]));
-        for (key, obj) in [("members", ObjType::Map), ("files", ObjType::Map), ("texts", ObjType::Map), ("scratch", ObjType::Text)] {
+        for (key, obj) in [
+            ("members", ObjType::Map),
+            ("files", ObjType::Map),
+            ("texts", ObjType::Map),
+            ("scratch", ObjType::Text),
+        ] {
             doc.put_object(ROOT, key, obj).expect("genesis");
         }
         doc.commit_with(CommitOptions::default().with_time(0));
         doc.set_actor(ActorId::random());
-        GroupDoc { doc, sync: HashMap::new() }
+        GroupDoc {
+            doc,
+            sync: HashMap::new(),
+        }
     }
 
     pub fn load(bytes: &[u8]) -> Result<GroupDoc, AutomergeError> {
         let mut doc = AutoCommit::load(bytes)?;
         doc.set_actor(ActorId::random());
-        Ok(GroupDoc { doc, sync: HashMap::new() })
+        Ok(GroupDoc {
+            doc,
+            sync: HashMap::new(),
+        })
     }
 
     pub fn save(&mut self) -> Vec<u8> {
@@ -155,20 +171,40 @@ impl GroupDoc {
         let members = self.obj("members");
         self.doc
             .map_range(&members, ..)
-            .filter_map(|item| Some((item.key.to_string(), item.value.into_value().as_str()?.to_owned())))
+            .filter_map(|item| {
+                Some((
+                    item.key.to_string(),
+                    item.value.into_value().as_str()?.to_owned(),
+                ))
+            })
             .collect()
     }
 
     pub fn is_member(&self, peer: &str) -> bool {
-        self.doc.get(self.obj("members"), peer).ok().flatten().is_some()
+        self.doc
+            .get(self.obj("members"), peer)
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     // ---- files ------------------------------------------------------------------------
 
-    pub fn offer_file(&mut self, me: &str, my_name: &str, name: &str, size: u64, hash: &str, kind: &str) -> String {
+    pub fn offer_file(
+        &mut self,
+        me: &str,
+        my_name: &str,
+        name: &str,
+        size: u64,
+        hash: &str,
+        kind: &str,
+    ) -> String {
         let files = self.obj("files");
         let id = entry_key();
-        let f = self.doc.put_object(&files, id.as_str(), ObjType::Map).expect("put file");
+        let f = self
+            .doc
+            .put_object(&files, id.as_str(), ObjType::Map)
+            .expect("put file");
         self.doc.put(&f, "name", name).unwrap();
         self.doc.put(&f, "size", size as i64).unwrap();
         self.doc.put(&f, "hash", hash).unwrap();
@@ -212,11 +248,16 @@ impl GroupDoc {
             _ if on => self.doc.put_object(&f, "hosts", ObjType::Map).unwrap(),
             _ => return,
         };
-        let _ = if on { self.doc.put(&hosts, me, now_ms()) } else { self.doc.delete(&hosts, me) };
+        let _ = if on {
+            self.doc.put(&hosts, me, now_ms())
+        } else {
+            self.doc.delete(&hosts, me)
+        };
     }
 
     pub fn file(&self, id: &str) -> Option<FileOffer> {
-        self.file_obj(id).map(|obj| self.read_file(id.to_owned(), &obj))
+        self.file_obj(id)
+            .map(|obj| self.read_file(id.to_owned(), &obj))
     }
 
     fn read_file(&self, id: String, f: &ObjId) -> FileOffer {
@@ -229,7 +270,11 @@ impl GroupDoc {
             _ => BTreeMap::new(),
         };
         let hosts = match self.doc.get(f, "hosts") {
-            Ok(Some((Value::Object(_), h))) => self.doc.map_range(&h, ..).map(|item| item.key.to_string()).collect(),
+            Ok(Some((Value::Object(_), h))) => self
+                .doc
+                .map_range(&h, ..)
+                .map(|item| item.key.to_string())
+                .collect(),
             _ => BTreeSet::new(),
         };
         FileOffer {
@@ -250,7 +295,10 @@ impl GroupDoc {
 
     /// Oldest first.
     pub fn files(&self) -> Vec<FileOffer> {
-        self.entries(&self.obj("files")).into_iter().map(|(id, obj)| self.read_file(id, &obj)).collect()
+        self.entries(&self.obj("files"))
+            .into_iter()
+            .map(|(id, obj)| self.read_file(id, &obj))
+            .collect()
     }
 
     // ---- texts ------------------------------------------------------------------------
@@ -258,7 +306,10 @@ impl GroupDoc {
     pub fn add_text(&mut self, me: &str, name: &str, text: &str) -> String {
         let texts = self.obj("texts");
         let id = entry_key();
-        let t = self.doc.put_object(&texts, id.as_str(), ObjType::Map).expect("put text");
+        let t = self
+            .doc
+            .put_object(&texts, id.as_str(), ObjType::Map)
+            .expect("put text");
         self.doc.put(&t, "from", me).unwrap();
         self.doc.put(&t, "name", name).unwrap();
         self.doc.put(&t, "text", text).unwrap();
@@ -300,7 +351,9 @@ impl GroupDoc {
         if del == 0 && ins.is_empty() {
             return false;
         }
-        self.doc.splice_text(&obj, start, del as isize, &ins).expect("splice scratch");
+        self.doc
+            .splice_text(&obj, start, del as isize, &ins)
+            .expect("splice scratch");
         true
     }
 
@@ -318,7 +371,10 @@ impl GroupDoc {
     /// The next sync message for `peer`, if there is something to say.
     pub fn sync_message(&mut self, peer: &str) -> Option<Vec<u8>> {
         let state = self.sync.entry(peer.to_owned()).or_default();
-        self.doc.sync().generate_sync_message(state).map(|m| m.encode())
+        self.doc
+            .sync()
+            .generate_sync_message(state)
+            .map(|m| m.encode())
     }
 
     /// Apply a sync message from `peer`. Returns whether our document changed.
@@ -338,8 +394,17 @@ impl GroupDoc {
 pub fn diff(old: &str, new: &str) -> (usize, usize, String) {
     let (o, n): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
     let prefix = o.iter().zip(&n).take_while(|(a, b)| a == b).count();
-    let suffix = o[prefix..].iter().rev().zip(n[prefix..].iter().rev()).take_while(|(a, b)| a == b).count();
-    (prefix, o.len() - prefix - suffix, n[prefix..n.len() - suffix].iter().collect())
+    let suffix = o[prefix..]
+        .iter()
+        .rev()
+        .zip(n[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    (
+        prefix,
+        o.len() - prefix - suffix,
+        n[prefix..n.len() - suffix].iter().collect(),
+    )
 }
 
 /// Where a cursor at char offset `pos` in the old text ends up in the new one.

@@ -35,8 +35,13 @@ async fn run(core: Core, status: Arc<dyn Fn(String) + Send + Sync>) -> Result<()
     let service: Uuid = SERVICE_UUID.parse()?;
     let characteristic: Uuid = PAYLOAD_UUID.parse()?;
 
-    let session = bluer::Session::new().await.context("connecting to bluetoothd")?;
-    let adapter = session.default_adapter().await.context("no bluetooth adapter")?;
+    let session = bluer::Session::new()
+        .await
+        .context("connecting to bluetoothd")?;
+    let adapter = session
+        .default_adapter()
+        .await
+        .context("no bluetooth adapter")?;
     adapter.set_powered(true).await?;
 
     // ---- peripheral: serve our payload -------------------------------------------------
@@ -100,7 +105,10 @@ async fn run(core: Core, status: Arc<dyn Fn(String) + Send + Sync>) -> Result<()
         })
         .await?;
     let mut events = adapter.discover_devices().await?;
-    status(format!("Bluetooth: advertising and scanning on {}", adapter.name()));
+    status(format!(
+        "Bluetooth: advertising and scanning on {}",
+        adapter.name()
+    ));
 
     let known: Arc<Mutex<HashMap<Address, EndpointId>>> = Arc::default();
     while let Some(event) = events.next().await {
@@ -113,14 +121,18 @@ async fn run(core: Core, status: Arc<dyn Fn(String) + Send + Sync>) -> Result<()
                     for attempt in 0..4 {
                         match read_peer(&adapter, addr, service, characteristic).await {
                             Ok(Some(payload)) => {
-                                if let Ok(t) = payload.t.parse::<iroh_tickets::endpoint::EndpointTicket>() {
+                                if let Ok(t) =
+                                    payload.t.parse::<iroh_tickets::endpoint::EndpointTicket>()
+                                {
                                     known.lock().unwrap().insert(addr, t.endpoint_addr().id);
                                 }
                                 core.ble_seen(payload);
                                 break;
                             }
                             Ok(None) => break,
-                            Err(err) => tracing::debug!("ble read {addr} (attempt {attempt}): {err:#}"),
+                            Err(err) => {
+                                tracing::debug!("ble read {addr} (attempt {attempt}): {err:#}")
+                            }
                         }
                         tokio::time::sleep(Duration::from_secs(5)).await;
                     }

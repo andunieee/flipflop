@@ -21,7 +21,11 @@ mod android {
         let name = CString::new(name).ok()?;
         let mut buf = [0 as c_char; 92]; // PROP_VALUE_MAX
         let len = unsafe { __system_property_get(name.as_ptr(), buf.as_mut_ptr()) };
-        (len > 0).then(|| unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned())
+        (len > 0).then(|| {
+            unsafe { CStr::from_ptr(buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned()
+        })
     }
 
     struct ActivityRef(jni::objects::GlobalRef);
@@ -30,7 +34,11 @@ mod android {
     /// Called by the Activity before anything else: hand the JVM and the Activity to `ndk_context`
     /// (blew and friends read it) and to us, and set up logging.
     #[unsafe(no_mangle)]
-    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeInit(env: JNIEnv, _: JClass, activity: JObject) {
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeInit(
+        env: JNIEnv,
+        _: JClass,
+        activity: JObject,
+    ) {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             // Quiet by default; `adb shell setprop debug.flipflop.log "warn,iroh_ble_transport=debug"` turns up
@@ -42,17 +50,26 @@ mod android {
                     .with_filter(android_logger::FilterBuilder::new().parse(&filter).build())
                     .with_tag("flipflop"),
             );
-            let (Ok(vm), Ok(app)) = (env.get_java_vm(), env.new_global_ref(&activity)) else { return };
+            let (Ok(vm), Ok(app)) = (env.get_java_vm(), env.new_global_ref(&activity)) else {
+                return;
+            };
             let _ = ACTIVITY.set(ActivityRef(app.clone()));
             // `ndk_context` wants a Context that lives forever: the Activity's global reference is leaked on purpose.
             let context = app.as_obj().as_raw();
             std::mem::forget(app);
-            unsafe { ndk_context::initialize_android_context(vm.get_java_vm_pointer().cast(), context.cast()) };
+            unsafe {
+                ndk_context::initialize_android_context(
+                    vm.get_java_vm_pointer().cast(),
+                    context.cast(),
+                )
+            };
         });
     }
 
     /// Run `f` with an attached JNIEnv and the Activity object.
-    pub fn with_activity<R>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<R>) -> Option<R> {
+    pub fn with_activity<R>(
+        f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<R>,
+    ) -> Option<R> {
         let activity = ACTIVITY.get()?;
         let ctx = ndk_context::android_context();
         let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
@@ -72,12 +89,14 @@ mod android {
     pub fn call_string(method: &str, arg: &str) {
         with_activity(|env, a| {
             let s = env.new_string(arg)?;
-            env.call_method(a, method, "(Ljava/lang/String;)V", &[JValue::Object(&s)]).map(|_| ())
+            env.call_method(a, method, "(Ljava/lang/String;)V", &[JValue::Object(&s)])
+                .map(|_| ())
         });
     }
 
     fn ble_permissions_granted() -> bool {
-        with_activity(|env, a| env.call_method(a, "blePermissionsGranted", "()Z", &[])?.z()).unwrap_or(false)
+        with_activity(|env, a| env.call_method(a, "blePermissionsGranted", "()Z", &[])?.z())
+            .unwrap_or(false)
     }
 
     /// Hand blew (the BLE layer under iroh-ble-transport) the JVM, then make sure the Bluetooth
@@ -102,11 +121,22 @@ mod android {
     pub fn file_received(path: &std::path::Path) -> std::path::PathBuf {
         let moved = with_activity(|env, a| {
             let arg = env.new_string(path.to_string_lossy())?;
-            let obj = env.call_method(a, "saveToDownloads", "(Ljava/lang/String;)Ljava/lang/String;", &[JValue::Object(&arg)])?.l()?;
+            let obj = env
+                .call_method(
+                    a,
+                    "saveToDownloads",
+                    "(Ljava/lang/String;)Ljava/lang/String;",
+                    &[JValue::Object(&arg)],
+                )?
+                .l()?;
             Ok(jstr(env, &JString::from(obj)))
         })
         .unwrap_or_default();
-        if moved.is_empty() { path.to_owned() } else { moved.into() }
+        if moved.is_empty() {
+            path.to_owned()
+        } else {
+            moved.into()
+        }
     }
 
     pub fn copy_text(text: &str) {
@@ -121,7 +151,9 @@ mod android {
 
     pub fn paste_text() -> String {
         with_activity(|env, a| {
-            let obj = env.call_method(a, "pasteText", "()Ljava/lang/String;", &[])?.l()?;
+            let obj = env
+                .call_method(a, "pasteText", "()Ljava/lang/String;", &[])?
+                .l()?;
             Ok(jstr(env, &JString::from(obj)))
         })
         .unwrap_or_default()
@@ -145,7 +177,9 @@ mod android {
     /// `(path of the base APK, label, detail)` for every launchable app.
     pub fn list_apps() -> Vec<(String, String, String)> {
         let json = with_activity(|env, a| {
-            let obj = env.call_method(a, "listApps", "()Ljava/lang/String;", &[])?.l()?;
+            let obj = env
+                .call_method(a, "listApps", "()Ljava/lang/String;", &[])?
+                .l()?;
             Ok(jstr(env, &JString::from(obj)))
         })
         .unwrap_or_default();
@@ -169,7 +203,11 @@ mod android {
         path: JString,
         name: JString,
     ) {
-        let (kind, path, name) = (jstr(&mut env, &kind), jstr(&mut env, &path), jstr(&mut env, &name));
+        let (kind, path, name) = (
+            jstr(&mut env, &kind),
+            jstr(&mut env, &path),
+            jstr(&mut env, &name),
+        );
         if let Some(handler) = FILE_HANDLER.get() {
             handler(kind, path, name);
         }
@@ -180,7 +218,13 @@ mod android {
         use std::os::fd::FromRawFd;
         let fd = with_activity(|env, a| {
             let arg = env.new_string(uri)?;
-            env.call_method(a, "openContentFd", "(Ljava/lang/String;)I", &[JValue::Object(&arg)])?.i()
+            env.call_method(
+                a,
+                "openContentFd",
+                "(Ljava/lang/String;)I",
+                &[JValue::Object(&arg)],
+            )?
+            .i()
         })?;
         (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
     }
@@ -274,7 +318,9 @@ mod desktop {
     fn with_clipboard<R>(f: impl FnOnce(&mut arboard::Clipboard) -> Option<R>) -> Option<R> {
         let mut guard = CLIPBOARD.lock().ok()?;
         if guard.is_none() {
-            *guard = arboard::Clipboard::new().map_err(|e| tracing::warn!("no clipboard: {e}")).ok();
+            *guard = arboard::Clipboard::new()
+                .map_err(|e| tracing::warn!("no clipboard: {e}"))
+                .ok();
         }
         f(guard.as_mut()?)
     }
@@ -292,7 +338,10 @@ mod desktop {
         #[cfg(target_os = "linux")]
         with_clipboard(|c| {
             use arboard::{LinuxClipboardKind, SetExtLinux};
-            c.set().clipboard(LinuxClipboardKind::Primary).text(text.to_owned()).ok()
+            c.set()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text(text.to_owned())
+                .ok()
         });
         #[cfg(not(target_os = "linux"))]
         let _ = text;

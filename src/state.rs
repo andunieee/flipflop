@@ -86,7 +86,17 @@ fn yes() -> bool {
 
 impl Group {
     pub fn new(id: String, members: Vec<Member>) -> Group {
-        Group { id, alias: None, members, auto_download: true, auto_stop: false, auto_rehost: true, with: None, seen: Seen::default(), guest: None }
+        Group {
+            id,
+            alias: None,
+            members,
+            auto_download: true,
+            auto_stop: false,
+            auto_rehost: true,
+            with: None,
+            seen: Seen::default(),
+            guest: None,
+        }
     }
 }
 
@@ -148,7 +158,11 @@ impl Store {
         let path = dir.join("state.json");
         let state = std::fs::read(&path)
             .ok()
-            .and_then(|b| serde_json::from_slice(&b).map_err(|e| tracing::warn!("state.json unreadable: {e}")).ok())
+            .and_then(|b| {
+                serde_json::from_slice(&b)
+                    .map_err(|e| tracing::warn!("state.json unreadable: {e}"))
+                    .ok()
+            })
             .unwrap_or_default();
         Store { path, state }
     }

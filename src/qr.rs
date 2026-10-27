@@ -31,10 +31,11 @@ pub fn render(text: &str, scale: usize) -> Option<(u32, u32, Vec<u8>)> {
 
 /// Find and decode the first QR code in an 8-bit grayscale image.
 pub fn decode_gray(width: usize, height: usize, gray: &[u8]) -> Option<String> {
-    let mut img = rqrr::PreparedImage::prepare_from_greyscale(width, height, |x, y| {
-        gray[y * width + x]
-    });
-    img.detect_grids().into_iter().find_map(|grid| grid.decode().ok().map(|(_, text)| text))
+    let mut img =
+        rqrr::PreparedImage::prepare_from_greyscale(width, height, |x, y| gray[y * width + x]);
+    img.detect_grids()
+        .into_iter()
+        .find_map(|grid| grid.decode().ok().map(|(_, text)| text))
 }
 
 #[cfg(test)]
@@ -46,6 +47,9 @@ mod tests {
         let text = "endpointaaaabbbbccccddddeeeeffff";
         let (w, h, rgba) = render(text, 4).unwrap();
         let gray: Vec<u8> = rgba.chunks_exact(4).map(|p| p[0]).collect();
-        assert_eq!(decode_gray(w as usize, h as usize, &gray).as_deref(), Some(text));
+        assert_eq!(
+            decode_gray(w as usize, h as usize, &gray).as_deref(),
+            Some(text)
+        );
     }
 }

@@ -43,13 +43,16 @@ use crate::{
 
 pub(super) use http::serve_tunnel;
 
-
 pub const GUEST_ALPN: &[u8] = b"flipflop/guest/1";
 /// The port of the LAN server when it is free (any free port otherwise).
 const LAN_PORT: u16 = 53530;
 /// Where the page for links from anywhere is published (GitHub Pages): one copy per release, so a link opens
 /// the page built from the same source as the app that made it (see .github/workflows/pages.yml).
-const WEB_PAGE: &str = concat!("https://andunieee.github.io/flipflop/guest/v", env!("CARGO_PKG_VERSION"), "/");
+const WEB_PAGE: &str = concat!(
+    "https://andunieee.github.io/flipflop/guest/v",
+    env!("CARGO_PKG_VERSION"),
+    "/"
+);
 const TAG_CONTROL: u8 = 0;
 const TAG_SYNC: u8 = 1;
 /// Biggest message accepted from a guest.
@@ -141,7 +144,15 @@ pub(super) struct GuestSession {
 
 impl Drop for GuestSession {
     fn drop(&mut self) {
-        if let Some(group) = self.core.0.guests.sessions.lock().unwrap().get_mut(&self.gid) {
+        if let Some(group) = self
+            .core
+            .0
+            .guests
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut(&self.gid)
+        {
             group.remove(&self.key);
         }
         self.core.publish_group(&self.gid, false);
@@ -149,12 +160,24 @@ impl Drop for GuestSession {
 }
 
 fn same(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0, |acc, (x, y)| acc | (x ^ y))
+            == 0
 }
 
 /// `%XX`-encode everything but unreserved characters.
 fn encode(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
 }
 
 impl Core {
@@ -163,9 +186,24 @@ impl Core {
     /// A guest group nobody has touched: no guest ever joined, no other member, nothing shared or written.
     fn pristine_guest_group(&self) -> Option<String> {
         let me = self.me();
-        let ids: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().filter(|g| g.guest.is_some() && g.with.is_none()).map(|g| g.id.clone()).collect();
+        let ids: Vec<String> = self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .filter(|g| g.guest.is_some() && g.with.is_none())
+            .map(|g| g.id.clone())
+            .collect();
         ids.into_iter().find(|gid| {
-            self.with_doc(gid, |d| d.members().iter().all(|(id, _)| *id == me) && d.files().is_empty() && d.texts().is_empty() && d.scratch().is_empty())
+            self.with_doc(gid, |d| {
+                d.members().iter().all(|(id, _)| *id == me)
+                    && d.files().is_empty()
+                    && d.texts().is_empty()
+                    && d.scratch().is_empty()
+            })
         })
     }
 
@@ -191,12 +229,18 @@ impl Core {
     /// (and returns false) for an implied group or a group that already has a link.
     pub fn enable_guest_link(&self, gid: &str, uploads: bool) -> bool {
         let token = random_hex(16);
-        let enabled = self.with_state(|st| match st.groups.iter_mut().find(|g| g.id == gid && g.with.is_none() && g.guest.is_none()) {
-            Some(g) => {
-                g.guest = Some(GuestLink { token, uploads });
-                true
+        let enabled = self.with_state(|st| {
+            match st
+                .groups
+                .iter_mut()
+                .find(|g| g.id == gid && g.with.is_none() && g.guest.is_none())
+            {
+                Some(g) => {
+                    g.guest = Some(GuestLink { token, uploads });
+                    true
+                }
+                None => false,
             }
-            None => false,
         });
         if enabled {
             self.ensure_lan_server();
@@ -206,20 +250,40 @@ impl Core {
 
     /// Turn a guest group back into a plain group: the link stops working and its guests are disconnected.
     pub fn disable_guest_link(&self, gid: &str) {
-        let had = self.with_state(|st| match st.groups.iter_mut().find(|g| g.id == gid).and_then(|g| g.guest.take()) {
-            Some(_) => true,
-            None => false,
+        let had = self.with_state(|st| {
+            match st
+                .groups
+                .iter_mut()
+                .find(|g| g.id == gid)
+                .and_then(|g| g.guest.take())
+            {
+                Some(_) => true,
+                None => false,
+            }
         });
         if !had {
             return;
         }
-        self.guest_broadcast(gid, TAG_CONTROL, json!({"t": "closed"}).to_string().as_bytes());
+        self.guest_broadcast(
+            gid,
+            TAG_CONTROL,
+            json!({"t": "closed"}).to_string().as_bytes(),
+        );
         if let Some(sessions) = self.0.guests.sessions.lock().unwrap().remove(gid) {
             for s in sessions.values() {
                 let _ = s.tx.send(Out::Close);
             }
         }
-        if !self.0.store.lock().unwrap().state.groups.iter().any(|g| g.guest.is_some()) {
+        if !self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.guest.is_some())
+        {
             *self.0.guests.server.lock().unwrap() = None;
         }
         self.publish();
@@ -227,21 +291,45 @@ impl Core {
 
     /// Allow or forbid uploads on a guest link; the pages are told right away.
     pub fn set_guest_uploads(&self, gid: &str, on: bool) {
-        let changed = self.with_state(|st| match st.groups.iter_mut().find(|g| g.id == gid).and_then(|g| g.guest.as_mut()) {
-            Some(link) => std::mem::replace(&mut link.uploads, on) != on,
-            None => false,
+        let changed = self.with_state(|st| {
+            match st
+                .groups
+                .iter_mut()
+                .find(|g| g.id == gid)
+                .and_then(|g| g.guest.as_mut())
+            {
+                Some(link) => std::mem::replace(&mut link.uploads, on) != on,
+                None => false,
+            }
         });
         if changed {
-            self.guest_broadcast(gid, TAG_CONTROL, json!({"t": "uploads", "on": on}).to_string().as_bytes());
+            self.guest_broadcast(
+                gid,
+                TAG_CONTROL,
+                json!({"t": "uploads", "on": on}).to_string().as_bytes(),
+            );
         }
     }
 
     /// Close a guest link: its guests are disconnected and the group is gone.
     pub fn close_guest_link(&self, gid: &str) {
-        if !self.0.store.lock().unwrap().state.groups.iter().any(|g| g.id == gid && g.guest.is_some()) {
+        if !self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.id == gid && g.guest.is_some())
+        {
             return;
         }
-        self.guest_broadcast(gid, TAG_CONTROL, json!({"t": "closed"}).to_string().as_bytes());
+        self.guest_broadcast(
+            gid,
+            TAG_CONTROL,
+            json!({"t": "closed"}).to_string().as_bytes(),
+        );
         if let Some(sessions) = self.0.guests.sessions.lock().unwrap().remove(gid) {
             for s in sessions.values() {
                 let _ = s.tx.send(Out::Close);
@@ -249,7 +337,16 @@ impl Core {
         }
         self.drop_doc(gid);
         self.with_state(|st| st.groups.retain(|g| g.id != gid));
-        if !self.0.store.lock().unwrap().state.groups.iter().any(|g| g.guest.is_some()) {
+        if !self
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .any(|g| g.guest.is_some())
+        {
             *self.0.guests.server.lock().unwrap() = None;
             self.publish();
         }
@@ -265,7 +362,16 @@ impl Core {
     }
 
     fn guest_uploads(&self, gid: &str) -> bool {
-        self.0.store.lock().unwrap().state.groups.iter().find(|g| g.id == gid).and_then(|g| g.guest.as_ref()).is_some_and(|l| l.uploads)
+        self.0
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .groups
+            .iter()
+            .find(|g| g.id == gid)
+            .and_then(|g| g.guest.as_ref())
+            .is_some_and(|l| l.uploads)
     }
 
     // ---- the LAN server ---------------------------------------------------------------
@@ -302,37 +408,73 @@ impl Core {
     /// What the UI needs of a guest group.
     pub(super) fn guest_info(&self, gid: &str, link: &GuestLink) -> GuestInfo {
         // The address is looked up now, not when the server started: the network may have changed since.
-        let lan_url = self.0.guests.server.lock().unwrap().as_ref().and_then(|s| Some(format!("http://{}:{}/{}/", lan_ip()?, s.port, link.token)));
+        let lan_url = self
+            .0
+            .guests
+            .server
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| Some(format!("http://{}:{}/{}/", lan_ip()?, s.port, link.token)));
         let web_url = self.0.endpoint.addr().relay_urls().next().map(|relay| {
-            format!("{WEB_PAGE}#t={}&e={}&r={}", link.token, self.id(), encode(&relay.to_string()))
+            format!(
+                "{WEB_PAGE}#t={}&e={}&r={}",
+                link.token,
+                self.id(),
+                encode(&relay.to_string())
+            )
         });
         let online = self.guests_online(gid);
         let guests = self
             .with_doc(gid, |d| d.members())
             .into_iter()
             .filter(|(id, _)| is_guest(id))
-            .map(|(id, name)| GuestPerson { online: online.contains(&id), name })
+            .map(|(id, name)| GuestPerson {
+                online: online.contains(&id),
+                name,
+            })
             .collect();
-        GuestInfo { token: link.token.clone(), uploads: link.uploads, lan_url, web_url, guests }
+        GuestInfo {
+            token: link.token.clone(),
+            uploads: link.uploads,
+            lan_url,
+            web_url,
+            guests,
+        }
     }
 
     /// Member ids of the guests connected to a group right now.
     pub(super) fn guests_online(&self, gid: &str) -> std::collections::HashSet<String> {
-        self.0.guests.sessions.lock().unwrap().get(gid).map(|g| g.values().map(|s| s.guest.clone()).collect()).unwrap_or_default()
+        self.0
+            .guests
+            .sessions
+            .lock()
+            .unwrap()
+            .get(gid)
+            .map(|g| g.values().map(|s| s.guest.clone()).collect())
+            .unwrap_or_default()
     }
 
     // ---- sessions ---------------------------------------------------------------------
 
     /// A guest connected: record them in the document, say hello and start syncing. Frames for them go
     /// through `tx`.
-    pub(super) fn guest_attach(&self, gid: &str, origin: &Origin, tx: mpsc::UnboundedSender<Out>) -> Option<GuestSession> {
+    pub(super) fn guest_attach(
+        &self,
+        gid: &str,
+        origin: &Origin,
+        tx: mpsc::UnboundedSender<Out>,
+    ) -> Option<GuestSession> {
         let (title, uploads) = {
             let store = self.0.store.lock().unwrap();
             let g = store.state.groups.iter().find(|g| g.id == gid)?;
             (g.alias.clone(), g.guest.as_ref()?.uploads)
         };
         let (guest, name) = (origin.id(), origin.name());
-        let key = format!("{guest}#{}", self.0.guests.serial.fetch_add(1, Ordering::SeqCst));
+        let key = format!(
+            "{guest}#{}",
+            self.0.guests.serial.fetch_add(1, Ordering::SeqCst)
+        );
         self.with_doc(gid, |d| {
             d.join(&guest, &name);
             d.reset_sync(&key);
@@ -345,9 +487,26 @@ impl Core {
         let mut frame = vec![TAG_CONTROL];
         frame.extend_from_slice(hello.to_string().as_bytes());
         let _ = tx.send(Out::Frame(frame));
-        self.0.guests.sessions.lock().unwrap().entry(gid.to_owned()).or_default().insert(key.clone(), Session { guest: guest.clone(), tx });
+        self.0
+            .guests
+            .sessions
+            .lock()
+            .unwrap()
+            .entry(gid.to_owned())
+            .or_default()
+            .insert(
+                key.clone(),
+                Session {
+                    guest: guest.clone(),
+                    tx,
+                },
+            );
         self.doc_changed(gid, false);
-        Some(GuestSession { core: self.clone(), gid: gid.to_owned(), key })
+        Some(GuestSession {
+            core: self.clone(),
+            gid: gid.to_owned(),
+            key,
+        })
     }
 
     pub(super) fn guest_broadcast(&self, gid: &str, tag: u8, payload: &[u8]) {
@@ -362,7 +521,9 @@ impl Core {
 
     /// A message from a guest.
     pub(super) fn guest_frame(&self, session: &GuestSession, frame: &[u8]) {
-        let Some((&tag, payload)) = frame.split_first() else { return };
+        let Some((&tag, payload)) = frame.split_first() else {
+            return;
+        };
         if tag != TAG_SYNC || frame.len() > MAX_FRAME {
             return;
         }
@@ -375,7 +536,15 @@ impl Core {
 
     /// Tell every guest session of a group what it is missing.
     pub(super) fn sync_guests(&self, gid: &str) {
-        let keys: Vec<String> = self.0.guests.sessions.lock().unwrap().get(gid).map(|g| g.keys().cloned().collect()).unwrap_or_default();
+        let keys: Vec<String> = self
+            .0
+            .guests
+            .sessions
+            .lock()
+            .unwrap()
+            .get(gid)
+            .map(|g| g.keys().cloned().collect())
+            .unwrap_or_default();
         for key in keys {
             self.sync_guest(gid, &key);
         }
@@ -383,10 +552,20 @@ impl Core {
 
     fn sync_guest(&self, gid: &str, key: &str) {
         for _ in 0..16 {
-            let Some(message) = self.with_doc(gid, |d| d.sync_message(key)) else { break };
+            let Some(message) = self.with_doc(gid, |d| d.sync_message(key)) else {
+                break;
+            };
             let mut frame = vec![TAG_SYNC];
             frame.extend_from_slice(&message);
-            let sent = self.0.guests.sessions.lock().unwrap().get(gid).and_then(|g| g.get(key)).map(|s| s.tx.send(Out::Frame(frame)).is_ok());
+            let sent = self
+                .0
+                .guests
+                .sessions
+                .lock()
+                .unwrap()
+                .get(gid)
+                .and_then(|g| g.get(key))
+                .map(|s| s.tx.send(Out::Frame(frame)).is_ok());
             if sent != Some(true) {
                 break;
             }
@@ -397,7 +576,9 @@ impl Core {
 
     /// Where the bytes of an offer are on this device, for a guest to download.
     pub(super) fn guest_file(&self, gid: &str, fid: &str) -> Result<(PathBuf, String, u64)> {
-        let offer = self.with_doc(gid, |d| d.file(fid)).context("no such file")?;
+        let offer = self
+            .with_doc(gid, |d| d.file(fid))
+            .context("no such file")?;
         if offer.stopped {
             bail!("no longer shared");
         }
@@ -430,7 +611,14 @@ impl Core {
         let target = sharing::unique_path(&dir, &name);
         let part = target.with_extension("part");
         let file = tokio::fs::File::create(&part).await?;
-        Ok(Upload { file, hasher: blake3::Hasher::new(), size: 0, part, target, name })
+        Ok(Upload {
+            file,
+            hasher: blake3::Hasher::new(),
+            size: 0,
+            part,
+            target,
+            name,
+        })
     }
 }
 
@@ -452,11 +640,24 @@ impl Upload {
     }
 
     /// Done: the file becomes an offer in the group (from the guest, served by us).
-    pub(super) async fn finish(mut self, core: &Core, gid: &str, origin: &Origin) -> Result<String> {
+    pub(super) async fn finish(
+        mut self,
+        core: &Core,
+        gid: &str,
+        origin: &Origin,
+    ) -> Result<String> {
         self.file.flush().await?;
         tokio::fs::rename(&self.part, &self.target).await?;
         let hash = self.hasher.finalize().to_hex().to_string();
-        Ok(core.add_guest_offer(gid, &origin.id(), &origin.name(), self.target.clone(), &self.name, self.size, &hash))
+        Ok(core.add_guest_offer(
+            gid,
+            &origin.id(),
+            &origin.name(),
+            self.target.clone(),
+            &self.name,
+            self.size,
+            &hash,
+        ))
     }
 }
 

@@ -20,7 +20,9 @@ pub fn size(bytes: u64) -> String {
 
 /// `14:02` for today, `Oct 3, 14:02` otherwise (local time).
 pub fn time(millis: i64) -> String {
-    let Some(t) = Local.timestamp_millis_opt(millis).single() else { return String::new() };
+    let Some(t) = Local.timestamp_millis_opt(millis).single() else {
+        return String::new();
+    };
     if t.date_naive() == Local::now().date_naive() {
         t.format("%H:%M").to_string()
     } else {
@@ -36,10 +38,16 @@ pub fn is_link(text: &str) -> bool {
 
 /// `AB` for "Anna's Box", `P` for "parents".
 pub fn initials(name: &str) -> String {
-    let mut words = name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty());
+    let mut words = name
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty());
     let first = words.next().and_then(|w| w.chars().next());
     let second = words.next().and_then(|w| w.chars().next());
-    first.into_iter().chain(second).flat_map(char::to_uppercase).collect()
+    first
+        .into_iter()
+        .chain(second)
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 #[cfg(test)]

@@ -33,12 +33,20 @@ impl Settings {
             .map(|s| clean_name(&s))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(default_name);
-        Settings { dir: dir.to_owned(), secret_key, name }
+        Settings {
+            dir: dir.to_owned(),
+            secret_key,
+            name,
+        }
     }
 
     pub fn set_name(&mut self, name: &str) -> String {
         let name = clean_name(name);
-        self.name = if name.is_empty() { default_name() } else { name };
+        self.name = if name.is_empty() {
+            default_name()
+        } else {
+            name
+        };
         if let Err(err) = std::fs::write(self.dir.join("name.txt"), &self.name) {
             tracing::warn!("could not persist name: {err}");
         }
@@ -82,7 +90,9 @@ fn host() -> String {
         let mut buf = [0 as c_char; 92]; // PROP_VALUE_MAX
         let len = unsafe { __system_property_get(prop.as_ptr(), buf.as_mut_ptr()) };
         if len > 0 {
-            let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned();
+            let s = unsafe { CStr::from_ptr(buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
             if !s.is_empty() {
                 return s;
             }

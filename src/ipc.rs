@@ -79,7 +79,9 @@ mod sys {
 #[cfg(windows)]
 mod sys {
     use super::*;
-    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions};
+    use tokio::net::windows::named_pipe::{
+        ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+    };
 
     pub type Client = NamedPipeClient;
     pub type Server = NamedPipeServer;
@@ -95,7 +97,9 @@ mod sys {
 
     pub fn listen(dir: &Path) -> io::Result<Listener> {
         let name = name(dir);
-        let next = ServerOptions::new().first_pipe_instance(true).create(&name)?;
+        let next = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)?;
         Ok(Listener { name, next })
     }
 
@@ -117,7 +121,8 @@ mod sys {
 /// Start answering commands from other processes. Needs a tokio runtime; the listener lives as
 /// long as the runtime does.
 pub fn serve(dir: &Path, core: Core) -> Result<()> {
-    let mut listener = sys::listen(dir).with_context(|| format!("listening for commands in {}", dir.display()))?;
+    let mut listener =
+        sys::listen(dir).with_context(|| format!("listening for commands in {}", dir.display()))?;
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
@@ -139,7 +144,10 @@ struct FrameWriter(mpsc::UnboundedSender<Frame>);
 
 impl Write for FrameWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let _ = self.0.send(Frame { out: Some(String::from_utf8_lossy(buf).into_owned()), ..Default::default() });
+        let _ = self.0.send(Frame {
+            out: Some(String::from_utf8_lossy(buf).into_owned()),
+            ..Default::default()
+        });
         Ok(buf.len())
     }
 
@@ -160,14 +168,24 @@ async fn handle(core: Core, stream: impl AsyncRead + AsyncWrite + Unpin + Send +
         async move {
             let request: Request = serde_json::from_str(&line).context("bad request")?;
             let cli = Cli::try_parse_from(&request.args).map_err(|e| anyhow!("{}", e.render()))?;
-            let cx = Ctx { out: Out::new(FrameWriter(tx)), cwd: request.cwd, routed: true };
+            let cx = Ctx {
+                out: Out::new(FrameWriter(tx)),
+                cwd: request.cwd,
+                routed: true,
+            };
             cli::run(&core, &cx, &cli).await
         }
     };
     tokio::spawn(async move {
         let last = match job.await {
-            Ok(()) => Frame { done: true, ..Default::default() },
-            Err(err) => Frame { err: Some(format!("{err:#}")), ..Default::default() },
+            Ok(()) => Frame {
+                done: true,
+                ..Default::default()
+            },
+            Err(err) => Frame {
+                err: Some(format!("{err:#}")),
+                ..Default::default()
+            },
         };
         let _ = tx.send(last);
     });
@@ -197,7 +215,8 @@ pub async fn route(dir: &Path, args: Vec<String>, cwd: PathBuf) -> Result<()> {
     let mut lines = BufReader::new(read).lines();
     let mut stdout = io::stdout();
     while let Some(line) = lines.next_line().await? {
-        let frame: Frame = serde_json::from_str(&line).context("bad answer from the running app")?;
+        let frame: Frame =
+            serde_json::from_str(&line).context("bad answer from the running app")?;
         if let Some(text) = frame.out {
             stdout.write_all(text.as_bytes())?;
             stdout.flush()?;
@@ -209,7 +228,9 @@ pub async fn route(dir: &Path, args: Vec<String>, cwd: PathBuf) -> Result<()> {
             return Ok(());
         }
     }
-    Err(anyhow!("the running app closed the connection before finishing"))
+    Err(anyhow!(
+        "the running app closed the connection before finishing"
+    ))
 }
 
 /// Can something be asked to run commands in `dir`?

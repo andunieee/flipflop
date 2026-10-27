@@ -62,11 +62,23 @@ async fn until(what: &str, mut f: impl FnMut() -> bool) {
 }
 
 fn peer(log: &Log, who: &Core) -> Option<Peer> {
-    log.lock().unwrap().peers.iter().find(|p| p.id == who.id()).cloned()
+    log.lock()
+        .unwrap()
+        .peers
+        .iter()
+        .find(|p| p.id == who.id())
+        .cloned()
 }
 
 fn implied(log: &Log) -> Vec<String> {
-    log.lock().unwrap().groups.groups.iter().filter(|g| g.with.is_some()).map(|g| g.id.clone()).collect()
+    log.lock()
+        .unwrap()
+        .groups
+        .groups
+        .iter()
+        .filter(|g| g.with.is_some())
+        .map(|g| g.id.clone())
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -77,22 +89,44 @@ async fn implied_group_needs_both_sides_and_shares_content() {
 
     // Bob scans Alice's code: that pairs him with her, but she has not paired back.
     b.connect_ticket(&a.ticket()).await.unwrap();
-    until("alice hears bob paired", || peer(&alog, &b).is_some_and(|p| p.paired_us && !p.paired)).await;
+    until("alice hears bob paired", || {
+        peer(&alog, &b).is_some_and(|p| p.paired_us && !p.paired)
+    })
+    .await;
     assert!(peer(&blog, &a).unwrap().paired);
-    assert!(implied(&alog).is_empty() && implied(&blog).is_empty(), "one-sided pairing is not enough");
+    assert!(
+        implied(&alog).is_empty() && implied(&blog).is_empty(),
+        "one-sided pairing is not enough"
+    );
 
     // Alice pairs from the peers menu: now both have an implied group, with the same id.
     a.pair(b.id());
-    until("implied groups", || implied(&alog).len() == 1 && implied(&blog).len() == 1).await;
+    until("implied groups", || {
+        implied(&alog).len() == 1 && implied(&blog).len() == 1
+    })
+    .await;
     assert_eq!(implied(&alog), implied(&blog));
     let gid = implied(&alog).remove(0);
-    assert_eq!(peer(&alog, &b).unwrap().pair_group.as_deref(), Some(gid.as_str()));
-    assert_eq!(peer(&blog, &a).unwrap().pair_group.as_deref(), Some(gid.as_str()));
+    assert_eq!(
+        peer(&alog, &b).unwrap().pair_group.as_deref(),
+        Some(gid.as_str())
+    );
+    assert_eq!(
+        peer(&blog, &a).unwrap().pair_group.as_deref(),
+        Some(gid.as_str())
+    );
 
     // It carries content like any group.
-    until("both in the doc", || a.group_view(&gid).is_some_and(|v| v.members.len() == 2)).await;
+    until("both in the doc", || {
+        a.group_view(&gid).is_some_and(|v| v.members.len() == 2)
+    })
+    .await;
     a.send_text(&gid, "hello bob").unwrap();
-    until("bob gets the text", || b.group_view(&gid).is_some_and(|v| v.texts.iter().any(|t| t.text == "hello bob"))).await;
+    until("bob gets the text", || {
+        b.group_view(&gid)
+            .is_some_and(|v| v.texts.iter().any(|t| t.text == "hello bob"))
+    })
+    .await;
 
     // An implied group cannot be left on its own.
     a.delete_group(&gid);
@@ -100,12 +134,18 @@ async fn implied_group_needs_both_sides_and_shares_content() {
 
     // Unpairing removes it on both sides.
     b.unpair(a.id());
-    until("groups gone", || implied(&alog).is_empty() && implied(&blog).is_empty()).await;
+    until("groups gone", || {
+        implied(&alog).is_empty() && implied(&blog).is_empty()
+    })
+    .await;
     assert!(a.group_view(&gid).is_none());
 
     // Pairing again brings back a group with the same id.
     b.pair(a.id());
-    until("back", || implied(&alog) == [gid.clone()] && implied(&blog) == [gid.clone()]).await;
+    until("back", || {
+        implied(&alog) == [gid.clone()] && implied(&blog) == [gid.clone()]
+    })
+    .await;
 
     a.shutdown().await;
     b.shutdown().await;
@@ -117,16 +157,26 @@ async fn unpairing_while_apart_is_announced_on_reconnect() {
     let (b, blog, _db) = node("u-bob").await;
     until("alice ticket", || !a.ticket().is_empty()).await;
     b.connect_ticket(&a.ticket()).await.unwrap();
-    until("alice hears bob", || peer(&alog, &b).is_some_and(|p| p.paired_us)).await;
+    until("alice hears bob", || {
+        peer(&alog, &b).is_some_and(|p| p.paired_us)
+    })
+    .await;
     a.pair(b.id());
-    until("implied", || implied(&alog).len() == 1 && implied(&blog).len() == 1).await;
+    until("implied", || {
+        implied(&alog).len() == 1 && implied(&blog).len() == 1
+    })
+    .await;
 
     // Alice goes away, restarts and has unpaired meanwhile (state edited while she was down).
     a.shutdown().await;
-    until("bob sees alice gone", || peer(&blog, &a).is_some_and(|p| !p.connected)).await;
+    until("bob sees alice gone", || {
+        peer(&blog, &a).is_some_and(|p| !p.connected)
+    })
+    .await;
     drop(a);
     let state_path = da.path().join("state.json");
-    let mut state: serde_json::Value = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
     for c in state["contacts"].as_array_mut().unwrap() {
         c["paired"] = false.into();
     }
@@ -142,7 +192,10 @@ async fn unpairing_while_apart_is_announced_on_reconnect() {
     .await
     .unwrap();
 
-    until("bob drops the group when alice reconnects", || implied(&blog).is_empty()).await;
+    until("bob drops the group when alice reconnects", || {
+        implied(&blog).is_empty()
+    })
+    .await;
     assert!(!peer(&blog, &a2).unwrap().paired_us);
     a2.shutdown().await;
     b.shutdown().await;
@@ -154,11 +207,20 @@ async fn unseen_news_per_group_until_looked_at() {
     let (b, blog, _db) = node("n-bob").await;
     until("alice ticket", || !a.ticket().is_empty()).await;
     b.connect_ticket(&a.ticket()).await.unwrap();
-    until("alice hears bob", || peer(&alog, &b).is_some_and(|p| p.paired_us)).await;
+    until("alice hears bob", || {
+        peer(&alog, &b).is_some_and(|p| p.paired_us)
+    })
+    .await;
     a.pair(b.id());
-    until("implied", || implied(&alog).len() == 1 && implied(&blog).len() == 1).await;
+    until("implied", || {
+        implied(&alog).len() == 1 && implied(&blog).len() == 1
+    })
+    .await;
     let gid = implied(&alog).remove(0);
-    until("both in the doc", || b.group_view(&gid).is_some_and(|v| v.members.len() == 2)).await;
+    until("both in the doc", || {
+        b.group_view(&gid).is_some_and(|v| v.members.len() == 2)
+    })
+    .await;
     a.mark_all_seen();
     b.mark_all_seen();
     assert!(b.unseen().is_empty());
@@ -176,7 +238,10 @@ async fn unseen_news_per_group_until_looked_at() {
     .await;
     let u = b.unseen().remove(0);
     assert_eq!(u.group, gid);
-    assert_eq!(u.title, "n-alice", "an implied group is named after the other device");
+    assert_eq!(
+        u.title, "n-alice",
+        "an implied group is named after the other device"
+    );
     assert_eq!(u.files[0].0, "note.txt");
     assert_eq!(u.texts[0].1, "first");
     // Alice has no news about her own posts.
@@ -188,7 +253,11 @@ async fn unseen_news_per_group_until_looked_at() {
     a.send_text(&gid, "second").unwrap();
     until("only the new text", || {
         let u = b.unseen();
-        u.len() == 1 && u[0].texts.len() == 1 && u[0].texts[0].1 == "second" && u[0].files.is_empty() && !u[0].scratch
+        u.len() == 1
+            && u[0].texts.len() == 1
+            && u[0].texts[0].1 == "second"
+            && u[0].files.is_empty()
+            && !u[0].scratch
     })
     .await;
 

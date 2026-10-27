@@ -23,7 +23,11 @@ static SHARED: OnceLock<Shared> = OnceLock::new();
 
 pub fn start(core: Core, status: impl Fn(String) + Send + Sync + 'static) {
     let mut payload_rx = core.ble_payload();
-    let _ = SHARED.set(Shared { core, status: Arc::new(status), addrs: Mutex::default() });
+    let _ = SHARED.set(Shared {
+        core,
+        status: Arc::new(status),
+        addrs: Mutex::default(),
+    });
     platform::call_void("bleStart");
     tokio::spawn(async move {
         loop {
@@ -42,9 +46,15 @@ pub fn start(core: Core, status: impl Fn(String) + Send + Sync + 'static) {
 
 pub fn on_peer(address: String, json: String) {
     let Some(shared) = SHARED.get() else { return };
-    let Ok(payload) = serde_json::from_str::<BlePayload>(&json) else { return };
+    let Ok(payload) = serde_json::from_str::<BlePayload>(&json) else {
+        return;
+    };
     if let Ok(t) = payload.t.parse::<iroh_tickets::endpoint::EndpointTicket>() {
-        shared.addrs.lock().unwrap().insert(address, t.endpoint_addr().id);
+        shared
+            .addrs
+            .lock()
+            .unwrap()
+            .insert(address, t.endpoint_addr().id);
     }
     shared.core.ble_seen(payload);
 }

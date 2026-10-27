@@ -15,7 +15,11 @@ fn cli(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 fn text(o: &std::process::Output) -> String {
-    format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -47,15 +51,39 @@ async fn commands_run_inside_the_owner() {
     let (id, new, list, offer, missing, bad, serve) = out;
 
     assert!(id.status.success(), "{}", text(&id));
-    assert!(text(&id).contains(&core.id().to_string()), "ran in the owner: {}", text(&id));
+    assert!(
+        text(&id).contains(&core.id().to_string()),
+        "ran in the owner: {}",
+        text(&id)
+    );
     assert!(new.status.success(), "{}", text(&new));
     // the group the CLI made exists in the owner
     assert_eq!(core.groups().groups.len(), 1);
-    assert!(text(&list).contains(&core.groups().groups[0].id[..8]), "{}", text(&list));
-    assert!(offer.status.success() && text(&offer).starts_with("offered"), "{}", text(&offer));
-    assert!(!missing.status.success() && text(&missing).contains("nope.txt"), "{}", text(&missing));
-    assert!(!bad.status.success() && text(&bad).contains("no group matches"), "{}", text(&bad));
-    assert!(serve.status.success() && text(&serve).contains("already serving"), "{}", text(&serve));
+    assert!(
+        text(&list).contains(&core.groups().groups[0].id[..8]),
+        "{}",
+        text(&list)
+    );
+    assert!(
+        offer.status.success() && text(&offer).starts_with("offered"),
+        "{}",
+        text(&offer)
+    );
+    assert!(
+        !missing.status.success() && text(&missing).contains("nope.txt"),
+        "{}",
+        text(&missing)
+    );
+    assert!(
+        !bad.status.success() && text(&bad).contains("no group matches"),
+        "{}",
+        text(&bad)
+    );
+    assert!(
+        serve.status.success() && text(&serve).contains("already serving"),
+        "{}",
+        text(&serve)
+    );
 
     core.shutdown().await;
     assert!(!Core::dir_in_use(&dir));
@@ -64,11 +92,16 @@ async fn commands_run_inside_the_owner() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn without_an_owner_the_cli_runs_its_own_node() {
-    let dir: PathBuf = std::env::temp_dir().join(format!("flipflop-ipc-solo-{}", std::process::id()));
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("flipflop-ipc-solo-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let d = dir.clone();
-    let (a, b) = tokio::task::spawn_blocking(move || (cli(&d, &["group", "new"]), cli(&d, &["group", "list"]))).await.unwrap();
+    let (a, b) = tokio::task::spawn_blocking(move || {
+        (cli(&d, &["group", "new"]), cli(&d, &["group", "list"]))
+    })
+    .await
+    .unwrap();
     assert!(a.status.success(), "{}", text(&a));
     assert!(text(&b).contains(&text(&a)[..8]), "{}", text(&b));
     let _ = std::fs::remove_dir_all(&dir);

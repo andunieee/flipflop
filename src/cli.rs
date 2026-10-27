@@ -11,12 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
-use clap::{Parser, Subcommand};
 use crate::{
     core::{Core, GroupInfo, GroupView, MemberState, Peer},
     format,
 };
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{Parser, Subcommand};
 use iroh::EndpointId;
 use tokio::time::sleep;
 
@@ -25,7 +25,10 @@ macro_rules! say {
 }
 
 #[derive(Parser)]
-#[command(name = "flipflop-cli", about = "flipflop from the command line: groups with files, texts and a scratchpad")]
+#[command(
+    name = "flipflop-cli",
+    about = "flipflop from the command line: groups with files, texts and a scratchpad"
+)]
 pub struct Cli {
     /// Where this node keeps its identity and groups.
     #[arg(long, env = "FLIPFLOP_DIR", global = true)]
@@ -155,7 +158,9 @@ pub enum GuestCmd {
 
 #[derive(Subcommand)]
 pub enum FileCmd {
-    List { group: String },
+    List {
+        group: String,
+    },
     /// Offer a file; stays online until everyone has it or --wait runs out.
     Offer {
         group: String,
@@ -168,9 +173,15 @@ pub enum FileCmd {
         name: Option<String>,
     },
     /// Stop sharing one of your files.
-    Stop { group: String, file: String },
+    Stop {
+        group: String,
+        file: String,
+    },
     /// Download a file now.
-    Get { group: String, file: String },
+    Get {
+        group: String,
+        file: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -182,13 +193,20 @@ pub enum TextCmd {
 
 #[derive(Subcommand)]
 pub enum PadCmd {
-    Show { group: String },
+    Show {
+        group: String,
+    },
     /// Replace the scratchpad's text.
-    Set { group: String, text: String },
+    Set {
+        group: String,
+        text: String,
+    },
     /// Add a line at the end.
-    Append { group: String, text: String },
+    Append {
+        group: String,
+        text: String,
+    },
 }
-
 
 /// Where a command writes what it prints: stdout, or the socket of a CLI that routed it here.
 pub struct Out(Mutex<Box<dyn Write + Send>>);
@@ -281,10 +299,22 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
             let invites = core.groups().invites;
             let news = core.unseen();
             for i in &invites {
-                say!(cx, "invite  {}  from {}  (flipflop-cli group accept {})", i.haiku, i.inviter_name, &i.group[..8]);
+                say!(
+                    cx,
+                    "invite  {}  from {}  (flipflop-cli group accept {})",
+                    i.haiku,
+                    i.inviter_name,
+                    &i.group[..8]
+                );
             }
             for n in &news {
-                say!(cx, "{}  {}{}", &n.group[..8], n.title, if n.with.is_some() { "  (paired)" } else { "" });
+                say!(
+                    cx,
+                    "{}  {}{}",
+                    &n.group[..8],
+                    n.title,
+                    if n.with.is_some() { "  (paired)" } else { "" }
+                );
                 for line in n.lines() {
                     say!(cx, "    {line}");
                 }
@@ -301,9 +331,17 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
         Command::File(cmd) => file(core, cx, cmd, wait).await?,
         Command::Text(cmd) => text(core, cx, cmd, wait).await?,
         Command::Pad(cmd) => pad(core, cx, cmd, wait).await?,
-        Command::Apps => say!(cx, "Apps are not implemented yet: groups will share WebAssembly apps with a hypereffect.dev interface."),
+        Command::Apps => say!(
+            cx,
+            "Apps are not implemented yet: groups will share WebAssembly apps with a hypereffect.dev interface."
+        ),
         Command::Serve { .. } if cx.routed => {
-            say!(cx, "the running app is already serving as {} ({})", core.name(), core.id());
+            say!(
+                cx,
+                "the running app is already serving as {} ({})",
+                core.name(),
+                core.id()
+            );
         }
         Command::Serve { secs } => {
             say!(cx, "serving as {} ({})", core.name(), core.id());
@@ -324,16 +362,44 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
 
 fn guest_group(core: &Core, query: &str) -> Result<(GroupInfo, crate::core::GuestInfo)> {
     let info = find_group(core, query)?;
-    let guest = info.guest.clone().ok_or_else(|| anyhow!("{query:?} is not a guest group"))?;
+    let guest = info
+        .guest
+        .clone()
+        .ok_or_else(|| anyhow!("{query:?} is not a guest group"))?;
     Ok((info, guest))
 }
 
 async fn show_guest(core: &Core, cx: &Ctx, id: &str, wait: Duration) -> Result<()> {
-    wait_for(wait, || core.groups().groups.iter().any(|g| g.id == id && g.guest.as_ref().is_some_and(|l| l.lan_url.is_some() && l.web_url.is_some()))).await;
+    wait_for(wait, || {
+        core.groups().groups.iter().any(|g| {
+            g.id == id
+                && g.guest
+                    .as_ref()
+                    .is_some_and(|l| l.lan_url.is_some() && l.web_url.is_some())
+        })
+    })
+    .await;
     let (info, guest) = guest_group(core, id)?;
-    say!(cx, "{}  {}  uploads {}", &info.id[..8], title(&info), if guest.uploads { "on" } else { "off" });
-    say!(cx, "  same network  {}", guest.lan_url.as_deref().unwrap_or("(not available)"));
-    say!(cx, "  anywhere      {}", guest.web_url.as_deref().unwrap_or("(not available yet: no home relay)"));
+    say!(
+        cx,
+        "{}  {}  uploads {}",
+        &info.id[..8],
+        title(&info),
+        if guest.uploads { "on" } else { "off" }
+    );
+    say!(
+        cx,
+        "  same network  {}",
+        guest.lan_url.as_deref().unwrap_or("(not available)")
+    );
+    say!(
+        cx,
+        "  anywhere      {}",
+        guest
+            .web_url
+            .as_deref()
+            .unwrap_or("(not available yet: no home relay)")
+    );
     for g in &guest.guests {
         say!(cx, "  {}{}", g.name, if g.online { "  online" } else { "" });
     }
@@ -343,7 +409,13 @@ async fn show_guest(core: &Core, cx: &Ctx, id: &str, wait: Duration) -> Result<(
 async fn guest(core: &Core, cx: &Ctx, cmd: &GuestCmd, wait: Duration) -> Result<()> {
     match cmd {
         GuestCmd::List => {
-            let ids: Vec<String> = core.groups().groups.iter().filter(|g| g.guest.is_some()).map(|g| g.id.clone()).collect();
+            let ids: Vec<String> = core
+                .groups()
+                .groups
+                .iter()
+                .filter(|g| g.guest.is_some())
+                .map(|g| g.id.clone())
+                .collect();
             for id in &ids {
                 show_guest(core, cx, id, Duration::ZERO).await?;
             }
@@ -393,7 +465,13 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
                 say!(cx, "{}  {}  {}", &g.id[..8], title(g), summary(g));
             }
             for i in &view.invites {
-                say!(cx, "invite  {}  from {}  (flipflop-cli group accept {})", i.haiku, i.inviter_name, &i.group[..8]);
+                say!(
+                    cx,
+                    "invite  {}  from {}  (flipflop-cli group accept {})",
+                    i.haiku,
+                    i.inviter_name,
+                    &i.group[..8]
+                );
             }
             if view.groups.iter().all(|g| g.with.is_some()) && view.invites.is_empty() {
                 say!(cx, "no groups");
@@ -417,12 +495,33 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             say!(cx, "auto-rehost   {}", info.auto_rehost);
             say!(cx, "members:");
             for m in &v.members {
-                say!(cx, "  {}  {}{}", m.id.chars().take(8).collect::<String>(), m.name, if m.me { "  (this device)" } else if m.online { "  online" } else { "" });
+                say!(
+                    cx,
+                    "  {}  {}{}",
+                    m.id.chars().take(8).collect::<String>(),
+                    m.name,
+                    if m.me {
+                        "  (this device)"
+                    } else if m.online {
+                        "  online"
+                    } else {
+                        ""
+                    }
+                );
             }
-            for m in info.members.iter().filter(|m| m.state != MemberState::Accepted && !v.members.iter().any(|d| d.id == m.id.to_string())) {
+            for m in info.members.iter().filter(|m| {
+                m.state != MemberState::Accepted
+                    && !v.members.iter().any(|d| d.id == m.id.to_string())
+            }) {
                 say!(cx, "  {}  {}  {:?}", m.id.fmt_short(), m.name, m.state);
             }
-            say!(cx, "{} files, {} texts, scratchpad {} chars", v.files.len(), v.texts.len(), v.scratch.chars().count());
+            say!(
+                cx,
+                "{} files, {} texts, scratchpad {} chars",
+                v.files.len(),
+                v.texts.len(),
+                v.scratch.chars().count()
+            );
         }
         GroupCmd::Rename { group, alias } => {
             let info = find_group(core, group)?;
@@ -437,22 +536,50 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             let id = resolve_peer(core, peer, wait).await?;
             core.add_to_group(&info.id, id);
             wait_for(wait, || {
-                core.groups().groups.iter().find(|g| g.id == info.id).is_some_and(|g| {
-                    g.members.iter().any(|m| m.id == id && m.state != MemberState::Pending)
-                })
+                core.groups()
+                    .groups
+                    .iter()
+                    .find(|g| g.id == info.id)
+                    .is_some_and(|g| {
+                        g.members
+                            .iter()
+                            .any(|m| m.id == id && m.state != MemberState::Pending)
+                    })
             })
             .await;
-            let state = core.groups().groups.iter().find(|g| g.id == info.id).and_then(|g| g.members.iter().find(|m| m.id == id).map(|m| m.state));
+            let state = core
+                .groups()
+                .groups
+                .iter()
+                .find(|g| g.id == info.id)
+                .and_then(|g| g.members.iter().find(|m| m.id == id).map(|m| m.state));
             say!(cx, "invitation {:?}", state.unwrap_or(MemberState::Pending));
             // Stay a moment: an answer may come right back.
             wait_for(wait, || {
-                core.groups().groups.iter().find(|g| g.id == info.id).is_some_and(|g| {
-                    g.members.iter().any(|m| m.id == id && matches!(m.state, MemberState::Accepted | MemberState::Declined))
-                })
+                core.groups()
+                    .groups
+                    .iter()
+                    .find(|g| g.id == info.id)
+                    .is_some_and(|g| {
+                        g.members.iter().any(|m| {
+                            m.id == id
+                                && matches!(m.state, MemberState::Accepted | MemberState::Declined)
+                        })
+                    })
             })
             .await;
-            let state = core.groups().groups.iter().find(|g| g.id == info.id).and_then(|g| g.members.iter().find(|m| m.id == id).map(|m| m.state));
-            say!(cx, "{} is now {:?}", peer, state.unwrap_or(MemberState::Pending));
+            let state = core
+                .groups()
+                .groups
+                .iter()
+                .find(|g| g.id == info.id)
+                .and_then(|g| g.members.iter().find(|m| m.id == id).map(|m| m.state));
+            say!(
+                cx,
+                "{} is now {:?}",
+                peer,
+                state.unwrap_or(MemberState::Pending)
+            );
         }
         GroupCmd::Accept { invite } | GroupCmd::Decline { invite } => {
             let accept = matches!(cmd, GroupCmd::Accept { .. });
@@ -467,7 +594,12 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
             sleep(Duration::from_secs(if accept { 4 } else { 2 })).await;
             say!(cx, "{}", if accept { "accepted" } else { "declined" });
         }
-        GroupCmd::Settings { group, auto_download, auto_stop, auto_rehost } => {
+        GroupCmd::Settings {
+            group,
+            auto_download,
+            auto_stop,
+            auto_rehost,
+        } => {
             let info = find_group(core, group)?;
             core.set_group_settings(&info.id, *auto_download, *auto_stop, *auto_rehost);
             let info = find_group(core, &info.id)?;
@@ -495,25 +627,40 @@ async fn file(core: &Core, cx: &Ctx, cmd: &FileCmd, wait: Duration) -> Result<()
                 say!(cx, "{}", file_line(f));
             }
         }
-        FileCmd::Offer { group, path, kind, name } => {
+        FileCmd::Offer {
+            group,
+            path,
+            kind,
+            name,
+        } => {
             let gid = find_group(core, group)?.id;
             settle(core, &gid, wait.min(Duration::from_secs(6))).await;
             let path = cx.cwd.join(path);
-            let path = std::fs::canonicalize(&path).with_context(|| format!("no such file: {}", path.display()))?;
-            let fid = core.offer_file(&gid, path, name.clone(), kind, false).await?;
+            let path = std::fs::canonicalize(&path)
+                .with_context(|| format!("no such file: {}", path.display()))?;
+            let fid = core
+                .offer_file(&gid, path, name.clone(), kind, false)
+                .await?;
             say!(cx, "offered {fid}");
             // Serve until everybody else has it (or the timeout), so the transfer can happen.
             let started = Instant::now();
             loop {
                 let v = core.group_view(&gid).context("group vanished")?;
-                let f = v.files.iter().find(|f| f.id == fid).context("offer vanished")?;
+                let f = v
+                    .files
+                    .iter()
+                    .find(|f| f.id == fid)
+                    .context("offer vanished")?;
                 if f.stopped || (f.audience > 0 && f.downloaded_by.len() >= f.audience) {
                     say!(cx, "{}", file_line(f));
                     break;
                 }
                 if started.elapsed() > wait {
                     say!(cx, "{}", file_line(f));
-                    say!(cx, "(still on offer: keep a node running with `serve` so members can download it)");
+                    say!(
+                        cx,
+                        "(still on offer: keep a node running with `serve` so members can download it)"
+                    );
                     break;
                 }
                 sleep(Duration::from_millis(300)).await;
@@ -551,7 +698,14 @@ async fn text(core: &Core, cx: &Ctx, cmd: &TextCmd, wait: Duration) -> Result<()
                 say!(cx, "no texts");
             }
             for t in v.texts.iter().rev() {
-                say!(cx, "{}  {}  {}{}", &t.id[..t.id.len().min(13)], format::time(t.ts), t.name, if t.mine { " (you)" } else { "" });
+                say!(
+                    cx,
+                    "{}  {}  {}{}",
+                    &t.id[..t.id.len().min(13)],
+                    format::time(t.ts),
+                    t.name,
+                    if t.mine { " (you)" } else { "" }
+                );
                 for line in t.text.lines() {
                     say!(cx, "    {line}");
                 }
@@ -568,8 +722,14 @@ async fn text(core: &Core, cx: &Ctx, cmd: &TextCmd, wait: Duration) -> Result<()
             let gid = find_group(core, group)?.id;
             settle(core, &gid, wait.min(Duration::from_secs(5))).await;
             let v = core.group_view(&gid).context("group vanished")?;
-            let hits: Vec<_> = v.texts.iter().filter(|t| t.id.starts_with(id.as_str())).collect();
-            let [t] = hits.as_slice() else { bail!("{} snippets match {id:?}", hits.len()) };
+            let hits: Vec<_> = v
+                .texts
+                .iter()
+                .filter(|t| t.id.starts_with(id.as_str()))
+                .collect();
+            let [t] = hits.as_slice() else {
+                bail!("{} snippets match {id:?}", hits.len())
+            };
             core.delete_text(&gid, &t.id.clone())?;
             sleep(Duration::from_secs(3)).await;
             say!(cx, "deleted");
@@ -623,7 +783,10 @@ async fn wait_for(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
 
 /// Wait until some other member of the group is connected, then give the sync a moment.
 async fn settle(core: &Core, gid: &str, limit: Duration) {
-    let others_online = || core.group_view(gid).is_some_and(|v| v.members.iter().any(|m| !m.me && m.online));
+    let others_online = || {
+        core.group_view(gid)
+            .is_some_and(|v| v.members.iter().any(|m| !m.me && m.online))
+    };
     if wait_for(limit, others_online).await {
         sleep(Duration::from_millis(2500)).await;
     }
@@ -638,7 +801,12 @@ fn title(g: &GroupInfo) -> String {
 
 fn summary(g: &GroupInfo) -> String {
     let n = |s: MemberState| g.members.iter().filter(|m| m.state == s).count();
-    format!("{} joined, {} invited, {} declined", n(MemberState::Accepted), n(MemberState::Sent) + n(MemberState::Pending), n(MemberState::Declined))
+    format!(
+        "{} joined, {} invited, {} declined",
+        n(MemberState::Accepted),
+        n(MemberState::Sent) + n(MemberState::Pending),
+        n(MemberState::Declined)
+    )
 }
 
 fn peer_line(p: &Peer) -> String {
@@ -666,8 +834,17 @@ fn peer_line(p: &Peer) -> String {
         Some(a) => format!("{a} ({})", p.name),
         None => p.name.clone(),
     };
-    let group = p.pair_group.as_ref().map(|g| format!("  group {}", &g[..8])).unwrap_or_default();
-    format!("{}  {}  [{}]{group}", p.id.fmt_short(), name, tags.join(" "))
+    let group = p
+        .pair_group
+        .as_ref()
+        .map(|g| format!("  group {}", &g[..8]))
+        .unwrap_or_default();
+    format!(
+        "{}  {}  [{}]{group}",
+        p.id.fmt_short(),
+        name,
+        tags.join(" ")
+    )
 }
 
 fn pair_status(core: &Core, id: EndpointId) -> String {
@@ -683,9 +860,20 @@ fn file_line(f: &crate::core::FileView) -> String {
     let state = if f.stopped {
         "stopped".to_string()
     } else if f.mine {
-        format!("sharing, {} of {} have it", f.downloaded_by.len(), f.audience)
+        format!(
+            "sharing, {} of {} have it",
+            f.downloaded_by.len(),
+            f.audience
+        )
     } else if f.have {
-        format!("downloaded{}{}", f.saved_to.as_ref().map(|p| format!(" to {}", p.display())).unwrap_or_default(), if f.hosting { ", hosting" } else { "" })
+        format!(
+            "downloaded{}{}",
+            f.saved_to
+                .as_ref()
+                .map(|p| format!(" to {}", p.display()))
+                .unwrap_or_default(),
+            if f.hosting { ", hosting" } else { "" }
+        )
     } else if let Some((done, total)) = f.progress {
         format!("downloading {}/{}", format::size(done), format::size(total))
     } else if f.source_online {
@@ -693,28 +881,53 @@ fn file_line(f: &crate::core::FileView) -> String {
     } else {
         "sender offline".to_string()
     };
-    format!("{}  {}  {}  from {}  {}", f.id, f.name, format::size(f.size), if f.mine { "you" } else { &f.from_name }, state)
+    format!(
+        "{}  {}  {}  from {}  {}",
+        f.id,
+        f.name,
+        format::size(f.size),
+        if f.mine { "you" } else { &f.from_name },
+        state
+    )
 }
 
 fn find_group(core: &Core, query: &str) -> Result<GroupInfo> {
     let groups = core.groups().groups;
     let q = query.to_lowercase();
-    let exact: Vec<&GroupInfo> = groups.iter().filter(|g| g.id == query || g.alias.as_deref().is_some_and(|a| a.to_lowercase() == q)).collect();
+    let exact: Vec<&GroupInfo> = groups
+        .iter()
+        .filter(|g| g.id == query || g.alias.as_deref().is_some_and(|a| a.to_lowercase() == q))
+        .collect();
     let hits: Vec<&GroupInfo> = if exact.len() == 1 {
         exact
     } else {
         groups
             .iter()
             .filter(|g| {
-                let with_peer = g.with.is_some_and(|w| g.members.iter().any(|m| m.id == w && (m.id.to_string().starts_with(&q) || m.name.to_lowercase().contains(&q))));
-                g.id.starts_with(&q) || with_peer || (g.with.is_none() && (g.haiku.to_lowercase().contains(&q) || g.alias.as_deref().is_some_and(|a| a.to_lowercase().contains(&q))))
+                let with_peer = g.with.is_some_and(|w| {
+                    g.members.iter().any(|m| {
+                        m.id == w
+                            && (m.id.to_string().starts_with(&q)
+                                || m.name.to_lowercase().contains(&q))
+                    })
+                });
+                g.id.starts_with(&q)
+                    || with_peer
+                    || (g.with.is_none()
+                        && (g.haiku.to_lowercase().contains(&q)
+                            || g.alias
+                                .as_deref()
+                                .is_some_and(|a| a.to_lowercase().contains(&q))))
             })
             .collect()
     };
     match hits.as_slice() {
         [g] => Ok((*g).clone()),
         [] => Err(anyhow!("no group matches {query:?} (see `group list`)")),
-        _ => Err(anyhow!("{} groups match {query:?}, be more specific", hits.len())),
+        _ => Err(anyhow!(
+            "{} groups match {query:?}, be more specific",
+            hits.len()
+        )),
     }
 }
 
@@ -724,7 +937,11 @@ async fn resolve_peer(core: &Core, query: &str, wait: Duration) -> Result<Endpoi
     loop {
         match find_peer(core, query) {
             Ok(id) => return Ok(id),
-            Err(err) if started.elapsed() > wait || err.to_string().contains("be more specific") => return Err(err),
+            Err(err)
+                if started.elapsed() > wait || err.to_string().contains("be more specific") =>
+            {
+                return Err(err);
+            }
             Err(_) => sleep(Duration::from_millis(250)).await,
         }
     }
@@ -737,13 +954,22 @@ fn find_peer(core: &Core, query: &str) -> Result<EndpointId> {
         .iter()
         .filter(|p| {
             let id = p.id.to_string();
-            id.starts_with(&q) || p.name.to_lowercase().contains(&q) || p.alias.as_deref().is_some_and(|a| a.to_lowercase().contains(&q))
+            id.starts_with(&q)
+                || p.name.to_lowercase().contains(&q)
+                || p.alias
+                    .as_deref()
+                    .is_some_and(|a| a.to_lowercase().contains(&q))
         })
         .collect();
     match hits.as_slice() {
         [p] => Ok(p.id),
-        [] => query.parse().map_err(|_| anyhow!("no peer matches {query:?} (see `peers`)")),
-        _ => Err(anyhow!("{} peers match {query:?}, be more specific", hits.len())),
+        [] => query
+            .parse()
+            .map_err(|_| anyhow!("no peer matches {query:?} (see `peers`)")),
+        _ => Err(anyhow!(
+            "{} peers match {query:?}, be more specific",
+            hits.len()
+        )),
     }
 }
 
@@ -752,7 +978,11 @@ fn find_invite(core: &Core, query: &str) -> Result<(EndpointId, String)> {
     let invites = core.groups().invites;
     let hits: Vec<_> = invites
         .iter()
-        .filter(|i| i.group.starts_with(&q) || i.haiku.to_lowercase().contains(&q) || i.inviter_name.to_lowercase().contains(&q))
+        .filter(|i| {
+            i.group.starts_with(&q)
+                || i.haiku.to_lowercase().contains(&q)
+                || i.inviter_name.to_lowercase().contains(&q)
+        })
         .collect();
     match hits.as_slice() {
         [i] => Ok((i.inviter, i.group.clone())),
@@ -764,7 +994,11 @@ fn find_invite(core: &Core, query: &str) -> Result<(EndpointId, String)> {
 fn find_file(core: &Core, gid: &str, query: &str) -> Result<String> {
     let v: GroupView = core.group_view(gid).context("group vanished")?;
     let q = query.to_lowercase();
-    let hits: Vec<_> = v.files.iter().filter(|f| f.id.starts_with(query) || f.name.to_lowercase().contains(&q)).collect();
+    let hits: Vec<_> = v
+        .files
+        .iter()
+        .filter(|f| f.id.starts_with(query) || f.name.to_lowercase().contains(&q))
+        .collect();
     match hits.as_slice() {
         [f] => Ok(f.id.clone()),
         [] => Err(anyhow!("no file matches {query:?} (see `file list`)")),
