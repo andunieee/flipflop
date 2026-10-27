@@ -311,8 +311,15 @@ impl Core {
         let transfers = self.0.sharing.transfers.lock().unwrap();
         let name_of = |id: &str| members.iter().find(|(m, _)| m == id).map_or_else(|| id.chars().take(8).collect(), |(_, n)| n.clone());
 
+        // Old offers nobody shares anymore and we hold no copy of are not worth listing.
+        let week_ms = 7 * 24 * 3600 * 1000;
+        let now = crate::groupdoc::now_ms();
         let mut file_views: Vec<FileView> = files
             .iter()
+            .filter(|f| {
+                let since = if f.stopped_at > 0 { f.stopped_at } else { f.ts };
+                !(f.stopped && !received.contains_key(&f.id) && now - since > week_ms)
+            })
             .map(|f| {
                 let mine = f.from == me;
                 let t = transfers.get(&(gid.to_owned(), f.id.clone()));

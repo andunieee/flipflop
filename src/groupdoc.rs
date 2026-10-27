@@ -3,7 +3,7 @@
 //!
 //! Layout (all under the root map):
 //! - `members`: peer id -> device name. Every peer only writes its own entry.
-//! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, downloaded: { peer id -> ts }, hosts: { peer id -> ts } }
+//! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, stopped_at, downloaded: { peer id -> ts }, hosts: { peer id -> ts } }
 //! - `texts`:   `<millis>-<rand>` -> { from, name, text, ts }
 //! - `scratch`: a text object everyone edits.
 //!
@@ -31,6 +31,8 @@ pub struct FileOffer {
     pub from_name: String,
     pub ts: i64,
     pub stopped: bool,
+    /// When the offerer stopped sharing (0: unknown, as for files stopped before this was recorded).
+    pub stopped_at: i64,
     /// Peer id -> when they finished downloading.
     pub downloaded: BTreeMap<String, i64>,
     /// Peers (other than the offerer) that also serve the bytes. Each only writes its own entry.
@@ -191,6 +193,7 @@ impl GroupDoc {
     pub fn stop_file(&mut self, id: &str) {
         if let Some(f) = self.file_obj(id) {
             let _ = self.doc.put(&f, "stopped", true);
+            let _ = self.doc.put(&f, "stopped_at", now_ms());
         }
     }
 
@@ -240,6 +243,7 @@ impl GroupDoc {
             from_name: self.str_of(f, "from_name"),
             ts: self.int_of(f, "ts"),
             stopped: self.bool_of(f, "stopped"),
+            stopped_at: self.int_of(f, "stopped_at"),
             downloaded,
         }
     }
