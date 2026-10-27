@@ -113,6 +113,12 @@ mod android {
         call_string("copyText", text);
     }
 
+    pub fn copy_primary(_text: &str) {}
+
+    pub fn paste_primary() -> String {
+        String::new()
+    }
+
     pub fn paste_text() -> String {
         with_activity(|env, a| {
             let obj = env.call_method(a, "pasteText", "()Ljava/lang/String;", &[])?.l()?;
@@ -279,6 +285,29 @@ mod desktop {
 
     pub fn paste_text() -> String {
         with_clipboard(|c| c.get_text().ok()).unwrap_or_default()
+    }
+
+    /// Select-to-copy: put `text` in the PRIMARY selection, which middle-click pastes. Linux only.
+    pub fn copy_primary(text: &str) {
+        #[cfg(target_os = "linux")]
+        with_clipboard(|c| {
+            use arboard::{LinuxClipboardKind, SetExtLinux};
+            c.set().clipboard(LinuxClipboardKind::Primary).text(text.to_owned()).ok()
+        });
+        #[cfg(not(target_os = "linux"))]
+        let _ = text;
+    }
+
+    /// The PRIMARY selection (what middle-click pastes); empty off Linux.
+    pub fn paste_primary() -> String {
+        #[cfg(target_os = "linux")]
+        return with_clipboard(|c| {
+            use arboard::{GetExtLinux, LinuxClipboardKind};
+            c.get().clipboard(LinuxClipboardKind::Primary).text().ok()
+        })
+        .unwrap_or_default();
+        #[cfg(not(target_os = "linux"))]
+        String::new()
     }
 
     pub fn open_url(url: &str) {

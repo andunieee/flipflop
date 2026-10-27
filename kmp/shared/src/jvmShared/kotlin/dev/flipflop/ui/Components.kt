@@ -36,7 +36,19 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import kotlinx.coroutines.delay
+import uniffi.flipflop.copyPrimary
+import uniffi.flipflop.pastePrimary
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -299,6 +311,48 @@ fun TabStrip(labels: List<String>, keys: List<String>, current: String, onPicked
     }
 }
 
+/**
+ * Linux-style select-to-copy and middle-click paste: the selected text goes to the PRIMARY selection,
+ * and a middle click inserts the PRIMARY selection at the pointer. Pass [layout] to the field's
+ * `onTextLayout` and [modifier] to the field. Does nothing on touch devices.
+ */
+class PrimarySelection(private val value: () -> TextFieldValue, private val onChange: (TextFieldValue) -> Unit, private val readOnly: Boolean) {
+    var layout: TextLayoutResult? = null
+    val focus = FocusRequester()
+
+    val modifier: Modifier = if (isTouch) Modifier else Modifier.focusRequester(focus).pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) {
+                val e = awaitPointerEvent(PointerEventPass.Initial)
+                if (!e.isMiddlePress()) continue
+                e.changes.forEach { it.consume() }
+                if (readOnly) continue
+                val pasted = pastePrimary()
+                if (pasted.isEmpty()) continue
+                focus.requestFocus()
+                val v = value()
+                val at = layout?.getOffsetForPosition(e.changes.first().position)?.coerceIn(0, v.text.length) ?: v.selection.max
+                onChange(TextFieldValue(v.text.substring(0, at) + pasted + v.text.substring(at), TextRange(at + pasted.length)))
+            }
+        }
+    }
+}
+
+@Composable
+fun rememberPrimarySelection(value: TextFieldValue, onChange: (TextFieldValue) -> Unit, readOnly: Boolean = false): PrimarySelection {
+    val latest = rememberUpdatedState(value)
+    val change = rememberUpdatedState(onChange)
+    val sel = remember { PrimarySelection({ latest.value }, { change.value(it) }, readOnly) }
+    val selected = if (value.selection.collapsed) "" else value.text.substring(value.selection.min, value.selection.max)
+    if (!isTouch) LaunchedEffect(selected) {
+        if (selected.isNotEmpty()) {
+            delay(120) // a drag changes the selection continuously; copy once it settles
+            copyPrimary(selected)
+        }
+    }
+    return sel
+}
+
 /** A text field styled like the cards, single line. */
 @Composable
 fun Field(
@@ -313,21 +367,29 @@ fun Field(
     val d = Theme.d
     val shape = RoundedCornerShape(d.radiusSm + 2.dp)
     var focused by remember { androidx.compose.runtime.mutableStateOf(false) }
+    var tfv by remember { mutableStateOf(TextFieldValue(value)) }
+    if (tfv.text != value) tfv = tfv.copy(text = value)
+    val change = { new: TextFieldValue ->
+        tfv = new
+        if (new.text != value) onValueChange(new.text)
+    }
+    val primary = rememberPrimarySelection(tfv, change, readOnly)
     Box(
         modifier.fillMaxWidth().heightIn(min = d.controlHeight).clip(shape).background(c.insetBg)
             .border(1.dp, if (focused) c.accent else c.borderStrong, shape).padding(horizontal = d.space3),
         contentAlignment = Alignment.CenterStart,
     ) {
         BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = tfv,
+            onValueChange = change,
+            onTextLayout = { primary.layout = it },
             readOnly = readOnly,
             singleLine = true,
             textStyle = TextStyle(color = c.textStrong, fontSize = d.fontMd),
             cursorBrush = SolidColor(c.accent),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { onAccepted?.invoke(value) }),
-            modifier = Modifier.fillMaxWidth().onFocus { focused = it },
+            modifier = Modifier.fillMaxWidth().then(primary.modifier).onFocus { focused = it },
         )
         if (value.isEmpty() && !focused) Txt(placeholder, d.fontMd, c.textFaint, elide = true)
     }
@@ -340,16 +402,24 @@ fun Area(value: String, onValueChange: (String) -> Unit, modifier: Modifier = Mo
     val d = Theme.d
     val shape = RoundedCornerShape(d.radiusSm + 2.dp)
     var focused by remember { androidx.compose.runtime.mutableStateOf(false) }
+    var tfv by remember { mutableStateOf(TextFieldValue(value)) }
+    if (tfv.text != value) tfv = tfv.copy(text = value)
+    val change = { new: TextFieldValue ->
+        tfv = new
+        if (new.text != value) onValueChange(new.text)
+    }
+    val primary = rememberPrimarySelection(tfv, change)
     Box(
         modifier.fillMaxWidth().heightIn(min = if (isTouch) 96.dp else 72.dp).clip(shape).background(c.insetBg)
             .border(1.dp, if (focused) c.accent else c.borderStrong, shape).padding(horizontal = d.space3, vertical = 8.dp),
     ) {
         BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = tfv,
+            onValueChange = change,
+            onTextLayout = { primary.layout = it },
             textStyle = TextStyle(color = c.textStrong, fontSize = d.fontMd),
             cursorBrush = SolidColor(c.accent),
-            modifier = Modifier.fillMaxWidth().onFocus { focused = it },
+            modifier = Modifier.fillMaxWidth().then(primary.modifier).onFocus { focused = it },
         )
         if (value.isEmpty() && !focused) Txt(placeholder, d.fontMd, c.textFaint)
     }
