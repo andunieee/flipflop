@@ -6,6 +6,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.hoverable
@@ -112,7 +114,7 @@ fun HintText(label: String, modifier: Modifier = Modifier, center: Boolean = fal
 fun Card(modifier: Modifier = Modifier, background: Color = Theme.c.cardBg, border: Color = Theme.c.border, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(Theme.d.radiusLg)
     var m = modifier.fillMaxWidth().clip(shape).background(background).border(1.dp, border, shape)
-    if (onClick != null) m = m.clickable(onClick = onClick)
+    if (onClick != null) m = m.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onClick)
     Column(m, content = content)
 }
 
@@ -128,7 +130,7 @@ fun ClickCard(onClick: () -> Unit, modifier: Modifier = Modifier, content: @Comp
         modifier.fillMaxWidth().clip(shape)
             .background(if (pressed) c.chipBg else if (hover) c.insetBg else c.cardBg)
             .border(1.dp, c.border, shape)
-            .hoverable(source).clickable(source, indication = null, onClick = onClick),
+            .hoverable(source).pointerHoverIcon(PointerIcon.Hand).clickable(source, indication = null, onClick = onClick),
         content = content,
     )
 }
@@ -204,7 +206,7 @@ fun FfButton(
         .clip(shape).background(bg)
     if (kind == ButtonKind.Secondary) m = m.border(BorderStroke(1.dp, c.borderStrong), shape)
     Row(
-        m.hoverable(source).clickable(source, indication = null, enabled = enabled, onClick = onClick)
+        m.hoverable(source).pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default).clickable(source, indication = null, enabled = enabled, onClick = onClick)
             .padding(horizontal = if (label.isEmpty()) 0.dp else d.buttonPadding),
         horizontalArrangement = Arrangement.spacedBy(if (d.narrow) 6.dp else d.space2, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
@@ -239,7 +241,7 @@ fun IconButton(icon: DrawableResource, modifier: Modifier = Modifier, tint: Colo
     val bg = if (pressed) (if (danger) c.errorSoftPress else c.chipBgHover)
     else if (hovered) (if (danger) c.errorSoft else c.chipBg) else Color.Transparent
     Box(
-        modifier.size(size).clip(CircleShape).background(bg).hoverable(source).clickable(source, indication = null, onClick = onClick),
+        modifier.size(size).clip(CircleShape).background(bg).hoverable(source).pointerHoverIcon(PointerIcon.Hand).clickable(source, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, if (isTouch) 20.dp else 17.dp, if (danger) c.error else tint)
@@ -253,7 +255,7 @@ private val isTouch get() = uniffi.flipflop.isTouch()
 fun ToggleRow(label: String, hint: String, checked: Boolean, onToggled: (Boolean) -> Unit) {
     val c = Theme.c
     Row(
-        Modifier.fillMaxWidth().heightIn(min = Theme.d.controlHeight).clickable(remember { MutableInteractionSource() }, null) { onToggled(!checked) }
+        Modifier.fillMaxWidth().heightIn(min = Theme.d.controlHeight).pointerHoverIcon(PointerIcon.Hand).clickable(remember { MutableInteractionSource() }, null) { onToggled(!checked) }
             .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(Theme.d.space3),
         verticalAlignment = Alignment.CenterVertically,
@@ -288,7 +290,7 @@ fun TabStrip(labels: List<String>, keys: List<String>, current: String, onPicked
                 Modifier.weight(1f).fillMaxHeight().clip(inner)
                     .background(if (on) c.cardBg else Color.Transparent)
                     .then(if (on) Modifier.border(1.dp, c.border, inner) else Modifier)
-                    .clickable(remember { MutableInteractionSource() }, null) { onPicked(keys[i]) },
+                    .pointerHoverIcon(PointerIcon.Hand).clickable(remember { MutableInteractionSource() }, null) { onPicked(keys[i]) },
                 contentAlignment = Alignment.Center,
             ) {
                 Txt(label, Theme.d.fontMd, if (on) c.accentText else c.textMuted, if (on) 700 else 500, align = TextAlign.Center, elide = true)

@@ -6,6 +6,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -176,7 +178,7 @@ private fun SideRow(active: Boolean, onClick: () -> Unit, height: androidx.compo
     val bg by animateColorAsState(if (active) c.accentSoft else if (pressed) c.chipBgHover else if (hovered) c.chipBg else c.chipBg.copy(alpha = 0f), tween(120))
     Row(
         Modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(Theme.d.radius)).background(bg)
-            .hoverable(source).clickable(source, indication = null, onClick = onClick).padding(horizontal = Theme.d.space3),
+            .hoverable(source).pointerHoverIcon(PointerIcon.Hand).clickable(source, indication = null, onClick = onClick).padding(horizontal = Theme.d.space3),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) { content() }
@@ -249,7 +251,7 @@ private fun Sidebar(s: UiState, nav: Nav) {
 private fun RowScopeTab(modifier: Modifier, label: String, icon: DrawableResource, active: Boolean, badge: Int, onClick: () -> Unit) {
     val c = Theme.c
     Column(
-        modifier.fillMaxHeight().clickable(remember { MutableInteractionSource() }, null, onClick = onClick),
+        modifier.fillMaxHeight().pointerHoverIcon(PointerIcon.Hand).clickable(remember { MutableInteractionSource() }, null, onClick = onClick),
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
