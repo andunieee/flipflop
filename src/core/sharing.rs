@@ -302,17 +302,12 @@ impl Core {
             .map(|(id, _)| id.to_string())
             .chain(self.guests_online(gid))
             .collect();
-        let received: HashMap<String, PathBuf> = self
-            .0
-            .store
-            .lock()
-            .unwrap()
-            .state
-            .received
-            .iter()
-            .filter(|r| r.group == gid)
-            .map(|r| (r.file.clone(), r.path.clone()))
-            .collect();
+        // Where we hold a copy: what we downloaded, and what we share, as long as it is still there.
+        let received: HashMap<String, PathBuf> = {
+            let store = self.0.store.lock().unwrap();
+            let state = &store.state;
+            state.shares.iter().chain(&state.received).filter(|r| r.group == gid && r.path.exists()).map(|r| (r.file.clone(), r.path.clone())).collect()
+        };
         let transfers = self.0.sharing.transfers.lock().unwrap();
         let name_of = |id: &str| members.iter().find(|(m, _)| m == id).map_or_else(|| id.chars().take(8).collect(), |(_, n)| n.clone());
 

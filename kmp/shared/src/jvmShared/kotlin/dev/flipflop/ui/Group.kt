@@ -68,7 +68,7 @@ private fun FileCard(f: FileRow, nav: Nav) {
                 }
             }
             if (f.error.isNotEmpty() && !f.downloading) Txt(f.error, d.fontSm, c.error)
-            if (f.savedTo.isNotEmpty()) Txt("Saved to " + f.savedTo, d.fontXs, c.textFaint)
+            if (f.savedTo.isNotEmpty() && !f.mine) Txt("Saved to " + f.savedTo, d.fontXs, c.textFaint)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.space2, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     when {
