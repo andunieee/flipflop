@@ -105,7 +105,7 @@ private fun FilesTab(s: UiState, nav: Nav) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(d.space2)) {
                     PrimaryButton("File", Modifier.weight(1f), Icons.file) { nav.pick("file") }
-                    SecondaryButton("Photos & videos", Modifier.weight(1f), Icons.image) { nav.pick("media") }
+                    SecondaryButton("Media", Modifier.weight(1f), Icons.image) { nav.pick("media") }
                     if (nav.backend.touch) SecondaryButton("App", Modifier.weight(1f), Icons.apps) { nav.pick("app") }
                 }
             }
@@ -270,17 +270,26 @@ private fun GuestAddress(title: String, hint: String, url: String, nav: Nav) {
 
 @Composable
 private fun GuestLinkCards(s: UiState, nav: Nav) {
-    Overline("GUEST LINK")
+    val app = nav.backend.app
+    Overline("WEB GUESTS")
     Card {
-        Column(Modifier.padding(Theme.d.cardPadding)) {
-            ToggleRow("Guests can upload files", "Off: they can still download what is offered, read and write texts and edit the scratchpad.", s.guestUploads) {
-                nav.backend.app.setGuestUploads(it)
+        Column(Modifier.padding(Theme.d.cardPadding), verticalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
+            ToggleRow("Allow guests from a browser", "Anyone with the secret link joins this group from a web page, no app needed. The members stay.", s.groupGuest) {
+                if (it) app.enableGuestLink(false) else app.disableGuestLink()
+            }
+            if (s.groupGuest) {
+                Divider()
+                ToggleRow("Guests can upload files", "Off: they can still download what is offered, read and write texts and edit the scratchpad.", s.guestUploads) {
+                    app.setGuestUploads(it)
+                }
             }
         }
     }
-    GuestAddress("Same network", "Opens a page served by this device. Works without internet, as long as the guest is on the same Wi-Fi.", s.guestLanUrl, nav)
-    GuestAddress("Anywhere", "Opens the flipflop page on the web, which connects to this device through its relay.", s.guestWebUrl, nav)
-    HintText("Anyone with a link joins the group and can read and change everything in it. Only share it with people you would hand the files to.")
+    if (s.groupGuest) {
+        GuestAddress("Same network", "Opens a page served by this device. Works without internet, as long as the guest is on the same Wi-Fi.", s.guestLanUrl, nav)
+        GuestAddress("Anywhere", "Opens the flipflop page on the web, uses iroh to connect to this device.", s.guestWebUrl, nav)
+        HintText("Anyone with a link joins the group and can read and change everything in it. Only share it with people you would hand the files to.")
+    }
 }
 
 @Composable
@@ -326,17 +335,6 @@ private fun InfoTab(s: UiState, nav: Nav) {
                 }
             }
         } else {
-            if (s.groupGuest) {
-                GuestLinkCards(s, nav)
-            } else {
-                Overline("GUEST LINK")
-                Card {
-                    Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
-                        HintText("Let people with a browser into this group, no app needed. Generates a secret link; the members stay.")
-                        SecondaryButton("Turn into a guest group", icon = Icons.link) { app.enableGuestLink(false) }
-                    }
-                }
-            }
             Overline(if (s.groupGuest) "GUESTS AND MEMBERS" else "MEMBERS")
             Card {
                 Column(Modifier.padding(d.cardPadding)) {
@@ -368,6 +366,8 @@ private fun InfoTab(s: UiState, nav: Nav) {
             }
         }
 
+        if (!s.groupImplied) GuestLinkCards(s, nav)
+
         if (!s.groupImplied) {
             Row(horizontalArrangement = Arrangement.spacedBy(d.space2)) {
                 SecondaryButton("Rename", icon = Icons.edit) { nav.edit = Edit("group", s.openGroup, s.groupHaiku, s.groupAlias) }
@@ -376,15 +376,19 @@ private fun InfoTab(s: UiState, nav: Nav) {
                 DangerButton(if (confirmLeave) "Confirm" else closing, icon = Icons.trash) {
                     if (confirmLeave) {
                         confirmLeave = false
-                        app.deleteEdit("group", s.openGroup)
-                        nav.closeGroup()
+                        if (s.groupGuest) {
+                            app.disableGuestLink()
+                        } else {
+                            app.deleteEdit("group", s.openGroup)
+                            nav.closeGroup()
+                        }
                     } else {
                         confirmLeave = true
                     }
                 }
             }
             HintText(
-                if (s.groupGuest) "Closing the link disconnects its guests and deletes the group from this device. Files they uploaded stay where they are."
+                if (s.groupGuest) "Closing the link disconnects its guests and keeps the group, with its members and files. Only this device hosts the link; the other members just see Leave group."
                 else "Leaving removes the group from this device only. Files you downloaded stay where they are.",
             )
         }
