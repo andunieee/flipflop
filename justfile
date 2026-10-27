@@ -7,9 +7,15 @@ default:
 
 # --- Desktop ---
 
-# run the desktop app (Compose UI over the Rust core; builds the Rust library first)
+# run the desktop app (Compose UI over the Rust core; rebuilds the Rust library first)
 desktop: build
-    cd kmp && ./gradlew :desktopApp:run
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # A release lib left over from packaging would shadow the debug one, so drop the bundled copies.
+    rm -rf kmp/desktopApp/build/native kmp/desktopApp/build/compose/tmp/prepareAppResources
+    target=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"])')
+    cd kmp
+    LD_LIBRARY_PATH="$target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" DYLD_LIBRARY_PATH="$target/debug" ./gradlew :desktopApp:run
 
 # build the Rust library (debug)
 build:
