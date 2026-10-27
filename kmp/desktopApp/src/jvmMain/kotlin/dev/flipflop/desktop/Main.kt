@@ -1,5 +1,6 @@
 package dev.flipflop.desktop
 
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -22,7 +23,14 @@ private fun dataDir(): String {
     return File(base, "flipflop").absolutePath
 }
 
+/** A packaged app carries libflipflop in its resources; a Gradle run sets `jna.library.path` itself. */
+private fun pointJnaAtBundledLibrary() {
+    if (System.getProperty("jna.library.path") != null) return
+    System.getProperty("compose.application.resources.dir")?.let { System.setProperty("jna.library.path", it) }
+}
+
 fun main() {
+    pointJnaAtBundledLibrary()
     val backend = startBackend(dataDir())
     application {
         Window(
@@ -31,6 +39,7 @@ fun main() {
                 exitApplication()
             },
             title = "flipflop",
+            icon = painterResource("icon.png"),
             state = rememberWindowState(size = DpSize(960.dp, 660.dp)),
         ) {
             window.minimumSize = java.awt.Dimension(640, 480)

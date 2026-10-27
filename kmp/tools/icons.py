@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Turn the 24px line icons in ui/icons into Android vector drawables (stroke only; tinted by the UI),
-which Compose Multiplatform resources load on every target. The logo is rendered to a PNG.
+which Compose Multiplatform resources load on every target.
 Usage: tools/icons.py   (run from kmp/)"""
 import re, subprocess, pathlib, xml.etree.ElementTree as ET
 
@@ -23,9 +23,6 @@ def rect(x, y, w, h, rx):
 
 for svg in sorted(src.glob("*.svg")):
     name = svg.stem.replace("-", "_")
-    if name == "logo":
-        subprocess.run(["rsvg-convert", "-w", "256", "-h", "256", str(svg), "-o", str(out / "logo.png")], check=True)
-        continue
     root = ET.parse(svg).getroot()
     paths = []
     for el in root.iter():

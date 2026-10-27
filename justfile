@@ -23,6 +23,40 @@ test:
 cli *cargs:
     cargo run --bin flipflop-cli -- {{cargs}}
 
+# --- Packages (each on its own OS; see the README) ---
+
+# .deb in kmp/desktopApp/build/compose/binaries/main/deb
+deb:
+    cd kmp && ./gradlew :desktopApp:packageDeb
+
+# .rpm in kmp/desktopApp/build/compose/binaries/main/rpm
+rpm:
+    cd kmp && ./gradlew :desktopApp:packageRpm
+
+# .AppImage in dist/
+appimage:
+    packaging/linux/appimage.sh
+
+# portable app folder (with its own Java runtime) in kmp/desktopApp/build/compose/binaries/main/app
+portable:
+    cd kmp && ./gradlew :desktopApp:createDistributable
+
+# .msi (Windows, needs WiX 3)
+msi:
+    cd kmp && ./gradlew :desktopApp:packageMsi
+
+# .dmg (macOS)
+dmg:
+    cd kmp && ./gradlew :desktopApp:packageDmg
+
+# release APK in kmp/androidApp/build/outputs/apk/release (all ABIs; see README for signing)
+apk:
+    cd kmp && ./gradlew :androidApp:assembleRelease -Pprofile=release -Pabis=arm64-v8a,armeabi-v7a,x86_64
+
+# regenerate every icon from assets/top.png
+icons:
+    packaging/icons.sh
+
 # --- Guest page ---
 
 # rebuild the guest page's wasm: refreshes the copy the app embeds for guests on the LAN (src/core/guest/assets,

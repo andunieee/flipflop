@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/side.png" alt="flipflop" width="360"></p>
+
 # flipflop
 
 Rust peer-to-peer app (desktop and Android) with a Kotlin Multiplatform (Compose) UI. Peers connect with [iroh](https://iroh.computer).
@@ -68,6 +70,63 @@ it to the UI on every change; the UI calls commands on `App`. `kmp/shared` is th
 bindings), `kmp/desktopApp` the JVM desktop app, `kmp/androidApp` the Android app. Gradle builds the Rust
 library itself (host for desktop, `cargo-ndk` for Android).
 
+## Install
+
+Grab the file for your system from the [latest release](https://github.com/andunieee/flipflop/releases/latest). Each desktop package carries its own Java runtime.
+
+<details>
+<summary>Linux</summary>
+
+- **Debian / Ubuntu**: `sudo apt install ./flipflop-linux-amd64-v*.deb`
+- **Fedora / openSUSE**: `sudo dnf install ./flipflop-linux-x86_64-v*.rpm`
+- **AppImage** (any distro): `chmod +x flipflop-linux-x86_64-v*.AppImage && ./flipflop-linux-x86_64-v*.AppImage`. Needs FUSE, or run it with `--appimage-extract-and-run`.
+- **Portable** `.tar.gz`: `tar xzf flipflop-linux-x86_64-v*.tar.gz && ./flipflop/bin/flipflop`
+
+Bluetooth needs BlueZ (`bluetoothd`) and libdbus.
+</details>
+
+<details>
+<summary>Windows</summary>
+
+Run the `flipflop-windows-x64-setup-v*.msi`: it installs for your user (no admin rights), adds a Start menu entry and an uninstaller. Or extract the `.zip` and run `flipflop\flipflop.exe`. The app is unsigned, so SmartScreen shows "Windows protected your PC": More info → Run anyway.
+</details>
+
+<details>
+<summary>macOS</summary>
+
+Apple Silicon only. Open `flipflop-macos-arm64-v*.dmg` and drag flipflop to Applications. The app is unsigned: on first launch right-click it and choose Open, or run `xattr -dr com.apple.quarantine /Applications/flipflop.app`.
+</details>
+
+<details>
+<summary>Android</summary>
+
+Android 7+. Download `flipflop-android-v*.apk`, open it and allow installing from this source. Or, with a phone connected over `adb`: `adb install flipflop-android-v*.apk`.
+</details>
+
+## Building the packages
+
+`.github/workflows/release.yml` builds all of these when a `v*` tag is pushed (the tag has to match `version` in `Cargo.toml`, which is also the version of every package). To build one yourself, you must be on the target OS (jpackage cannot cross-build desktop packages); the release build of the Rust library is made and bundled for you. Everything needs Rust, a **full JDK 17+** (with `jpackage`; a bare JRE will not do) and the usual [Run](#run) requirements. Packages end up in `kmp/desktopApp/build/compose/binaries/main/<format>/`.
+
+| Package | Run on | Command | Also needs |
+| --- | --- | --- | --- |
+| `.deb` | Linux | `just deb` | `dpkg`, `fakeroot` |
+| `.rpm` | Linux | `just rpm` | `rpmbuild` (`rpm` / `rpm-build`) |
+| `.AppImage` | Linux | `just appimage` (→ `dist/`) | `curl` (fetches appimagetool), FUSE or `APPIMAGE_EXTRACT_AND_RUN=1` |
+| portable folder / `.tar.gz` | any desktop | `just portable` | |
+| `.msi` | Windows | `just msi` | [WiX 3](https://wixtoolset.org/docs/wix3/) in `PATH` |
+| `.dmg` | macOS | `just dmg` | Xcode command line tools |
+| `.apk` | any | `just apk` | cargo-ndk, NDK 27, Android SDK 35 (see [Run](#run)) |
+
+Linux also needs libdbus, libv4l and libclang development headers to compile the Rust library (`libdbus-1-dev libv4l-dev libclang-dev` on Debian).
+
+Android release APKs are signed with the debug key unless you set `FLIPFLOP_KEYSTORE` (path to a `.jks`), `FLIPFLOP_KEYSTORE_PASSWORD` and optionally `FLIPFLOP_KEY_PASSWORD`, as environment variables or gradle properties. In CI, store the base64 of the keystore in the `FLIPFLOP_KEYSTORE_B64` secret and the password as the `FLIPFLOP_KEYSTORE_PASSWORD` secret (plus `FLIPFLOP_KEY_PASSWORD` if the key has its own). The key alias is always `flipflop`; create the keystore with `keytool -genkeypair -v -keystore flipflop.jks -alias flipflop -keyalg RSA -keysize 2048 -validity 10000`. Use one key for good: Android refuses to update an app signed with a different one.
+
+On macOS and Windows the packages are not code-signed or notarized. To do so, add `signing { }` / `notarization { }` to `nativeDistributions.macOS` in `kmp/desktopApp/build.gradle.kts` ([docs](https://github.com/JetBrains/compose-multiplatform/blob/master/tutorials/Signing_and_notarization_on_macOS/README.md)) and sign the `.msi` with `signtool`.
+
+### Icons
+
+Every icon comes from `assets/top.png` and is committed: the Linux hicolor PNGs (`packaging/icons`), `packaging/windows/flipflop.ico`, `packaging/macos/flipflop.icns`, the Android launcher icons (`kmp/androidApp/src/main/res`, adaptive) and the logo in the app and on the guest page. After changing the artwork run `packaging/icons.sh` (needs ImageMagick 7). `assets/side.png` is the banner above. The `.desktop` file and AppStream metadata for Linux are in `packaging/linux/`.
+
 ## Run
 
     just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity)
@@ -83,4 +142,4 @@ Linux BLE needs BlueZ (`bluetoothd`) and libdbus.
 
 ## License
 
-AGPL-3.0-or-later, inherited from `iroh-ble-transport` and `blew`.
+[AGPL-3.0-or-later](LICENSE), inherited from `iroh-ble-transport` and `blew`.

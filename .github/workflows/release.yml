@@ -1,0 +1,210 @@
+name: Release
+
+# Builds every package when a "v" tag is pushed (or by hand, to just check they build):
+#   linux   : .deb, .rpm, .AppImage and a .tar.gz of the portable app (x86_64)
+#   windows : .msi installer and a portable .zip (x86_64)
+#   macos   : .dmg (Apple Silicon, unsigned)
+#   android : .apk (signed with the FLIPFLOP_* secrets when set, with the debug key otherwise)
+# The desktop packages bundle their own Java runtime and the release libflipflop.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: linux (x86_64)
+    runs-on: ubuntu-22.04 # the oldest glibc we can get, so the packages run on most distros
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          [ "${GITHUB_REF_TYPE}" = tag ] || exit 0
+          crate="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          [ "v${crate}" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != Cargo.toml version ${crate}"; exit 1; }
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libdbus-1-dev libv4l-dev libclang-dev libssl-dev pkg-config rpm fakeroot imagemagick
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-home-cache-cleanup: true
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          mkdir -p dist
+          (cd kmp && ./gradlew :desktopApp:packageDeb :desktopApp:packageRpm :desktopApp:createDistributable)
+          cp kmp/desktopApp/build/compose/binaries/main/deb/*.deb "dist/flipflop-linux-amd64-v${version}.deb"
+          cp kmp/desktopApp/build/compose/binaries/main/rpm/*.rpm "dist/flipflop-linux-x86_64-v${version}.rpm"
+          tar -czf "dist/flipflop-linux-x86_64-v${version}.tar.gz" -C kmp/desktopApp/build/compose/binaries/main/app flipflop
+          packaging/linux/appimage.sh
+          mv "dist/flipflop-${version}-x86_64.AppImage" "dist/flipflop-linux-x86_64-v${version}.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/
+
+  windows:
+    name: windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+
+      # jpackage builds .msi files with WiX 3.
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) { choco install wixtoolset -y --no-progress }
+          "C:\Program Files (x86)\WiX Toolset v3.14\bin" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          mkdir -p dist
+          (cd kmp && ./gradlew :desktopApp:packageMsi :desktopApp:createDistributable)
+          cp kmp/desktopApp/build/compose/binaries/main/msi/*.msi "dist/flipflop-windows-x64-setup-v${version}.msi"
+          powershell -NoProfile -Command "Compress-Archive -Force -Path kmp/desktopApp/build/compose/binaries/main/app/flipflop -DestinationPath 'dist/flipflop-windows-x64-v${version}.zip'"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/
+
+  macos:
+    name: macos (arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          mkdir -p dist
+          (cd kmp && ./gradlew :desktopApp:packageDmg)
+          cp kmp/desktopApp/build/compose/binaries/main/dmg/*.dmg "dist/flipflop-macos-arm64-v${version}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/
+
+  android:
+    name: android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "sdk.dir=$ANDROID_HOME" > kmp/local.properties
+
+      # A base64 of your .jks in the FLIPFLOP_KEYSTORE_B64 secret; without it the APK is signed with the debug key.
+      - name: Keystore
+        env:
+          B64: ${{ secrets.FLIPFLOP_KEYSTORE_B64 }}
+        run: |
+          [ -n "$B64" ] || exit 0
+          echo "$B64" | base64 -d > "$RUNNER_TEMP/flipflop.jks"
+          echo "FLIPFLOP_KEYSTORE=$RUNNER_TEMP/flipflop.jks" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          FLIPFLOP_KEYSTORE_PASSWORD: ${{ secrets.FLIPFLOP_KEYSTORE_PASSWORD }}
+          FLIPFLOP_KEY_PASSWORD: ${{ secrets.FLIPFLOP_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          (cd kmp && ./gradlew :androidApp:assembleRelease -Pprofile=release -Pabis=arm64-v8a,armeabi-v7a,x86_64)
+          mkdir -p dist
+          cp kmp/androidApp/build/outputs/apk/release/*.apk "dist/flipflop-android-v${version}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/
+
+  release:
+    needs: [linux, windows, macos, android]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          FLAT=$(mktemp -d); NOTES=$(mktemp); cp -v -r dist/*/* "$FLAT"/
+          cat > "$NOTES" <<'EOF'
+          Every desktop package bundles its own Java runtime.
+
+          - **linux**: `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE), `.AppImage` (any distro, needs FUSE: or run it with `--appimage-extract-and-run`) or `.tar.gz` (unpack and run `flipflop/bin/flipflop`). Bluetooth needs BlueZ.
+          - **windows**: the `-setup-` `.msi` (per user, no admin rights), or extract the `.zip` and run `flipflop\flipflop.exe`. Unsigned: SmartScreen asks "Run anyway".
+          - **macos**: Apple Silicon `.dmg`, unsigned: first launch right-click > Open, or `xattr -dr com.apple.quarantine /Applications/flipflop.app`.
+          - **android**: the `.apk` (Android 7+). Allow installing from unknown sources.
+          EOF
+          gh release create "$TAG" --verify-tag --generate-notes --notes-file "$NOTES"
+          gh release upload "$TAG" "$FLAT"/* --clobber

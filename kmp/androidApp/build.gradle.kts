@@ -29,14 +29,34 @@ android {
         applicationId = "dev.flipflop.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        val cargoVersion = Regex("""(?m)^version = "([^"]+)"""").find(rootDir.parentFile.resolve("Cargo.toml").readText())!!.groupValues[1]
+        versionName = cargoVersion
+        // 0.1.2 -> 1002, 1.4.7 -> 1040007
+        versionCode = cargoVersion.split(".").map { it.toInt() }.let { it[0] * 1_000_000 + it[1] * 1_000 + it[2] }
         ndk { abiFilters += abis }
     }
 
-    buildTypes {
-        release { signingConfig = signingConfigs.getByName("debug") }
+    // Release signing: FLIPFLOP_KEYSTORE (path), FLIPFLOP_KEYSTORE_PASSWORD and optionally
+    // FLIPFLOP_KEY_PASSWORD (the key alias is always "flipflop"), as environment variables or gradle properties. Without them the release APK is
+    // signed with the debug key, so it installs but cannot be updated from a build signed by someone else.
+    fun secret(name: String) = System.getenv(name) ?: findProperty(name) as String?
+    val releaseKeystore = secret("FLIPFLOP_KEYSTORE")
+    if (releaseKeystore != null) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseKeystore)
+            storePassword = secret("FLIPFLOP_KEYSTORE_PASSWORD")
+            keyAlias = "flipflop"
+            keyPassword = secret("FLIPFLOP_KEY_PASSWORD") ?: secret("FLIPFLOP_KEYSTORE_PASSWORD")
+        }
     }
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "debug")
+            isMinifyEnabled = false
+        }
+    }
+
+
 
     sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
     // blew's Kotlin BLE managers (copied from the crate by build-native.sh; BlewPlugin.kt is Tauri-only).
