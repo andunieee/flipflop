@@ -769,6 +769,8 @@ impl Core {
                 self.with_state(|st| {
                     let mut g = Group::new(gid.clone(), vec![Member { peer: key.clone(), state: MemberState::Accepted }]);
                     g.with = Some(key.clone());
+                    g.auto_stop = true;
+                    g.auto_rehost = false;
                     st.groups.push(g);
                 });
                 self.join_doc(&gid);
