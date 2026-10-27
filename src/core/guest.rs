@@ -161,8 +161,21 @@ fn encode(s: &str) -> String {
 impl Core {
     // ---- links ------------------------------------------------------------------------
 
-    /// Make a guest group with a fresh link. Returns the group's id.
+    /// A guest group nobody has touched: no guest ever joined, no other member, nothing shared or written.
+    fn pristine_guest_group(&self) -> Option<String> {
+        let me = self.me();
+        let ids: Vec<String> = self.0.store.lock().unwrap().state.groups.iter().filter(|g| g.guest.is_some() && g.with.is_none()).map(|g| g.id.clone()).collect();
+        ids.into_iter().find(|gid| {
+            self.with_doc(gid, |d| d.members().iter().all(|(id, _)| *id == me) && d.files().is_empty() && d.texts().is_empty() && d.scratch().is_empty())
+        })
+    }
+
+    /// Make a guest group with a fresh link, or reuse an empty one nobody has used yet.
+    /// Returns the group's id.
     pub fn create_guest_link(&self, uploads: bool) -> String {
+        if let Some(id) = self.pristine_guest_group() {
+            return id;
+        }
         let id = new_group_id();
         let token = random_hex(16);
         self.with_state(|st| {

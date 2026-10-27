@@ -113,10 +113,10 @@ fun HomePage(s: UiState, nav: Nav) {
         }
     }) {
         s.invites.forEach { InviteCard(it, nav) }
-        if (s.online.isNotEmpty()) Overline("ONLINE NOW")
-        s.online.forEach { OnlineCard(it, nav) }
         if (s.home.isNotEmpty()) Overline("NEW")
         s.home.forEach { HomeCard(it, nav) }
+        if (s.online.isNotEmpty()) Overline("ONLINE NOW")
+        s.online.forEach { OnlineCard(it, nav) }
         if (s.home.isEmpty() && s.invites.isEmpty() && s.online.isEmpty()) {
             HintText("All caught up. New files, texts and members of your groups show up here.", center = true)
         }

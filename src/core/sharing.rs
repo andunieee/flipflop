@@ -150,7 +150,7 @@ struct DownloadRequest {
 }
 
 impl Core {
-    fn me(&self) -> String {
+    pub(super) fn me(&self) -> String {
         self.id().to_string()
     }
 
