@@ -108,7 +108,7 @@ private fun OnlineCard(row: OnlineRow, nav: Nav) {
 @Composable
 fun HomePage(s: UiState, nav: Nav) {
     ListPage(header = {
-        HeaderRow("Home", "What happened in your groups since you last looked.") {
+        HeaderRow("Home", "News and online peers.") {
             if (s.home.isNotEmpty()) SecondaryButton("Mark all as seen") { nav.backend.app.markAllSeen() }
         }
     }) {
@@ -298,6 +298,12 @@ fun SettingsPage(s: UiState, nav: Nav) {
                 HintText("Shown to other members next to the texts you send.")
                 Field(name, { name = it }, placeholder = "Device name", onAccepted = { app.rename(it) })
                 PrimaryButton("Save") { app.rename(name) }
+            }
+        }
+        Card {
+            Column(Modifier.padding(Theme.d.cardPadding), verticalArrangement = Arrangement.spacedBy(Theme.d.space2)) {
+                Txt("Appearance", Theme.d.fontMd, Theme.c.textStrong, 650)
+                TabStrip(listOf("System", "Light", "Dark"), listOf("system", "light", "dark"), nav.backend.theme) { nav.backend.theme = it }
             }
         }
         Card {

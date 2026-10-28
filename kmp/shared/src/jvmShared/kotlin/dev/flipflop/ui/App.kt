@@ -66,7 +66,7 @@ fun FlipflopApp(backend: Backend) {
     val state by backend.state.collectAsState()
     val s = state
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        FlipflopTheme(touch = backend.touch, narrow = maxWidth < 420.dp) {
+        FlipflopTheme(touch = backend.touch, narrow = maxWidth < 420.dp, theme = backend.theme) {
             val nav = remember(backend) { Nav(backend) }
             if (s == null) {
                 Box(Modifier.fillMaxSize().background(Theme.c.windowBg))

@@ -2,6 +2,7 @@ package dev.flipflop.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -91,11 +92,17 @@ object Theme {
 }
 
 @Composable
-fun FlipflopTheme(touch: Boolean, narrow: Boolean, content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun FlipflopTheme(touch: Boolean, narrow: Boolean, theme: String, content: @Composable () -> Unit) {
+    val dark = when (theme) {
+        "light" -> false
+        "dark" -> true
+        else -> isSystemInDarkTheme()
+    }
     val palette = remember(dark) { Palette(dark) }
     val dim = remember(touch, narrow) { Dim(touch, narrow) }
     CompositionLocalProvider(LocalPalette provides palette, LocalDim provides dim) {
-        MaterialTheme(colorScheme = lightColorScheme(primary = palette.accent, background = palette.windowBg), content = content)
+        val scheme = if (dark) darkColorScheme(primary = palette.accent, background = palette.windowBg)
+        else lightColorScheme(primary = palette.accent, background = palette.windowBg)
+        MaterialTheme(colorScheme = scheme, content = content)
     }
 }
