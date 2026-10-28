@@ -33,6 +33,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 automerge = "0.12.0"
+# Apps: wasm modules run by an interpreter (no JIT, so it runs anywhere), talking CBOR with the host.
+wasmi = { version = "1.1", default-features = false, features = ["std"] }
+ciborium = "0.2"
 blake3 = "1"
 clap = { version = "4", features = ["derive", "env"] }
 uniffi = "0.32"
@@ -71,4 +74,5 @@ lto = "thin"
 strip = true
 
 [dev-dependencies]
+wat = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -6,13 +6,16 @@
 //! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, stopped_at, downloaded: { peer id -> ts }, hosts: { peer id -> ts } }
 //! - `texts`:   `<millis>-<rand>` -> { from, name, text, ts }
 //! - `scratch`: a text object everyone edits.
+//! - `apps`:    app id -> the app's own section, which only the app writes (see [`crate::apps`]).
 //!
 //! Entry keys start with the creation time, so key order is chronological.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use automerge::{
-    ActorId, AutoCommit, AutomergeError, ObjId, ObjType, ROOT, ReadDoc, Value, sync,
+    ActorId, AutoCommit, AutomergeError, ChangeHash, ObjId, ObjType, ROOT, ReadDoc, Value,
+    patches::Patch,
+    sync,
     sync::SyncDoc,
     transaction::{CommitOptions, Transactable},
 };
@@ -86,20 +89,28 @@ fn entry_key() -> String {
     format!("{:013}-{}", now_ms(), random_hex(4))
 }
 
+/// The changes every copy starts from, built identically by every peer (fixed actor, no
+/// timestamp), so independently created copies merge instead of fighting over the root objects.
+fn genesis() -> AutoCommit {
+    let mut doc = AutoCommit::new().with_actor(ActorId::from(vec![0u8; 16]));
+    for (key, obj) in [
+        ("members", ObjType::Map),
+        ("files", ObjType::Map),
+        ("texts", ObjType::Map),
+        ("scratch", ObjType::Text),
+    ] {
+        doc.put_object(ROOT, key, obj).expect("genesis");
+    }
+    doc.commit_with(CommitOptions::default().with_time(0));
+    // A change of its own, so documents made before apps existed can take it on in [`GroupDoc::load`].
+    doc.put_object(ROOT, "apps", ObjType::Map).expect("genesis");
+    doc.commit_with(CommitOptions::default().with_time(0));
+    doc
+}
+
 impl GroupDoc {
-    /// A fresh document. Every peer builds the identical genesis change (fixed actor, no timestamp),
-    /// so independently created copies merge instead of fighting over the root objects.
     pub fn new() -> GroupDoc {
-        let mut doc = AutoCommit::new().with_actor(ActorId::from(vec![0u8; 16]));
-        for (key, obj) in [
-            ("members", ObjType::Map),
-            ("files", ObjType::Map),
-            ("texts", ObjType::Map),
-            ("scratch", ObjType::Text),
-        ] {
-            doc.put_object(ROOT, key, obj).expect("genesis");
-        }
-        doc.commit_with(CommitOptions::default().with_time(0));
+        let mut doc = genesis();
         doc.set_actor(ActorId::random());
         GroupDoc {
             doc,
@@ -109,6 +120,9 @@ impl GroupDoc {
 
     pub fn load(bytes: &[u8]) -> Result<GroupDoc, AutomergeError> {
         let mut doc = AutoCommit::load(bytes)?;
+        if doc.get(ROOT, "apps")?.is_none() {
+            doc.merge(&mut genesis())?;
+        }
         doc.set_actor(ActorId::random());
         Ok(GroupDoc {
             doc,
@@ -357,9 +371,41 @@ impl GroupDoc {
         true
     }
 
+    // ---- apps -------------------------------------------------------------------------
+
+    /// The app's section, made if it is not there yet. Every peer makes it with the identical change
+    /// (an actor named after the app, on top of the genesis), so peers starting the same app at once
+    /// share one section instead of one of them losing theirs. `None` if something else took its
+    /// place.
+    pub fn app_section(&mut self, app: &str) -> Option<ObjId> {
+        let apps = self.obj("apps");
+        if self.doc.get(&apps, app).ok()?.is_none() {
+            let mut section = genesis();
+            section.set_actor(ActorId::from(format!("app:{app}").into_bytes()));
+            let apps = section.get(ROOT, "apps").ok()??.1;
+            section.put_object(&apps, app, ObjType::Map).ok()?;
+            section.commit_with(CommitOptions::default().with_time(0));
+            self.doc.merge(&mut section).ok()?;
+        }
+        match self.doc.get(&apps, app) {
+            Ok(Some((Value::Object(ObjType::Map), id))) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The raw document, for [`crate::apps`], which reads and writes app sections by path.
+    pub fn raw(&mut self) -> &mut AutoCommit {
+        &mut self.doc
+    }
+
+    /// What changed between two sets of heads.
+    pub fn diff(&mut self, before: &[ChangeHash], after: &[ChangeHash]) -> Vec<Patch> {
+        self.doc.diff(before, after)
+    }
+
     // ---- sync -------------------------------------------------------------------------
 
-    pub fn heads(&mut self) -> Vec<automerge::ChangeHash> {
+    pub fn heads(&mut self) -> Vec<ChangeHash> {
         self.doc.get_heads()
     }
 
@@ -499,6 +545,32 @@ mod tests {
         assert_eq!(b.scratch(), "héllo, wörld!");
         let bytes = a.save();
         assert_eq!(GroupDoc::load(&bytes).unwrap().scratch(), "héllo, wörld!");
+    }
+
+    #[test]
+    fn app_sections_made_at_once_are_one() {
+        let (mut a, mut b) = (GroupDoc::new(), GroupDoc::new());
+        let sa = a.app_section("chess").unwrap();
+        let sb = b.app_section("chess").unwrap();
+        a.raw().put(&sa, "from_a", 1).unwrap();
+        b.raw().put(&sb, "from_b", 2).unwrap();
+        sync(&mut a, &mut b);
+        let s = a.app_section("chess").unwrap();
+        assert_eq!(a.raw().keys(&s).collect::<Vec<_>>(), ["from_a", "from_b"]);
+    }
+
+    #[test]
+    fn old_documents_get_apps() {
+        // A document from before `apps`: the first genesis change only.
+        let mut old = genesis();
+        let first = old.get_changes(&[])[0].raw_bytes().to_vec();
+        let mut old = AutoCommit::load(&first).unwrap();
+        assert!(old.get(ROOT, "apps").unwrap().is_none());
+        let (mut a, mut b) = (GroupDoc::load(&old.save()).unwrap(), GroupDoc::new());
+        a.app_section("chess").unwrap();
+        sync(&mut a, &mut b);
+        assert!(b.app_section("chess").is_some());
+        assert_eq!(a.heads(), b.heads());
     }
 
     #[test]
