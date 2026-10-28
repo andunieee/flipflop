@@ -137,7 +137,6 @@ private fun GroupCard(group: GroupRow, nav: Nav) {
                     if (group.guest) Badge("guest link", "active")
                 }
                 if (group.subtitle.isNotEmpty()) Txt(group.subtitle, Theme.d.fontSm, Theme.c.textMuted)
-                Txt(group.summary, Theme.d.fontSm, Theme.c.textMuted)
             }
             Icon(Icons.chevronRight, tint = Theme.c.textFaint)
         }
