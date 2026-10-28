@@ -22,7 +22,7 @@ use iroh::{
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
-use super::{Core, Event, parse_gid};
+use super::{Core, Event, parse_gid, tabs::APP_KIND};
 use crate::{
     groupdoc::GroupDoc,
     state::{MemberState, Share},
@@ -86,6 +86,30 @@ pub struct TextView {
     pub mine: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabView {
+    /// "files", "texts", "pad", or an app's id.
+    pub id: String,
+    pub title: String,
+    /// The group shows it.
+    pub on: bool,
+    pub app: Option<AppView>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppView {
+    /// Who added it.
+    pub from_name: String,
+    pub size: u64,
+    /// We hold its wasm.
+    pub ready: bool,
+    /// Fetching it: (bytes so far, total).
+    pub progress: Option<(u64, u64)>,
+    pub error: Option<String>,
+    /// Someone who has it is online (we ourselves excluded).
+    pub source_online: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GroupView {
     pub id: String,
@@ -97,6 +121,8 @@ pub struct GroupView {
     pub scratch: String,
     /// The scratchpad changed because of our own edit (the editor already shows it).
     pub scratch_local: bool,
+    /// The built-in tabs, then the apps', shown or not.
+    pub tabs: Vec<TabView>,
 }
 
 struct Transfer {
@@ -109,6 +135,8 @@ struct Transfer {
 
 pub(super) struct Sharing {
     dir: PathBuf,
+    /// Apps' wasm, named after its hash (see [`super::tabs`]).
+    pub(super) apps_dir: PathBuf,
     docs: Mutex<HashMap<String, GroupDoc>>,
     dirty: Mutex<HashSet<String>>,
     transfers: Mutex<HashMap<(String, String), Transfer>>,
@@ -133,6 +161,7 @@ impl Sharing {
         let download_dir = data_dir.join("downloads");
         Sharing {
             dir,
+            apps_dir: data_dir.join("apps"),
             docs: Mutex::default(),
             dirty: Mutex::default(),
             transfers: Mutex::default(),
@@ -179,7 +208,7 @@ impl Core {
             .any(|g| g.id == gid)
     }
 
-    fn require_group(&self, gid: &str) -> Result<()> {
+    pub(super) fn require_group(&self, gid: &str) -> Result<()> {
         self.has_group(gid)
             .then_some(())
             .ok_or_else(|| anyhow!("no such group"))
@@ -327,7 +356,7 @@ impl Core {
             .collect()
     }
 
-    fn connection(&self, peer: EndpointId) -> Option<Connection> {
+    pub(super) fn connection(&self, peer: EndpointId) -> Option<Connection> {
         self.0
             .peers
             .lock()
@@ -353,8 +382,9 @@ impl Core {
 
     pub(super) fn build_view(&self, gid: &str, scratch_local: bool) -> GroupView {
         let me = self.me();
-        let (members, files, texts, scratch) =
-            self.with_doc(gid, |d| (d.members(), d.files(), d.texts(), d.scratch()));
+        let (members, files, texts, scratch, tabs) = self.with_doc(gid, |d| {
+            (d.members(), d.files(), d.texts(), d.scratch(), d.tabs())
+        });
         let online: HashSet<String> = self
             .0
             .peers
@@ -390,6 +420,7 @@ impl Core {
         let now = crate::groupdoc::now_ms();
         let mut file_views: Vec<FileView> = files
             .iter()
+            .filter(|f| f.kind != APP_KIND)
             .filter(|f| {
                 let since = if f.stopped_at > 0 { f.stopped_at } else { f.ts };
                 !(f.stopped && !received.contains_key(&f.id) && now - since > week_ms)
@@ -437,6 +468,48 @@ impl Core {
             })
             .collect();
         file_views.reverse();
+        let tab_views = tabs
+            .into_iter()
+            .map(|tab| {
+                let Some(app) = tab.app else {
+                    let title = match tab.id.as_str() {
+                        "files" => "Files",
+                        "texts" => "Texts",
+                        _ => "Scratchpad",
+                    };
+                    return TabView {
+                        title: title.to_owned(),
+                        id: tab.id,
+                        on: tab.on,
+                        app: None,
+                    };
+                };
+                let t = transfers.get(&(gid.to_owned(), app.file.clone()));
+                let offer = files.iter().find(|f| f.id == app.file);
+                TabView {
+                    title: app
+                        .name
+                        .strip_suffix(".wasm")
+                        .unwrap_or(&app.name)
+                        .to_owned(),
+                    id: tab.id,
+                    on: tab.on,
+                    app: Some(AppView {
+                        from_name: name_of(&app.from),
+                        size: app.size,
+                        ready: self.app_path(&app.hash).exists(),
+                        progress: t.filter(|t| t.active).map(|t| (t.done, t.total)),
+                        error: t.and_then(|t| t.error.clone()),
+                        source_online: offer.is_some_and(|f| {
+                            !f.stopped
+                                && std::iter::once(&f.from)
+                                    .chain(&f.hosts)
+                                    .any(|h| *h != me && online.contains(h))
+                        }),
+                    }),
+                }
+            })
+            .collect();
         let mut text_views: Vec<TextView> = texts
             .into_iter()
             .map(|t| TextView {
@@ -464,6 +537,7 @@ impl Core {
             texts: text_views,
             scratch,
             scratch_local,
+            tabs: tab_views,
         }
     }
 
@@ -853,7 +927,7 @@ impl Core {
         self.download(gid, fid, true).await
     }
 
-    async fn download(&self, gid: &str, fid: &str, manual: bool) -> Result<PathBuf> {
+    pub(super) async fn download(&self, gid: &str, fid: &str, manual: bool) -> Result<PathBuf> {
         self.require_group(gid)?;
         let offer = self
             .with_doc(gid, |d| d.file(fid))
@@ -882,7 +956,9 @@ impl Core {
             bail!("already downloading");
         }
         self.publish_group(gid, false);
-        let result = self.fetch(gid, fid, &offer).await;
+        // An app's wasm goes with the apps, named after its hash; anything else to the downloads.
+        let target = (offer.kind == APP_KIND).then(|| self.app_path(&offer.hash));
+        let result = self.fetch(gid, fid, &offer, target).await;
         {
             let mut transfers = self.0.sharing.transfers.lock().unwrap();
             match &result {
@@ -899,6 +975,10 @@ impl Core {
             }
         }
         match result {
+            Ok(path) if offer.kind == APP_KIND => {
+                self.serve_app(gid, fid, path.clone());
+                Ok(path)
+            }
             Ok(path) => {
                 // On Android this moves the file to the public Downloads folder.
                 let path =
@@ -931,10 +1011,12 @@ impl Core {
                 Ok(path)
             }
             Err(err) => {
-                self.emit(Event::Notice(format!(
-                    "download of {} failed: {err:#}",
-                    offer.name
-                )));
+                if offer.kind != APP_KIND {
+                    self.emit(Event::Notice(format!(
+                        "download of {} failed: {err:#}",
+                        offer.name
+                    )));
+                }
                 self.publish_group(gid, false);
                 Err(err)
             }
@@ -946,6 +1028,7 @@ impl Core {
         gid: &str,
         fid: &str,
         offer: &crate::groupdoc::FileOffer,
+        target: Option<PathBuf>,
     ) -> Result<PathBuf> {
         let me = self.me();
         let conn = std::iter::once(&offer.from)
@@ -958,7 +1041,10 @@ impl Core {
             .filter_map(|id| id.parse::<EndpointId>().ok())
             .find_map(|id| self.connection(id))
             .context("nobody who has it is online")?;
-        let dir = self.download_dir();
+        let dir = match &target {
+            Some(target) => target.parent().context("no folder")?.to_owned(),
+            None => self.download_dir(),
+        };
         tokio::fs::create_dir_all(&dir)
             .await
             .with_context(|| format!("cannot create {}", dir.display()))?;
@@ -1026,7 +1112,7 @@ impl Core {
             let _ = tokio::fs::remove_file(&part).await;
             return Err(err);
         }
-        let target = unique_path(&dir, &offer.name);
+        let target = target.unwrap_or_else(|| unique_path(&dir, &offer.name));
         tokio::fs::rename(&part, &target).await?;
         Ok(target)
     }
@@ -1118,8 +1204,10 @@ impl Core {
         }
     }
 
-    /// Per-group local settings at work: download new offers, stop sharing what everybody has.
+    /// Per-group local settings at work: download new offers, stop sharing what everybody has. And
+    /// apps, which every member fetches and serves whatever their settings.
     pub(super) fn auto_jobs(&self, gid: &str) {
+        self.app_jobs(gid);
         let Some((auto_download, auto_stop)) = self
             .0
             .store
@@ -1138,7 +1226,8 @@ impl Core {
         }
         let me = self.me();
         let (members, files) = self.with_doc(gid, |d| (d.members(), d.files()));
-        for f in files.iter().filter(|f| !f.stopped) {
+        // Apps' files come and go with their tabs (see `app_jobs`).
+        for f in files.iter().filter(|f| !f.stopped && f.kind != APP_KIND) {
             if f.from == me {
                 let audience: Vec<&String> = members
                     .iter()

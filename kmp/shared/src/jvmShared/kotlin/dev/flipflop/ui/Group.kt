@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import uniffi.flipflop.FileRow
 import uniffi.flipflop.MemberRow
+import uniffi.flipflop.TabRow
 import uniffi.flipflop.TextRow
 import uniffi.flipflop.UiState
 import uniffi.flipflop.mapCursor
@@ -212,8 +213,9 @@ private fun PadTab(s: UiState, nav: Nav) {
     }
 }
 
+/** An app's tab. Running apps and showing their interface comes next; for now, where its file is. */
 @Composable
-private fun AppsTab() {
+private fun AppTab(t: TabRow) {
     val d = Theme.d
     Card {
         Column(
@@ -222,13 +224,40 @@ private fun AppsTab() {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             IconTile(Icons.apps, 56.dp)
-            Txt("Apps are coming", d.fontLg, Theme.c.textStrong, 700, align = TextAlign.Center)
+            Txt(t.title, d.fontLg, Theme.c.textStrong, 700, align = TextAlign.Center)
+            Txt(t.detail, d.fontSm, Theme.c.textMuted, align = TextAlign.Center)
+            if (t.status.isNotEmpty()) Badge(t.status, t.tone)
             Txt(
-                "Soon the group will be able to share small WebAssembly apps, run them on every device and show their hypereffect.dev interface right here.",
+                "Every device in the group fetches this app and shares it with the others. Running it here, with its hypereffect.dev interface, is coming.",
                 d.fontMd, Theme.c.textMuted, align = TextAlign.Center,
             )
         }
     }
+}
+
+/** The group's tabs, the same for every member: anyone shows or hides them, or adds an app. */
+@Composable
+private fun TabsCard(s: UiState, nav: Nav) {
+    val app = nav.backend.app
+    val d = Theme.d
+    Overline("TABS")
+    Card {
+        Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
+            s.tabs.forEachIndexed { i, t ->
+                if (i > 0) Divider()
+                val hint = when (t.id) {
+                    "files" -> "Files offered to the group."
+                    "texts" -> "Links, codes and snippets sent to the group."
+                    "pad" -> "A text everyone edits together."
+                    else -> t.detail
+                }
+                ToggleRow(t.title, hint, t.on) { app.setTab(t.id, it) }
+            }
+            Divider()
+            SecondaryButton("Add an app", icon = Icons.apps) { nav.pick("wasm") }
+        }
+    }
+    HintText("Tabs are the same for everyone in the group, and anyone can show or hide them. An app is a WebAssembly file: every device fetches it and shares it with the others.")
 }
 
 @Composable
@@ -345,6 +374,8 @@ private fun InfoTab(s: UiState, nav: Nav) {
             }
         }
 
+        TabsCard(s, nav)
+
         Overline("ON THIS DEVICE")
         Card {
             Column(Modifier.padding(d.cardPadding), verticalArrangement = Arrangement.spacedBy(d.space2)) {
@@ -414,6 +445,9 @@ private fun Picker(options: List<String>, selected: Int, onPicked: (Int) -> Unit
 @Composable
 fun GroupPage(s: UiState, nav: Nav) {
     val d = Theme.d
+    val shown = s.tabs.filter { it.on }
+    // The tab asked for may be hidden (by anyone in the group): show the first one there is.
+    val tab = if (nav.groupTab == "info" || shown.any { it.id == nav.groupTab }) nav.groupTab else shown.firstOrNull()?.id ?: "info"
     Column(
         Modifier.fillMaxSize().padding(start = d.pagePadding, end = d.pagePadding, top = d.pagePadding, bottom = d.space3),
         verticalArrangement = Arrangement.spacedBy(d.space3),
@@ -425,17 +459,17 @@ fun GroupPage(s: UiState, nav: Nav) {
                 if (s.groupAlias.isNotEmpty()) Txt(s.groupHaiku, d.fontSm, Theme.c.textMuted, elide = true)
             }
             IconButton(Icons.settings, tint = if (nav.groupTab == "info") Theme.c.accentText else Theme.c.textMuted) {
-                nav.groupTab = if (nav.groupTab == "info") "files" else "info"
+                nav.groupTab = if (nav.groupTab == "info") shown.firstOrNull()?.id ?: "info" else "info"
             }
         }
-        TabStrip(listOf("Files", "Texts", "Scratchpad", "Apps"), listOf("files", "texts", "pad", "apps"), nav.groupTab) { nav.groupTab = it }
+        if (shown.isNotEmpty()) TabStrip(shown.map { it.title }, shown.map { it.id }, tab) { nav.groupTab = it }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            when (nav.groupTab) {
+            when (tab) {
                 "files" -> FilesTab(s, nav)
                 "texts" -> TextsTab(s, nav)
                 "pad" -> PadTab(s, nav)
-                "apps" -> AppsTab()
                 "info" -> InfoTab(s, nav)
+                else -> shown.firstOrNull { it.id == tab }?.let { AppTab(it) }
             }
         }
     }

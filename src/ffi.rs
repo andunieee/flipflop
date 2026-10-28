@@ -123,6 +123,22 @@ pub struct FileRow {
     pub hosts: String,
 }
 
+/// One of the group's tabs: built-in ("files", "texts", "pad") or an app.
+#[derive(Clone, Default, uniffi::Record)]
+pub struct TabRow {
+    /// "files", "texts", "pad", or the app's id.
+    pub id: String,
+    pub title: String,
+    /// The group shows it.
+    pub on: bool,
+    pub app: bool,
+    /// An app's "120 KB · added by Bob".
+    pub detail: String,
+    /// An app's state while its tab is on ("ready", "fetching 40%", …), with a badge tone.
+    pub status: String,
+    pub tone: String,
+}
+
 #[derive(Clone, Default, uniffi::Record)]
 pub struct TextRow {
     pub id: String,
@@ -173,6 +189,8 @@ pub struct UiState {
     pub pad_text: String,
     /// The pad text is our own last edit, which is already on screen.
     pub pad_local: bool,
+    /// All the group's tabs, the hidden ones too, in order.
+    pub tabs: Vec<TabRow>,
     pub auto_download: bool,
     pub auto_stop: bool,
     pub auto_rehost: bool,
@@ -395,6 +413,16 @@ impl Inner {
         });
     }
 
+    fn add_app(self: &Arc<Self>, core: &Core, gid: String, path: PathBuf, name: Option<String>) {
+        let (this, core) = (self.clone(), core.clone());
+        self.rt.spawn(async move {
+            match core.add_app(&gid, path, name).await {
+                Ok(_) => this.notice("App added to the group"),
+                Err(err) => this.notice(format!("{err:#}")),
+            }
+        });
+    }
+
     fn connect_ticket(self: &Arc<Self>, core: &Core, text: String) {
         let (this, core) = (self.clone(), core.clone());
         self.notice("Connecting…");
@@ -547,6 +575,15 @@ impl App {
                 let (Some(core), Some(gid)) = (files.core(), files.open_group_id()) else {
                     return;
                 };
+                if kind == "wasm" {
+                    files.add_app(
+                        &core,
+                        gid,
+                        PathBuf::from(path),
+                        Some(name).filter(|n| !n.is_empty()),
+                    );
+                    return;
+                }
                 // A content:// URI is shared where it is; anything else is our own copy.
                 let staged = !path.starts_with("content://");
                 files.offer(
@@ -838,6 +875,19 @@ impl App {
             };
             let inner = self.inner.clone();
             let media = kind == "media";
+            if kind == "wasm" {
+                self.inner.rt.spawn(async move {
+                    let picked = rfd::AsyncFileDialog::new()
+                        .set_title("Add an app to the group")
+                        .add_filter("WebAssembly app", &["wasm"])
+                        .pick_file()
+                        .await;
+                    if let Some(file) = picked {
+                        inner.add_app(&core, gid, file.path().to_owned(), None);
+                    }
+                });
+                return;
+            }
             self.inner.rt.spawn(async move {
                 let mut dialog = rfd::AsyncFileDialog::new().set_title("Offer to the group");
                 if media {
@@ -917,6 +967,17 @@ impl App {
                 inner.notice(format!("{err:#}"));
             }
         });
+    }
+
+    /// Show or hide one of the open group's tabs, for everyone in it.
+    pub fn set_tab(&self, id: String, on: bool) {
+        let _g = self.inner.enter();
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
+        if let Err(err) = core.set_tab(&gid, &id, on) {
+            self.inner.notice(format!("{err:#}"));
+        }
     }
 
     pub fn set_auto_download(&self, on: bool) {
@@ -1254,5 +1315,39 @@ fn build_state(shared: &Shared) -> UiState {
         .collect();
     ui.pad_text = view.scratch.clone();
     ui.pad_local = view.scratch_local;
+    ui.tabs = view
+        .tabs
+        .iter()
+        .map(|t| {
+            let Some(app) = &t.app else {
+                return TabRow {
+                    id: t.id.clone(),
+                    title: t.title.clone(),
+                    on: t.on,
+                    ..Default::default()
+                };
+            };
+            let (status, tone) = match (app.ready, app.progress, &app.error) {
+                _ if !t.on => (String::new(), ""),
+                (true, ..) => ("ready".into(), "ok"),
+                (_, Some((done, total)), _) => (
+                    format!("fetching {}%", (done * 100).checked_div(total).unwrap_or(0)),
+                    "active",
+                ),
+                _ if !app.source_online => ("waiting for someone who has it".into(), "warn"),
+                (_, _, Some(err)) => (err.clone(), "error"),
+                _ => ("fetching".into(), "active"),
+            };
+            TabRow {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                on: t.on,
+                app: true,
+                detail: format!("{} · added by {}", format::size(app.size), app.from_name),
+                status,
+                tone: tone.into(),
+            }
+        })
+        .collect();
     ui
 }
