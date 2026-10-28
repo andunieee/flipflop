@@ -123,9 +123,9 @@ fun HintText(label: String, modifier: Modifier = Modifier, center: Boolean = fal
 }
 
 @Composable
-fun Card(modifier: Modifier = Modifier, background: Color = Theme.c.cardBg, border: Color = Theme.c.border, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
+fun Card(modifier: Modifier = Modifier, background: Color = Theme.c.cardBg, border: Color = Theme.c.border, borderWidth: Dp = 1.dp, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(Theme.d.radiusLg)
-    var m = modifier.fillMaxWidth().clip(shape).background(background).border(1.dp, border, shape)
+    var m = modifier.fillMaxWidth().clip(shape).background(background).border(borderWidth, border, shape)
     if (onClick != null) m = m.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onClick)
     Column(m, content = content)
 }
@@ -138,6 +138,7 @@ fun ClickCard(
     background: Color = Theme.c.cardBg,
     hoverBackground: Color = Theme.c.insetBg,
     border: Color = Theme.c.border,
+    borderWidth: Dp = 1.dp,
     content: @Composable ColumnScope.() -> Unit) {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
@@ -147,7 +148,7 @@ fun ClickCard(
     Column(
         modifier.fillMaxWidth().clip(shape)
             .background(if (pressed) c.chipBg else if (hover) hoverBackground else background)
-            .border(1.dp, border, shape)
+            .border(borderWidth, border, shape)
             .hoverable(source).pointerHoverIcon(PointerIcon.Hand).clickable(source, indication = null, onClick = onClick),
         content = content,
     )

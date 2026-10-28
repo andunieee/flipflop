@@ -7,6 +7,7 @@ import org.jetbrains.compose.resources.DrawableResource
 object Icons {
     val addPeer = Res.drawable.ic_add_peer
     val peers = Res.drawable.ic_peers
+    val person = Res.drawable.ic_person
     val groups = Res.drawable.ic_groups
     val inbox = Res.drawable.ic_inbox
     val settings = Res.drawable.ic_settings

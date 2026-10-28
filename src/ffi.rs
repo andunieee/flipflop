@@ -49,6 +49,8 @@ pub struct GroupRow {
     pub title: String,
     /// The haiku, shown dimmed when an alias replaces it as the title.
     pub subtitle: String,
+    /// "x/y members online".
+    pub summary: String,
     pub online: bool,
     /// A guest group: anyone with its link joins from a browser.
     pub guest: bool,
@@ -65,13 +67,6 @@ pub struct HomeRow {
     pub paired: bool,
     /// The group tab showing the first kind of news.
     pub tab: String,
-}
-
-/// A paired peer or a group with someone online now; opens `group_id`.
-#[derive(Clone, Default, uniffi::Record)]
-pub struct OnlineRow {
-    pub group_id: String,
-    pub title: String,
 }
 
 #[derive(Clone, Default, uniffi::Record)]
@@ -160,7 +155,6 @@ pub struct UiState {
     pub groups: Vec<GroupRow>,
     pub invites: Vec<InviteRow>,
     pub home: Vec<HomeRow>,
-    pub online: Vec<OnlineRow>,
 
     // the open group ("" = none)
     pub open_group: String,
@@ -1055,12 +1049,10 @@ fn build_state(shared: &Shared) -> UiState {
         .map(|g| {
             let view = shared.views.get(&g.id);
             let joined = view.map_or(1, |v| v.members.len().max(1));
+            let online = view.map_or(1, |v| {
+                v.members.iter().filter(|m| m.online || m.me).count().max(1)
+            });
             let others_online = view.is_some_and(|v| v.members.iter().any(|m| m.online && !m.me));
-            let waiting = g
-                .members
-                .iter()
-                .filter(|m| matches!(m.state, MemberState::Pending | MemberState::Sent))
-                .count();
             GroupRow {
                 id: g.id.clone(),
                 title: group_title(g),
@@ -1069,23 +1061,11 @@ fn build_state(shared: &Shared) -> UiState {
                 } else {
                     String::new()
                 },
+                summary: format!("{online}/{joined} members online"),
                 online: others_online,
                 guest: g.guest.is_some(),
             }
         })
-        .collect();
-    ui.online = ui
-        .peers
-        .iter()
-        .filter(|p| p.connected && !p.group_id.is_empty())
-        .map(|p| OnlineRow {
-            group_id: p.group_id.clone(),
-            title: p.title.clone(),
-        })
-        .chain(ui.groups.iter().filter(|g| g.online).map(|g| OnlineRow {
-            group_id: g.id.clone(),
-            title: g.title.clone(),
-        }))
         .collect();
     ui.invites = shared
         .groups
