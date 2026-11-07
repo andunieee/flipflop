@@ -214,6 +214,14 @@ private fun GroupButton(group: GroupRow, selected: Boolean, nav: Nav) {
 }
 
 @Composable
+private fun PeerButton(peer: PeerRow, selected: Boolean, nav: Nav) {
+    SideRow(selected, { nav.openGroup(peer.groupId) }, 40.dp) {
+        Dot(peer.connected)
+        Txt(peer.title, Theme.d.fontMd, if (selected) Theme.c.textStrong else Theme.c.text, if (selected) 600 else 500, Modifier.weight(1f), elide = true)
+    }
+}
+
+@Composable
 private fun Sidebar(s: UiState, nav: Nav) {
     Row(Modifier.width(241.dp).fillMaxHeight()) {
         Column(
@@ -229,11 +237,19 @@ private fun Sidebar(s: UiState, nav: Nav) {
             }
             Box(Modifier.height(Theme.d.space3))
             SideButton("Home", Icons.inbox, nav.page == "home", s.home.size + s.invites.size + s.peers.count { it.pairRequest }) { nav.go("home") }
-            Row(Modifier.padding(start = Theme.d.space3), verticalAlignment = Alignment.CenterVertically) {
-                Overline("GROUPS", Modifier.weight(1f))
-                IconButton(Icons.addPeer, tint = Theme.c.accentText, size = 28.dp) { nav.newGroup() }
-            }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                val paired = s.peers.filter { it.groupId.isNotEmpty() }
+                Row(Modifier.padding(start = Theme.d.space3, top = Theme.d.space2), verticalAlignment = Alignment.CenterVertically) {
+                    Overline("PEERS", Modifier.weight(1f))
+                }
+                paired.forEach { PeerButton(it, nav.page == "group" && s.openGroup == it.groupId, nav) }
+                if (paired.isEmpty()) {
+                    Txt("No paired peers yet", Theme.d.fontSm, Theme.c.textFaint, modifier = Modifier.fillMaxWidth().height(40.dp), align = TextAlign.Center)
+                }
+                Row(Modifier.padding(start = Theme.d.space3, top = Theme.d.space2), verticalAlignment = Alignment.CenterVertically) {
+                    Overline("GROUPS", Modifier.weight(1f))
+                    IconButton(Icons.addPeer, tint = Theme.c.accentText, size = 28.dp) { nav.newGroup() }
+                }
                 s.invites.forEach { SideButton("Invitation: " + it.groupTitle, Icons.groups, false, 1) { nav.go("home") } }
                 s.groups.forEach { GroupButton(it, nav.page == "group" && s.openGroup == it.id, nav) }
                 if (s.groups.isEmpty() && s.invites.isEmpty()) {
