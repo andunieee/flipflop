@@ -25,7 +25,6 @@ bindgen = ["uniffi/cli"]
 
 [dependencies]
 iroh = { version = "1.4.1", features = ["unstable-custom-transports"] }
-iroh-ble-transport = "0.5.1-beta.7"
 iroh-mdns-address-lookup = "0.6.1"
 iroh-tickets = "1.0.0"
 n0-future = "0.3.2"
@@ -62,6 +61,10 @@ nokhwa = { version = "0.10", default-features = false, features = ["input-native
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 open = "5"
 rfd = "0.15"
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+# BLE transport for iroh; its blew dependency supports Apple/Linux/Android only.
+iroh-ble-transport = "0.5.1-beta.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17", features = ["bluetoothd"] }

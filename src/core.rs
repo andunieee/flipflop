@@ -21,6 +21,7 @@ use iroh::{
     endpoint::{Connection, presets},
     endpoint_info::UserData,
 };
+#[cfg(not(target_os = "windows"))]
 use iroh_ble_transport::BleTransport;
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use iroh_tickets::endpoint::EndpointTicket;
@@ -169,6 +170,7 @@ struct Inner {
     /// Exclusive lock on the data dir, held for the life of the node.
     dir_lock: std::fs::File,
     endpoint: Endpoint,
+    #[cfg(not(target_os = "windows"))]
     ble_transport: Option<Arc<BleTransport>>,
     ble_transport_status: String,
     memory: MemoryLookup,
@@ -229,6 +231,7 @@ impl Core {
         let lan_events = mdns.subscribe().await;
         let memory = MemoryLookup::new();
 
+        #[cfg(not(target_os = "windows"))]
         let (ble, ble_transport_status) = if ble_transport {
             match BleTransport::builder().build(secret_key.public()).await {
                 Ok(ble) => (Some(ble), "on".to_string()),
@@ -240,6 +243,11 @@ impl Core {
         } else {
             (None, "off".to_string())
         };
+        #[cfg(target_os = "windows")]
+        let ble_transport_status = {
+            let _ = ble_transport;
+            "unavailable (not supported on Windows)".to_string()
+        };
 
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
@@ -247,6 +255,7 @@ impl Core {
             .address_lookup(mdns.clone())
             .address_lookup(memory.clone())
             .user_data_for_address_lookup(user_data(&name));
+        #[cfg(not(target_os = "windows"))]
         if let Some(ble) = &ble {
             builder = builder
                 .hooks(ble.dedup_hook())
@@ -258,6 +267,7 @@ impl Core {
         let core = Core(Arc::new(Inner {
             dir_lock: dir_lock,
             endpoint,
+            #[cfg(not(target_os = "windows"))]
             ble_transport: ble,
             ble_transport_status,
             memory,
@@ -1324,6 +1334,7 @@ impl Core {
         });
 
         // Peers the BLE transport has identified (full endpoint id known) count as Bluetooth-reachable.
+        #[cfg(not(target_os = "windows"))]
         if let Some(ble) = self.0.ble_transport.clone() {
             let this = self.clone();
             tokio::spawn(async move {
