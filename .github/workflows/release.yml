@@ -247,9 +247,14 @@ jobs:
       - name: Keystore
         env:
           B64: ${{ secrets.FLIPFLOP_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.FLIPFLOP_KEYSTORE_PASSWORD }}
         run: |
           [ -n "$B64" ] || exit 0
-          echo "$B64" | base64 -d > "$RUNNER_TEMP/flipflop.jks"
+          printf '%s' "$B64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/flipflop.jks"
+          if ! keytool -list -keystore "$RUNNER_TEMP/flipflop.jks" -storepass "$STORE_PASSWORD" -alias flipflop >/dev/null 2>&1; then
+            echo "::error::Cannot open the release keystore with FLIPFLOP_KEYSTORE_PASSWORD (the alias must be 'flipflop'). Check that FLIPFLOP_KEYSTORE_B64 was base64-encoded from the .jks and that the password matches."
+            exit 1
+          fi
           echo "FLIPFLOP_KEYSTORE=$RUNNER_TEMP/flipflop.jks" >> "$GITHUB_ENV"
 
       - name: Build

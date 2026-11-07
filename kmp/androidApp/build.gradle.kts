@@ -39,14 +39,20 @@ android {
     // Release signing: FLIPFLOP_KEYSTORE (path), FLIPFLOP_KEYSTORE_PASSWORD and optionally
     // FLIPFLOP_KEY_PASSWORD (the key alias is always "flipflop"), as environment variables or gradle properties. Without them the release APK is
     // signed with the debug key, so it installs but cannot be updated from a build signed by someone else.
-    fun secret(name: String) = System.getenv(name) ?: findProperty(name) as String?
+    // CI exports unset secrets as empty strings, so treat blank as missing: otherwise a missing
+    // FLIPFLOP_KEY_PASSWORD would become "" and fail with "Given final block not properly padded".
+    fun secret(name: String) =
+        (System.getenv(name) ?: findProperty(name) as String?)?.takeIf { it.isNotBlank() }
     val releaseKeystore = secret("FLIPFLOP_KEYSTORE")
     if (releaseKeystore != null) {
+        val storePassword = secret("FLIPFLOP_KEYSTORE_PASSWORD")
+            ?: error("FLIPFLOP_KEYSTORE is set but FLIPFLOP_KEYSTORE_PASSWORD is not")
         signingConfigs.create("release") {
             storeFile = file(releaseKeystore)
-            storePassword = secret("FLIPFLOP_KEYSTORE_PASSWORD")
+            this.storePassword = storePassword
             keyAlias = "flipflop"
-            keyPassword = secret("FLIPFLOP_KEY_PASSWORD") ?: secret("FLIPFLOP_KEYSTORE_PASSWORD")
+            // PKCS12 keystores use one password for the store and the key; JKS may have a separate one.
+            keyPassword = secret("FLIPFLOP_KEY_PASSWORD") ?: storePassword
         }
     }
     buildTypes {
