@@ -41,6 +41,23 @@ class Backend(dataDir: String) {
 
     private var _theme by mutableStateOf(runCatching { themeFile.readText().trim() }.getOrDefault("").ifEmpty { "system" })
 
+    private val sidebarWidthFile = File(dataDir, "sidebar-width")
+
+    private var _sidebarWidth by mutableStateOf(
+        runCatching { sidebarWidthFile.readText().trim().toFloat() }.getOrNull()?.coerceIn(180f, 420f) ?: 240f,
+    )
+
+    /** Desktop sidebar width in dp, kept in the data dir once a drag ends. */
+    var sidebarWidth: Float
+        get() = _sidebarWidth
+        set(value) {
+            _sidebarWidth = value
+        }
+
+    fun saveSidebarWidth() {
+        runCatching { sidebarWidthFile.writeText(_sidebarWidth.toString()) }
+    }
+
     /** What was shared with us, until it goes somewhere (or the user cancels). */
     var share by mutableStateOf<Share?>(null)
 

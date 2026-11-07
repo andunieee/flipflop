@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
 import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.Image
@@ -20,3 +21,6 @@ actual fun rgbaToImageBitmap(width: Int, height: Int, rgba: ByteArray): ImageBit
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 actual fun PointerEvent.isMiddlePress(): Boolean = type == PointerEventType.Press && button == PointerButton.Tertiary
+
+actual fun horizontalResizeCursor(): PointerIcon =
+    PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR))

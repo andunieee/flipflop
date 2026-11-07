@@ -3,6 +3,7 @@ package dev.flipflop.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerIcon
 
 /** Handles the system Back button / gesture while [enabled] (Android only). */
 @Composable
@@ -13,3 +14,6 @@ expect fun rgbaToImageBitmap(width: Int, height: Int, rgba: ByteArray): ImageBit
 
 /** A middle-button press (desktop; touch screens have none). */
 expect fun PointerEvent.isMiddlePress(): Boolean
+
+/** The cursor shown over a horizontal split handle (desktop only). */
+expect fun horizontalResizeCursor(): PointerIcon

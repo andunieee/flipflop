@@ -6,6 +6,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -172,6 +175,9 @@ private fun AppBar(s: UiState) {
 
 // ---- desktop sidebar -------------------------------------------------------------------------
 
+private val SIDEBAR_MIN_WIDTH = 180.dp
+private val SIDEBAR_MAX_WIDTH = 420.dp
+
 @Composable
 private fun SideRow(active: Boolean, onClick: () -> Unit, height: androidx.compose.ui.unit.Dp, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
     val c = Theme.c
@@ -223,9 +229,13 @@ private fun PeerButton(peer: PeerRow, selected: Boolean, nav: Nav) {
 
 @Composable
 private fun Sidebar(s: UiState, nav: Nav) {
-    Row(Modifier.width(241.dp).fillMaxHeight()) {
+    val backend = nav.backend
+    val density = LocalDensity.current
+    val handle = remember { MutableInteractionSource() }
+    val handleHovered by handle.collectIsHoveredAsState()
+    Row(Modifier.fillMaxHeight()) {
         Column(
-            Modifier.width(240.dp).fillMaxHeight().background(Theme.c.sidebarBg).padding(Theme.d.space3),
+            Modifier.width(backend.sidebarWidth.dp).fillMaxHeight().background(Theme.c.sidebarBg).padding(Theme.d.space3),
             verticalArrangement = Arrangement.spacedBy(Theme.d.space1),
         ) {
             Row(Modifier.padding(Theme.d.space1), horizontalArrangement = Arrangement.spacedBy(Theme.d.space3), verticalAlignment = Alignment.CenterVertically) {
@@ -261,7 +271,21 @@ private fun Sidebar(s: UiState, nav: Nav) {
             SideButton("Guest link", Icons.link, false) { nav.newGuestLink() }
             SideButton("Settings", Icons.settings, nav.page == "settings") { nav.go("settings") }
         }
-        Box(Modifier.width(1.dp).fillMaxHeight().background(Theme.c.border))
+        // The divider doubles as a resize handle: a wide invisible strip around a hairline.
+        Box(
+            Modifier.width(7.dp).fillMaxHeight().hoverable(handle).pointerHoverIcon(horizontalResizeCursor())
+                .draggable(
+                    orientation = Orientation.Horizontal,
+                    state = rememberDraggableState { delta ->
+                        val step = with(density) { delta.toDp() }.value
+                        backend.sidebarWidth = (backend.sidebarWidth + step).coerceIn(SIDEBAR_MIN_WIDTH.value, SIDEBAR_MAX_WIDTH.value)
+                    },
+                    onDragStopped = { backend.saveSidebarWidth() },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.width(1.dp).fillMaxHeight().background(if (handleHovered) Theme.c.borderStrong else Theme.c.border))
+        }
     }
 }
 

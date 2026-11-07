@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerIcon
 
 @Composable
 actual fun PlatformBackHandler(enabled: Boolean, onBack: () -> Unit) = BackHandler(enabled, onBack)
@@ -20,3 +21,5 @@ actual fun rgbaToImageBitmap(width: Int, height: Int, rgba: ByteArray): ImageBit
 }
 
 actual fun PointerEvent.isMiddlePress(): Boolean = false
+
+actual fun horizontalResizeCursor(): PointerIcon = PointerIcon.Hand
