@@ -1,0 +1,46 @@
+name: signing-debug
+
+# Temporary diagnostic: reports only hashes and pass/fail, never a secret value.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect keystore
+        env:
+          B64: ${{ secrets.FLIPFLOP_KEYSTORE_B64 }}
+          STORE: ${{ secrets.FLIPFLOP_KEYSTORE_PASSWORD }}
+          KEY: ${{ secrets.FLIPFLOP_KEY_PASSWORD }}
+          OLD_STORE: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          OLD_KEY: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          set -u
+          printf '%s' "$B64" | tr -d ' \t\r\n' | base64 -d > ks.p12
+          echo "sha256: $(sha256sum ks.p12 | cut -d' ' -f1)"
+          echo "size: $(stat -c%s ks.p12)"
+          echo "--- MAC check with FLIPFLOP_KEYSTORE_PASSWORD ---"
+          if openssl pkcs12 -in ks.p12 -noout -passin env:STORE >/dev/null 2>&1; then
+            echo "MAC OK"
+          else
+            echo "MAC FAILED"
+          fi
+          echo "--- aliases seen with FLIPFLOP_KEYSTORE_PASSWORD ---"
+          keytool -list -keystore ks.p12 -storepass "$STORE" 2>/dev/null | grep -i 'alias name' || echo "list failed"
+          echo "--- key recovery (store pass / key pass) ---"
+          try() {
+            if keytool -certreq -alias flipflop -keystore ks.p12 \
+                 -storepass "$2" -keypass "$3" -file /dev/null >/dev/null 2>&1; then
+              echo "$1: OK"
+            else
+              echo "$1: FAILED"
+            fi
+          }
+          try "flipflop-store + flipflop-key" "$STORE" "$KEY"
+          try "flipflop-store + flipflop-store" "$STORE" "$STORE"
+          try "old-store + old-key" "$OLD_STORE" "$OLD_KEY"
+          try "flipflop-store + old-key" "$STORE" "$OLD_KEY"
+          try "old-store + flipflop-key" "$OLD_STORE" "$KEY"
