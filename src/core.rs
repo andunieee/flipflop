@@ -249,6 +249,7 @@ impl Core {
             "unavailable (not supported on Windows)".to_string()
         };
 
+        #[cfg_attr(target_os = "windows", allow(unused_mut))]
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
             .alpns(vec![ALPN.to_vec(), GUEST_ALPN.to_vec()])

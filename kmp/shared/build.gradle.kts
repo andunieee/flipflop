@@ -23,15 +23,24 @@ val hostLib = when {
 val bindingsDir = layout.buildDirectory.dir("generated/uniffi")
 
 // The Kotlin side of the UniFFI bridge (src/ffi.rs), generated from the built library.
-val generateBindings = tasks.register<Exec>("generateBindings") {
+// Invoke cargo directly rather than through `bash -c`: on Windows `bash` is WSL, which is not installed.
+val buildBindingsLibrary = tasks.register<Exec>("buildBindingsLibrary") {
     workingDir = repo
-    inputs.files(fileTree(repo.resolve("src")), repo.resolve("Cargo.toml"))
+    commandLine("cargo", "build", "--lib")
+    inputs.files(fileTree(repo.resolve("src")), repo.resolve("Cargo.toml"), repo.resolve("Cargo.lock"))
+    outputs.file(File(cargoTarget, "debug/$hostLib"))
+}
+val generateBindings = tasks.register<Exec>("generateBindings") {
+    dependsOn(buildBindingsLibrary)
+    workingDir = repo
+    inputs.files(fileTree(repo.resolve("src")), repo.resolve("Cargo.toml"), repo.resolve("Cargo.lock"))
     outputs.dir(bindingsDir)
     doFirst { bindingsDir.get().asFile.deleteRecursively() }
     commandLine(
-        "bash", "-c",
-        "cargo build --lib && cargo run -q --features bindgen --bin uniffi-bindgen -- generate " +
-            "--library '$cargoTarget/debug/$hostLib' --language kotlin --no-format --out-dir '${bindingsDir.get().asFile}'",
+        "cargo", "run", "-q", "--features", "bindgen", "--bin", "uniffi-bindgen", "--", "generate",
+        "--library", File(cargoTarget, "debug/$hostLib").absolutePath,
+        "--language", "kotlin", "--no-format",
+        "--out-dir", bindingsDir.get().asFile.absolutePath,
     )
 }
 
