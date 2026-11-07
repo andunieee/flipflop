@@ -15,7 +15,6 @@ jobs:
           B64: ${{ secrets.FLIPFLOP_KEYSTORE_B64 }}
           STORE: ${{ secrets.FLIPFLOP_KEYSTORE_PASSWORD }}
           KEY: ${{ secrets.FLIPFLOP_KEY_PASSWORD }}
-          OLD_STORE: ${{ secrets.SIGNING_STORE_PASSWORD }}
           OLD_KEY: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           set -u
@@ -28,19 +27,25 @@ jobs:
           else
             echo "MAC FAILED"
           fi
-          echo "--- aliases seen with FLIPFLOP_KEYSTORE_PASSWORD ---"
-          keytool -list -keystore ks.p12 -storepass "$STORE" 2>/dev/null | grep -i 'alias name' || echo "list failed"
-          echo "--- key recovery (store pass / key pass) ---"
-          try() {
-            if keytool -certreq -alias flipflop -keystore ks.p12 \
-                 -storepass "$2" -keypass "$3" -file /dev/null >/dev/null 2>&1; then
-              echo "$1: OK"
-            else
-              echo "$1: FAILED"
-            fi
+          cat > K.java <<'EOF'
+          import java.io.File;
+          import java.security.KeyStore;
+          public class K {
+              static void key(KeyStore ks, String label, char[] pw) {
+                  try {
+                      ks.getKey("flipflop", pw);
+                      System.out.println("getKey(" + label + "): OK");
+                  } catch (Exception e) {
+                      System.out.println("getKey(" + label + "): FAILED " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                  }
+              }
+              public static void main(String[] args) throws Exception {
+                  KeyStore ks = KeyStore.getInstance(new File("ks.p12"), System.getenv("STORE").toCharArray());
+                  System.out.println("containsAlias: " + ks.containsAlias("flipflop"));
+                  key(ks, "FLIPFLOP_KEY_PASSWORD", System.getenv("KEY").toCharArray());
+                  key(ks, "FLIPFLOP_KEYSTORE_PASSWORD", System.getenv("STORE").toCharArray());
+                  key(ks, "SIGNING_KEY_PASSWORD", System.getenv("OLD_KEY").toCharArray());
+              }
           }
-          try "flipflop-store + flipflop-key" "$STORE" "$KEY"
-          try "flipflop-store + flipflop-store" "$STORE" "$STORE"
-          try "old-store + old-key" "$OLD_STORE" "$OLD_KEY"
-          try "flipflop-store + old-key" "$STORE" "$OLD_KEY"
-          try "old-store + flipflop-key" "$OLD_STORE" "$KEY"
+          EOF
+          java K.java
