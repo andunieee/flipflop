@@ -150,6 +150,8 @@ jobs:
   windows:
     name: windows (x86_64)
     runs-on: windows-latest
+    # Fail instead of hanging for GitHub's 6-hour job limit (bundleNative used to deadlock).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

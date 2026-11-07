@@ -46,13 +46,16 @@ val hostLib = when {
 }
 val nativeRoot = layout.buildDirectory.dir("native")
 
-val bundleNative = tasks.register("bundleNative") {
+// Run cargo through Gradle's Exec, not a raw ProcessBuilder with inheritIO(): under the Windows
+// Gradle daemon the child's output is never drained, so cargo eventually blocks and the build hangs
+// in bundleNative until the job timeout.
+val bundleNative = tasks.register<Exec>("bundleNative") {
     val dest = nativeRoot.map { it.dir(osDir) }
+    workingDir = repo
+    commandLine("cargo", "build", "--release", "--lib", "--locked")
     inputs.files(fileTree(repo.resolve("src")), repo.resolve("Cargo.toml"), repo.resolve("Cargo.lock"))
     outputs.dir(dest)
     doLast {
-        ProcessBuilder("cargo", "build", "--release", "--lib", "--locked").directory(repo).inheritIO().start()
-            .also { check(it.waitFor() == 0) { "cargo build --release failed" } }
         val lib = File(cargoTarget, "release/$hostLib")
         dest.get().asFile.apply { deleteRecursively(); mkdirs() }
         lib.copyTo(File(dest.get().asFile, hostLib))
