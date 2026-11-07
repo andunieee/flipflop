@@ -42,7 +42,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libv4l-dev libclang-dev libssl-dev pkg-config rpm fakeroot imagemagick
+            libdbus-1-dev libv4l-dev libclang-dev libssl-dev libwayland-dev pkg-config rpm fakeroot imagemagick
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -215,6 +215,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      # generateBindings builds the library for the host to read its UniFFI metadata, so the host-only
+      # desktop dependencies have to build here too.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libdbus-1-dev libv4l-dev libclang-dev libwayland-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
         with:

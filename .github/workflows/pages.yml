@@ -32,9 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # No fetch-tags: when this runs on a tag, checkout fetches both the commit and the tag to the same
+      # ref and git refuses (actions/checkout#1471). The only use of tags is listing them, below.
       - uses: actions/checkout@v4
-        with:
-          fetch-tags: true
 
       - name: Tag is the Cargo.toml version
         if: github.ref_type == 'tag'
@@ -88,8 +88,9 @@ jobs:
             cp build/* "site/guest/${GITHUB_REF_NAME}/"
           fi
 
-          # the earlier releases
-          for tag in $(git tag --list 'v*'); do
+          # the earlier releases; the names come from the remote, since only the pushed tag is in this clone
+          tags="$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/##')"
+          for tag in $tags; do
             [ -d "site/guest/$tag" ] && continue
             ok=1
             for f in $ROOT_FILES; do fetch "guest/$tag" "$f" 2>/dev/null || { ok=0; break; }; done

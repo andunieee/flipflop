@@ -179,7 +179,7 @@ curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/lat
 | `.dmg` | macOS | `just dmg` | Xcode command line tools |
 | `.apk` | any | `just apk` | cargo-ndk, NDK 27, Android SDK 35 (see [Run](#run)) |
 
-Linux also needs libdbus, libv4l and libclang development headers to compile the Rust library (`libdbus-1-dev libv4l-dev libclang-dev` on Debian).
+Linux also needs libdbus, libv4l, libclang and libwayland development headers to compile the Rust library (`libdbus-1-dev libv4l-dev libclang-dev libwayland-dev` on Debian). The Android build needs them as well, even though it targets Android: its Kotlin bindings are generated from a host build of the library.
 
 Android release APKs are signed with the debug key unless you set `FLIPFLOP_KEYSTORE` (path to a `.jks`), `FLIPFLOP_KEYSTORE_PASSWORD` and optionally `FLIPFLOP_KEY_PASSWORD`, as environment variables or gradle properties. In CI, store the base64 of the keystore in the `FLIPFLOP_KEYSTORE_B64` secret and the password as the `FLIPFLOP_KEYSTORE_PASSWORD` secret (plus `FLIPFLOP_KEY_PASSWORD` if the key has its own). The key alias is always `flipflop`; create the keystore with `keytool -genkeypair -v -keystore flipflop.jks -alias flipflop -keyalg RSA -keysize 2048 -validity 10000`. Use one key for good: Android refuses to update an app signed with a different one.
 
