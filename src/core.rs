@@ -18,7 +18,7 @@ use anyhow::{Context, Result, anyhow};
 use iroh::{
     Endpoint, EndpointAddr, EndpointId,
     address_lookup::MemoryLookup,
-    endpoint::{Connection, presets},
+    endpoint::{Connection, QuicTransportConfig, VarInt, presets},
     endpoint_info::UserData,
 };
 #[cfg(not(target_os = "windows"))]
@@ -47,6 +47,12 @@ const MDNS_SERVICE: &str = "flipflop";
 /// Control messages are JSON and small; sync messages (first byte [`sharing::SYNC_TAG`]) can carry a whole document.
 const MAX_MSG_BYTES: usize = 64 * 1024;
 const MAX_SYNC_BYTES: usize = 32 * 1024 * 1024;
+/// How much of a stream may be in flight, unacknowledged. A stream can't go faster than this per
+/// round trip, and iroh's default (1.25 MB) holds a file to 10 MB/s at 100 ms. It is also what one
+/// stream can make the receiver buffer, should it fall behind.
+const STREAM_WINDOW: u32 = 16 * 1024 * 1024;
+/// The same for everything a connection is sending at once.
+const SEND_WINDOW: u64 = 2 * STREAM_WINDOW as u64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Peer {
@@ -257,6 +263,12 @@ impl Core {
         let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
             .alpns(vec![ALPN.to_vec(), GUEST_ALPN.to_vec()])
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
+                    .send_window(SEND_WINDOW)
+                    .build(),
+            )
             .address_lookup(mdns.clone())
             .address_lookup(memory.clone())
             .user_data_for_address_lookup(user_data(&name));
@@ -723,6 +735,14 @@ impl Core {
         self.reset_doc_sync(id);
         self.publish_peers();
         self.emit(Event::Notice(format!("connected to {}", id.fmt_short())));
+
+        let watched = conn.clone();
+        tokio::spawn(async move {
+            let mut paths = watched.paths_stream();
+            while paths.next().await.is_some() {
+                tracing::info!("route to {}: {}", id.fmt_short(), route(&watched));
+            }
+        });
 
         // File downloads: the other side opens a bidirectional stream per request.
         let this = self.clone();
@@ -1518,6 +1538,25 @@ fn new_group_id() -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Which way a connection's data goes (it decides how fast files can move), for the logs.
+fn route(conn: &Connection) -> String {
+    let paths = conn.paths();
+    let selected = paths.iter().find(|p| p.is_selected());
+    match selected {
+        Some(path) => {
+            let kind = if path.is_ip() {
+                "direct"
+            } else if path.is_relay() {
+                "relay"
+            } else {
+                "bluetooth"
+            };
+            format!("{kind} {:?}, rtt {:?}", path.remote_addr(), path.rtt())
+        }
+        None => "none yet".to_owned(),
+    }
 }
 
 fn user_data(name: &str) -> UserData {

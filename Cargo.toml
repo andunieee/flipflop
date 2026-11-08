@@ -83,6 +83,25 @@ opt-level = "s"
 lto = "thin"
 strip = true
 
+# Small overall, but fast where files pass through: QUIC, its crypto, compression, hashing, file I/O
+# (and this crate, where their generic code ends up).
+[profile.release.package]
+flipflop = { opt-level = 3 }
+iroh = { opt-level = 3 }
+noq = { opt-level = 3 }
+noq-proto = { opt-level = 3 }
+noq-udp = { opt-level = 3 }
+rustls = { opt-level = 3 }
+ring = { opt-level = 3 }
+tokio = { opt-level = 3 }
+bytes = { opt-level = 3 }
+async-compression = { opt-level = 3 }
+compression-codecs = { opt-level = 3 }
+zstd = { opt-level = 3 }
+zstd-safe = { opt-level = 3 }
+zstd-sys = { opt-level = 3 }
+blake3 = { opt-level = 3 }
+
 [dev-dependencies]
 wat = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -34,7 +34,7 @@ use iroh::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadBuf},
     sync::Notify,
 };
 
@@ -45,7 +45,9 @@ use crate::{
 };
 
 pub(super) const SYNC_TAG: u8 = 1;
-const CHUNK: usize = 64 * 1024;
+/// What files move in. tokio does file I/O on another thread, so each read or write of one is a
+/// round trip between threads: small ones cost much of a fast transfer.
+const CHUNK: usize = 1024 * 1024;
 /// An offer that is a whole folder.
 pub const FOLDER_KIND: &str = "folder";
 const MAX_LISTING_BYTES: usize = 64 << 20;
@@ -1781,7 +1783,8 @@ impl Core {
         }
 
         let part = part_path(&dir, fid);
-        let mut body = ZstdDecoder::new(BufReader::new(&mut rx));
+        let started = Instant::now();
+        let mut body = ZstdDecoder::new(BufReader::with_capacity(CHUNK, &mut rx));
         let folder = offer.kind == FOLDER_KIND;
         let result = if folder {
             self.receive_folder(gid, fid, &mut body, &part, len).await
@@ -1801,6 +1804,12 @@ impl Core {
             };
             return Err(err);
         }
+        tracing::info!(
+            "received {} ({len} bytes in {:?}), route {}",
+            offer.name,
+            started.elapsed(),
+            super::route(&conn)
+        );
         let target = target.unwrap_or_else(|| unique_path(&dir, &offer.name));
         tokio::fs::rename(&part, &target).await?;
         Ok(target)
@@ -1816,6 +1825,7 @@ impl Core {
         len: u64,
     ) -> Result<String> {
         let mut out = tokio::fs::File::create(part).await?;
+        out.set_max_buf_size(CHUNK);
         let mut hasher = blake3::Hasher::new();
         let mut buf = vec![0u8; CHUNK];
         let (mut done, mut shown) = (0u64, Instant::now());
@@ -1891,6 +1901,7 @@ impl Core {
                 .open(&path)
                 .await
                 .with_context(|| format!("cannot create {rel}"))?;
+            out.set_max_buf_size(CHUNK);
             let mut left = *size;
             while left > 0 {
                 let want = left.min(CHUNK as u64) as usize;
@@ -1989,13 +2000,22 @@ impl Core {
             &from.to_string(),
             offer.size,
         );
+        if let Some(conn) = self.connection(from) {
+            tracing::info!(
+                "sending {} to {}, route {}",
+                offer.name,
+                from.fmt_short(),
+                super::route(&conn)
+            );
+        }
         if offer.kind == FOLDER_KIND {
             serve_folder(path, offer.size, tx, &sending).await?;
             return Ok(Some(sending));
         }
-        let file = tokio::fs::File::from_std(
+        let mut file = tokio::fs::File::from_std(
             tokio::task::spawn_blocking(move || open_source(&path)).await??,
         );
+        file.set_max_buf_size(CHUNK);
         let len = file.metadata().await?.len();
         if len != offer.size {
             bail!("file changed since it was offered");
@@ -2003,9 +2023,11 @@ impl Core {
         let mut header = vec![0u8];
         header.extend_from_slice(&len.to_be_bytes());
         tx.write_all(&header).await?;
-        let mut body =
-            ZstdEncoder::with_quality(BufReader::new(sending.counted(file)), Level::Precise(1));
-        tokio::io::copy(&mut body, tx).await?;
+        let body = ZstdEncoder::with_quality(
+            BufReader::with_capacity(CHUNK, sending.counted(file)),
+            Level::Precise(1),
+        );
+        tokio::io::copy_buf(&mut BufReader::with_capacity(CHUNK, body), tx).await?;
         Ok(Some(sending))
     }
 
@@ -2382,12 +2404,16 @@ async fn serve_folder(
     let mut header = vec![0u8];
     header.extend_from_slice(&len.to_be_bytes());
     tx.write_all(&header).await?;
-    let mut body =
-        async_compression::tokio::write::ZstdEncoder::with_quality(&mut *tx, Level::Precise(1));
+    let mut body = async_compression::tokio::write::ZstdEncoder::with_quality(
+        BufWriter::with_capacity(CHUNK, &mut *tx),
+        Level::Precise(1),
+    );
     body.write_all(&listing.encode()).await?;
     for (path, (_, size)) in paths.iter().zip(&listing.files) {
-        let file = tokio::fs::File::open(path).await?;
-        if tokio::io::copy(&mut sending.counted(file.take(*size)), &mut body).await? != *size {
+        let mut file = tokio::fs::File::open(path).await?;
+        file.set_max_buf_size(CHUNK);
+        let mut reader = BufReader::with_capacity(CHUNK, sending.counted(file.take(*size)));
+        if tokio::io::copy_buf(&mut reader, &mut body).await? != *size {
             bail!("folder changed since it was offered");
         }
     }
