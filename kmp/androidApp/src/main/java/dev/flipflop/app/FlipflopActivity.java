@@ -84,6 +84,7 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
     static final long LOST_MS = 45_000;
     static final int REQ_BLE = 1;
     static final int REQ_PICK = 2;
+    static final int REQ_NOTIFY = 3;
 
     static {
         System.loadLibrary("flipflop");
@@ -107,8 +108,11 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
 
     private String pickKind = "file";
 
-    private volatile byte[] payload = new byte[0];
-    private boolean bleWanted = false;
+    // The node outlives an activity while files are moving, and only tells the first one these.
+    private static volatile byte[] payload = new byte[0];
+    private static boolean bleWanted = false;
+    private static boolean notifyAsked = false;
+    private boolean visible = false;
     private boolean bleRunning = false;
 
     private BluetoothAdapter adapter;
@@ -406,6 +410,24 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
         }
     }
 
+    // ---- transfers ------------------------------------------------------------------------
+
+    /** Called from Rust (under its locks, so it must not wait): what is moving; an empty title for nothing. */
+    public void transfersChanged(String title, String text, int percent) {
+        main.post(() -> {
+            TransferService.update(this, title, text, percent);
+            askToNotify();
+        });
+    }
+
+    /** Without this permission the notification does not show on Android 13+; the service still runs. */
+    private void askToNotify() {
+        if (Build.VERSION.SDK_INT < 33 || notifyAsked || !visible || !TransferService.wanted()) return;
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return;
+        notifyAsked = true;
+        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFY);
+    }
+
     // ---- BLE: lifecycle & permissions -----------------------------------------------------
 
     /** Called from Rust once the app is up. */
@@ -469,6 +491,11 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_NOTIFY) {
+            // Empty: another dialog was up, so the user never saw it.
+            if (grantResults.length == 0) notifyAsked = false;
+            return;
+        }
         if (requestCode != REQ_BLE) return;
         for (int r : grantResults) {
             if (r != PackageManager.PERMISSION_GRANTED) {
@@ -482,8 +509,18 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        visible = true;
         // The user may have just switched Bluetooth on.
         if (bleWanted && !bleRunning) startBleIfPermitted();
+        // Something that began while we were away could not start the service (Android 12+).
+        TransferService.sync(this);
+        askToNotify();
+    }
+
+    @Override
+    protected void onPause() {
+        visible = false;
+        super.onPause();
     }
 
     private void startBle() {

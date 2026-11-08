@@ -180,8 +180,13 @@ pub enum FileCmd {
         group: String,
         file: String,
     },
-    /// Download a file now.
+    /// Download a file now, also if it was on hold.
     Get {
+        group: String,
+        file: String,
+    },
+    /// Call off a file's download and don't fetch it automatically; `get` takes it off hold.
+    Hold {
         group: String,
         file: String,
     },
@@ -686,6 +691,12 @@ async fn file(core: &Core, cx: &Ctx, cmd: &FileCmd, wait: Duration) -> Result<()
             say!(cx, "saved to {}", path.display());
             sleep(Duration::from_secs(2)).await;
         }
+        FileCmd::Hold { group, file } => {
+            let gid = find_group(core, group)?.id;
+            let fid = find_file(core, &gid, file)?;
+            core.hold_file(&gid, &fid)?;
+            say!(cx, "on hold");
+        }
     }
     Ok(())
 }
@@ -862,7 +873,9 @@ fn pair_status(core: &Core, id: EndpointId) -> String {
 }
 
 fn file_line(f: &crate::core::FileView) -> String {
-    let state = if f.stopped {
+    let state = if f.preparing {
+        "preparing".to_string()
+    } else if f.stopped {
         "stopped".to_string()
     } else if f.mine {
         format!(
@@ -881,18 +894,33 @@ fn file_line(f: &crate::core::FileView) -> String {
         )
     } else if let Some((done, total)) = f.progress {
         format!("downloading {}/{}", format::size(done), format::size(total))
+    } else if f.on_hold {
+        "on hold".to_string()
     } else if f.source_online {
         "available".to_string()
     } else {
         "sender offline".to_string()
     };
+    let sending: String = f
+        .sending
+        .iter()
+        .map(|s| {
+            format!(
+                ", sending to {} {}/{}",
+                s.to,
+                format::size(s.done),
+                format::size(s.total)
+            )
+        })
+        .collect();
     format!(
-        "{}  {}  {}  from {}  {}",
+        "{}  {}  {}  from {}  {}{}",
         f.id,
         f.name,
         format::size(f.size),
         if f.mine { "you" } else { &f.from_name },
-        state
+        state,
+        sending
     )
 }
 

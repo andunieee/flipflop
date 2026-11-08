@@ -2,10 +2,11 @@
 
 use std::{
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use flipflop::core::{Core, MemberState};
+use flipflop::core::{Core, Event, GroupView, MemberState, TransfersNow};
 use tokio::time::{sleep, timeout};
 
 struct Dir(PathBuf);
@@ -196,7 +197,8 @@ async fn manual_download_and_manual_stop() {
         "auto-stop is off by default"
     );
 
-    // a second offer, stopped before anyone downloads it
+    // a second offer of it once the first one is stopped, stopped before anyone downloads it
+    a.stop_file(&gid, &fid).unwrap();
     let fid2 = a.offer_file(&gid, src, None, "file", false).await.unwrap();
     until("second offer", || {
         b.group_view(&gid).unwrap().files.len() == 2
@@ -218,6 +220,9 @@ async fn manual_download_and_manual_stop() {
         !b.group_view(&gid).unwrap().files[0].stopped
     })
     .await;
+    // the older offer of the same file can't come back next to it
+    assert!(!a.group_view(&gid).unwrap().files[1].can_reoffer);
+    assert!(a.reoffer_file(&gid, &fid).await.is_err());
     assert_eq!(b.group_view(&gid).unwrap().files.len(), 2);
     let path2 = b.download_file(&gid, &fid2).await.unwrap();
     assert_eq!(std::fs::read(&path2).unwrap(), b"%PDF-fake");
@@ -439,6 +444,323 @@ async fn folders_arrive_whole() {
         !saved.with_file_name(format!(".{fid}.part")).exists(),
         "no leftovers"
     );
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_same_file_is_not_offered_twice() {
+    let (a, da) = node("alice").await;
+    let (b, db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    b.set_group_settings(&gid, Some(false), None, None);
+    let offer = |c: &Core, path: PathBuf, name: Option<&str>| {
+        let (c, gid, name) = (c.clone(), gid.clone(), name.map(str::to_owned));
+        async move { c.offer_file(&gid, path, name, "file", false).await }
+    };
+
+    let src = da.path().join("a.txt");
+    std::fs::write(&src, b"same").unwrap();
+    let fid = offer(&a, src.clone(), None).await.unwrap();
+    let err = offer(&a, src.clone(), None).await.unwrap_err();
+    assert_eq!(err.to_string(), "you already share a.txt");
+    assert_eq!(
+        a.group_view(&gid).unwrap().files.len(),
+        1,
+        "no second entry"
+    );
+
+    // a copy elsewhere is the same file
+    let copy = da.path().join("copy");
+    std::fs::create_dir_all(&copy).unwrap();
+    std::fs::write(copy.join("a.txt"), b"same").unwrap();
+    assert!(offer(&a, copy.join("a.txt"), None).await.is_err());
+
+    // another member offering it too
+    until("offer visible", || {
+        b.group_view(&gid).unwrap().files.len() == 1
+    })
+    .await;
+    let theirs = db.path().join("a.txt");
+    std::fs::write(&theirs, b"same").unwrap();
+    let err = offer(&b, theirs.clone(), None).await.unwrap_err();
+    assert_eq!(err.to_string(), "alice already shares a.txt");
+
+    // other bytes, or another name, is another file: two empty files aren't the same one
+    std::fs::write(&src, b"changed").unwrap();
+    offer(&a, src, None).await.unwrap();
+    for name in ["x", "y"] {
+        let empty = da.path().join(name);
+        std::fs::write(&empty, b"").unwrap();
+        offer(&a, empty, None).await.unwrap();
+    }
+
+    // a folder, too
+    let folder = da.path().join("folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("f"), b"in a folder").unwrap();
+    offer(&a, folder.clone(), None).await.unwrap();
+    assert!(offer(&a, folder.clone(), None).await.is_err());
+
+    // not offered anymore: fine again
+    a.stop_file(&gid, &fid).unwrap();
+    until("bob sees it stopped", || {
+        b.group_view(&gid)
+            .unwrap()
+            .files
+            .iter()
+            .any(|f| f.id == fid && f.stopped)
+    })
+    .await;
+    offer(&b, theirs, None).await.unwrap();
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+/// A node that records the views it publishes, which show even what lasts only a moment.
+async fn recording_node(name: &str) -> (Core, Dir, Arc<Mutex<Vec<GroupView>>>) {
+    let dir = Dir::new(name);
+    let views: Arc<Mutex<Vec<GroupView>>> = Arc::default();
+    let seen = views.clone();
+    let core = Core::start(dir.path(), false, move |e| {
+        if let Event::Group(v) = e {
+            seen.lock().unwrap().push(v);
+        }
+    })
+    .await
+    .unwrap();
+    core.set_name(name);
+    core.set_download_dir(dir.path().join("downloads"));
+    (core, dir, views)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offers_show_while_hashing_and_their_sender_sees_them_go() {
+    let (a, da, views) = recording_node("alice").await;
+    let (b, _db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    b.set_group_settings(&gid, Some(false), None, None);
+
+    let src = da.path().join("photos");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("one"), vec![1u8; 300_000]).unwrap();
+    let fid = a.offer_file(&gid, src, None, "file", false).await.unwrap();
+
+    let shown = views.lock().unwrap().clone();
+    let first = shown
+        .iter()
+        .find(|v| v.files.iter().any(|f| f.preparing))
+        .expect("it showed before it was hashed");
+    let card = first.files.iter().find(|f| f.preparing).unwrap();
+    assert_eq!(
+        (card.name.as_str(), card.kind.as_str()),
+        ("photos", "folder")
+    );
+    assert!(card.mine);
+    let view = a.group_view(&gid).unwrap();
+    assert_eq!(view.files.len(), 1, "the real offer took its place");
+    assert_eq!(view.files[0].id, fid);
+    assert!(!view.files[0].preparing);
+    until("the offer reaches bob", || {
+        b.group_view(&gid).unwrap().files.len() == 1
+    })
+    .await;
+
+    views.lock().unwrap().clear();
+    b.download_file(&gid, &fid).await.unwrap();
+    until("the sending is over", || {
+        a.group_view(&gid).unwrap().files[0].sending.is_empty()
+    })
+    .await;
+    let shown = views.lock().unwrap().clone();
+    let going = shown
+        .iter()
+        .flat_map(|v| &v.files)
+        .flat_map(|f| &f.sending)
+        .next()
+        .expect("the sender saw it going");
+    assert_eq!((going.to.as_str(), going.total), ("bob", 300_000));
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+/// A node that records what it says is moving.
+async fn transfers_node(name: &str) -> (Core, Dir, Arc<Mutex<Vec<TransfersNow>>>) {
+    let dir = Dir::new(name);
+    let log: Arc<Mutex<Vec<TransfersNow>>> = Arc::default();
+    let seen = log.clone();
+    let core = Core::start(dir.path(), false, move |e| {
+        if let Event::Transfers(now) = e {
+            seen.lock().unwrap().push(now);
+        }
+    })
+    .await
+    .unwrap();
+    core.set_name(name);
+    core.set_download_dir(dir.path().join("downloads"));
+    (core, dir, log)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn both_sides_say_what_is_moving_until_it_is_done() {
+    let (a, da, sender) = transfers_node("alice").await;
+    let (b, _db, receiver) = transfers_node("bob").await;
+    let gid = group_of(&a, &b).await;
+    b.set_group_settings(&gid, Some(false), None, None);
+
+    let src = da.path().join("clip.bin");
+    std::fs::write(&src, vec![7u8; 300_000]).unwrap();
+    let fid = a.offer_file(&gid, src, None, "file", false).await.unwrap();
+    until("the hashing is over", || !a.transfers_now().active()).await;
+    let preparing = sender.lock().unwrap().iter().any(|t| t.preparing == 1);
+    assert!(preparing, "hashing counts");
+
+    until("the offer reaches bob", || {
+        b.group_view(&gid).unwrap().files.len() == 1
+    })
+    .await;
+    b.download_file(&gid, &fid).await.unwrap();
+    assert!(
+        !b.transfers_now().active(),
+        "over when the file is in place"
+    );
+    until("alice is done", || !a.transfers_now().active()).await;
+
+    let receiving: fn(&TransfersNow) -> bool = |t| t.receiving == 1;
+    let sending: fn(&TransfersNow) -> bool = |t| t.sending == 1;
+    for (log, name, moving) in [(&receiver, "bob", receiving), (&sender, "alice", sending)] {
+        let log = log.lock().unwrap();
+        let during = log
+            .iter()
+            .find(|t| moving(t))
+            .unwrap_or_else(|| panic!("{name} said so"));
+        assert_eq!(during.name.as_deref(), Some("clip.bin"));
+        assert_eq!(during.total, Some(300_000));
+        assert_eq!(log.last(), Some(&TransfersNow::default()), "{name} ended");
+    }
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_download_stays_on_hold_even_with_auto_download() {
+    let (a, da) = node("alice").await;
+    let (b, db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    assert!(
+        b.groups()
+            .groups
+            .iter()
+            .any(|g| g.id == gid && g.auto_download),
+        "bob gets everything automatically"
+    );
+
+    // Hard to compress, and big enough to catch it on its way.
+    let mut content = vec![0u8; 96 << 20];
+    blake3::Hasher::new()
+        .update(b"seed")
+        .finalize_xof()
+        .fill(&mut content);
+    let src = da.path().join("big.bin");
+    std::fs::write(&src, &content).unwrap();
+    let fid = a.offer_file(&gid, src, None, "file", false).await.unwrap();
+
+    let file = |c: &Core| {
+        c.group_view(&gid)
+            .unwrap()
+            .files
+            .into_iter()
+            .find(|f| f.id == fid)
+    };
+    until("the download started", || {
+        file(&b).is_some_and(|f| f.progress.is_some() && f.can_hold)
+    })
+    .await;
+    b.hold_file(&gid, &fid).unwrap();
+    until("the download stopped", || {
+        file(&b).unwrap().progress.is_none()
+    })
+    .await;
+    let held = file(&b).unwrap();
+    assert!(held.on_hold && !held.have && !held.can_hold);
+    assert!(held.error.is_none(), "cancelled is not failed");
+    let downloads = db.path().join("downloads");
+    assert_eq!(
+        std::fs::read_dir(&downloads).unwrap().count(),
+        0,
+        "nothing left behind"
+    );
+    until("alice sees it stop", || {
+        file(&a).unwrap().sending.is_empty()
+    })
+    .await;
+
+    // Whatever makes the automatic jobs look again, it stays that way.
+    a.send_text(&gid, "wake up").unwrap();
+    until("the text", || !b.group_view(&gid).unwrap().texts.is_empty()).await;
+    sleep(Duration::from_secs(1)).await;
+    let held = file(&b).unwrap();
+    assert!(held.on_hold && held.progress.is_none());
+    assert_eq!(file(&a).unwrap().downloaded_by.len(), 0);
+
+    // Until bob asks for it.
+    let path = b.download_file(&gid, &fid).await.unwrap();
+    assert!(std::fs::read(&path).unwrap() == content);
+    let done = file(&b).unwrap();
+    assert!(done.have && !done.on_hold);
+    assert!(b.hold_file(&gid, &fid).is_err(), "nothing left to hold");
+    assert!(a.hold_file(&gid, &fid).is_err(), "not on your own file");
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automatic_downloads_are_fetched_one_at_a_time() {
+    let (a, da) = node("alice").await;
+    let (b, _db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    // Hold the offers back, so they are all waiting when the automatic jobs start.
+    b.set_group_settings(&gid, Some(false), None, None);
+
+    let mut names = Vec::new();
+    for name in ["one.bin", "two.bin", "three.bin"] {
+        // Hard to compress, and big enough that one can be caught moving.
+        let mut content = vec![0u8; 32 << 20];
+        blake3::Hasher::new()
+            .update(name.as_bytes())
+            .finalize_xof()
+            .fill(&mut content);
+        let path = da.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        a.offer_file(&gid, path, None, "file", false).await.unwrap();
+        names.push(name);
+    }
+    until("the offers reach bob", || {
+        b.group_view(&gid).unwrap().files.len() == names.len()
+    })
+    .await;
+
+    b.set_group_settings(&gid, Some(true), None, None);
+    let mut seen_moving = false;
+    until("bob has them all", || {
+        let now = b.transfers_now();
+        seen_moving |= now.receiving > 0;
+        assert!(now.receiving <= 1, "two files moved at once: {now:?}");
+        b.group_view(&gid)
+            .unwrap()
+            .files
+            .iter()
+            .filter(|f| f.have)
+            .count()
+            == names.len()
+    })
+    .await;
+    assert!(seen_moving, "nothing was ever moving");
 
     a.shutdown().await;
     b.shutdown().await;

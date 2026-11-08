@@ -5,7 +5,10 @@ pub use android::*;
 
 #[cfg(target_os = "android")]
 mod android {
-    use std::sync::OnceLock;
+    use std::{
+        sync::{Mutex, OnceLock},
+        time::{Duration, Instant},
+    };
 
     use jni::{
         JNIEnv, JavaVM,
@@ -28,17 +31,20 @@ mod android {
         })
     }
 
-    struct ActivityRef(jni::objects::GlobalRef);
-    static ACTIVITY: OnceLock<ActivityRef> = OnceLock::new();
+    /// The latest Activity: the process can outlive one while files are moving (see `TransferService`).
+    static ACTIVITY: Mutex<Option<jni::objects::GlobalRef>> = Mutex::new(None);
 
-    /// Called by the Activity before anything else: hand the JVM and the Activity to `ndk_context`
-    /// (blew and friends read it) and to us, and set up logging.
+    /// Called by every Activity before anything else: hand it to us. The first one also goes to
+    /// `ndk_context` (blew and friends read it), with the JVM, and sets up logging.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeInit(
         env: JNIEnv,
         _: JClass,
         activity: JObject,
     ) {
+        if let Ok(app) = env.new_global_ref(&activity) {
+            *ACTIVITY.lock().unwrap() = Some(app);
+        }
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             // Quiet by default; `adb shell setprop debug.flipflop.log "warn,iroh_ble_transport=debug"` turns up
@@ -53,7 +59,6 @@ mod android {
             let (Ok(vm), Ok(app)) = (env.get_java_vm(), env.new_global_ref(&activity)) else {
                 return;
             };
-            let _ = ACTIVITY.set(ActivityRef(app.clone()));
             // `ndk_context` wants a Context that lives forever: the Activity's global reference is leaked on purpose.
             let context = app.as_obj().as_raw();
             std::mem::forget(app);
@@ -70,11 +75,11 @@ mod android {
     pub fn with_activity<R>(
         f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<R>,
     ) -> Option<R> {
-        let activity = ACTIVITY.get()?;
+        let activity = ACTIVITY.lock().unwrap().clone()?;
         let ctx = ndk_context::android_context();
         let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
         let mut env = vm.attach_current_thread().ok()?;
-        let result = f(&mut env, activity.0.as_obj());
+        let result = f(&mut env, activity.as_obj());
         if env.exception_check().unwrap_or(false) {
             let _ = env.exception_describe();
             let _ = env.exception_clear();
@@ -115,6 +120,43 @@ mod android {
             }
         }
         false
+    }
+
+    /// Keep the app running, with a notification, while something is moving; let it go after. The
+    /// count changing shows at once, mere progress once a second (Android drops faster updates).
+    pub fn show_transfers(now: &crate::core::TransfersNow) {
+        type Shown = (Instant, usize, usize, usize);
+        static SHOWN: Mutex<Option<Shown>> = Mutex::new(None);
+        let jobs = (now.receiving, now.sending, now.preparing);
+        {
+            let mut shown = SHOWN.lock().unwrap();
+            if let Some((at, r, s, p)) = *shown
+                && (r, s, p) == jobs
+                && at.elapsed() < Duration::from_secs(1)
+            {
+                return;
+            }
+            *shown = Some((Instant::now(), jobs.0, jobs.1, jobs.2));
+        }
+        let (title, text, percent) = if now.active() {
+            now.describe()
+        } else {
+            Default::default()
+        };
+        with_activity(|env, a| {
+            let (title, text) = (env.new_string(title)?, env.new_string(text)?);
+            env.call_method(
+                a,
+                "transfersChanged",
+                "(Ljava/lang/String;Ljava/lang/String;I)V",
+                &[
+                    JValue::Object(&title),
+                    JValue::Object(&text),
+                    JValue::Int(percent),
+                ],
+            )
+            .map(|_| ())
+        });
     }
 
     /// Move a downloaded file into the public Downloads folder; returns where it ended up.
@@ -305,6 +347,10 @@ mod android {
 pub fn ensure_ble_permission() -> bool {
     true
 }
+
+/// Only Android stops apps that are out of sight, so only there is anything to do.
+#[cfg(not(target_os = "android"))]
+pub fn show_transfers(_: &crate::core::TransfersNow) {}
 
 /// A downloaded file is complete. On Android it is moved into the public Downloads folder; the
 /// returned path is where it ended up.

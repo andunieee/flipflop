@@ -128,10 +128,16 @@ private fun FileCard(f: FileRow, nav: Nav) {
                         if (f.hosts.isNotEmpty()) Txt(f.hosts, d.fontSm, c.textMuted)
                     }
                 }
-                if (f.downloading) {
+                if (f.downloading || f.preparing) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         ProgressBar(f.progress)
                         Txt(f.progressLabel, d.fontXs, c.textFaint)
+                    }
+                }
+                f.sends.forEach {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        ProgressBar(it.progress)
+                        Txt(it.label, d.fontXs, c.textFaint)
                     }
                 }
                 if (f.error.isNotEmpty() && !f.downloading) Txt(f.error, d.fontSm, c.error)
@@ -140,20 +146,23 @@ private fun FileCard(f: FileRow, nav: Nav) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(d.space2, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(d.space2)) {
                         when {
+                            f.preparing -> Badge("Preparing", "active")
                             f.stopped -> Badge("Not shared anymore", "muted")
                             f.mine -> Badge("Sharing", "active")
                             f.hosting -> Badge("Hosting", "active")
                             f.have -> Badge("Downloaded", "ok")
                             f.downloading -> Badge("Downloading", "active")
+                            f.onHold -> Badge("On hold", "muted")
                             !f.canDownload -> Badge("Sender offline", "warn")
                         }
                         if (f.audience.isNotEmpty()) Badge(f.audience, f.audienceTone)
                     }
+                    if (f.canHold) SecondaryButton(if (f.downloading) "Cancel" else "Hold") { app.holdFile(f.id) }
                     if (f.canDownload) PrimaryButton(if (f.error.isNotEmpty()) "Retry" else "Download", icon = Icons.arrowDown) { app.downloadFile(f.id) }
                     if (f.savedTo.isNotEmpty()) SecondaryButton("Open", icon = Icons.open) { app.openFile(f.savedTo) }
                     if (f.canHost) SecondaryButton("Host it too", icon = Icons.share) { app.hostFile(f.id, true) }
                     if (f.hosting) SecondaryButton("Stop hosting") { app.hostFile(f.id, false) }
-                    if (f.mine && !f.stopped) DangerButton("Stop sharing") { app.stopFile(f.id) }
+                    if (f.mine && !f.stopped && !f.preparing) DangerButton("Stop sharing") { app.stopFile(f.id) }
                     if (f.canReoffer) SecondaryButton("Share again", icon = Icons.share) { app.reofferFile(f.id) }
                 }
             }

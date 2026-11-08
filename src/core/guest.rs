@@ -615,6 +615,7 @@ impl Core {
         let part = target.with_extension("part");
         let file = tokio::fs::File::create(&part).await?;
         Ok(Upload {
+            incoming: self.track_incoming(gid, &name),
             file,
             hasher: blake3::Hasher::new(),
             size: 0,
@@ -627,6 +628,7 @@ impl Core {
 
 /// A file a guest is uploading.
 pub(super) struct Upload {
+    incoming: sharing::IncomingMeter,
     file: tokio::fs::File,
     hasher: blake3::Hasher,
     size: u64,
@@ -639,6 +641,7 @@ impl Upload {
     pub(super) async fn write(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.hasher.update(bytes);
         self.size += bytes.len() as u64;
+        self.incoming.add(bytes.len());
         self.file.write_all(bytes).await
     }
 

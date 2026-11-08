@@ -22,10 +22,11 @@ Rust peer-to-peer app (desktop and Android) with a Kotlin Multiplatform (Compose
 
 Each group has one [Automerge](https://automerge.org) document (`src/groupdoc.rs`) that members sync over their iroh connections (`src/core/sharing.rs`). It holds the member list, the file offers, the texts, the scratchpad, the group's tabs and the apps' data. Documents live in `groups/<id>.am` next to `state.json`.
 
-- **Files**: an offer is an entry in the document (name, size, blake3 hash, who offered it, who has downloaded it). The bytes stay on the offerer's device and are sent straight to whoever downloads them, verified against the hash. Per group, on each device:
-  - *Download every file automatically* (default **on**): new offers are fetched as soon as the offerer is reachable. Turn it off to get a Download button instead.
+- **Files**: an offer is an entry in the document (name, size, blake3 hash, who offered it, who has downloaded it). The bytes stay on the offerer's device and are sent straight to whoever downloads them, verified against the hash; the offerer sees a progress bar per receiver. A file with the same name and bytes as one on offer in the group is refused, unless the only ones who have it are offline. Per group, on each device:
+  - *Download every file automatically* (default **on**): new offers are fetched as soon as the offerer is reachable, one at a time. Turn it off to get a Download button instead.
+  - Whatever that setting says, a download can be cancelled, which puts the file on hold on this device: what arrived is thrown away, and it is not fetched again until you press Download (it then starts over).
   - *Stop sharing a file once everybody has it* (default **off**, **on** in an implied group): applies to the files you offer. You can always stop sharing a file by hand.
-  - On Android there are three pickers: any file, photos and videos, and installed apps (the app's APK). Downloads end up in `Download/flipflop`.
+  - On Android there are three pickers: any file, photos and videos, and installed apps (the app's APK). Downloads end up in `Download/flipflop`. While files are moving the app stays alive out of sight, with a progress notification, until they are done. Android 12+ only allows that to start while the app is on screen: a transfer that begins in the background gets it the next time the app is opened.
 - **Texts**: not a chat, a feed of pasted links, codes and snippets, each labelled with the name of the device that sent it. Links get an Open button; everything has Copy; you can delete your own.
 - **Scratchpad**: one big plain-text document everybody can edit; concurrent edits merge, and your cursor stays put when someone else edits.
 - **Tabs**: Files, Texts and Scratchpad, plus one per app. Which ones show is part of the document, so it is the same for every member, and anyone can switch them in the group's settings.
@@ -56,7 +57,7 @@ The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that 
     flipflop guest new [--uploads] [--name N]    # prints both addresses (while `serve` runs)
     flipflop guest list | show G | uploads G true|false | close G
     flipflop file offer G ./photo.jpg            # stays online until everyone has it (or --wait)
-    flipflop file list G | get G FILE | stop G FILE
+    flipflop file list G | get G FILE | hold G FILE | stop G FILE
     flipflop text send G "https://example.com" | list G | delete G ID
     flipflop pad show G | set G TEXT | append G TEXT
     flipflop serve                               # run until Ctrl-C

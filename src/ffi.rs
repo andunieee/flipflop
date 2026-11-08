@@ -132,6 +132,22 @@ pub struct FileRow {
     pub shared_from: String,
     /// It can be removed from our files tab.
     pub can_remove: bool,
+    /// We are still hashing it: it is not on offer yet, and has nothing to do. `progress` tells how far.
+    pub preparing: bool,
+    /// We called its download off.
+    pub on_hold: bool,
+    /// Its download can be called off (or, if not running yet, not start by itself).
+    pub can_hold: bool,
+    /// Who is getting it from us right now.
+    pub sends: Vec<SendRow>,
+}
+
+/// One member getting a file from us.
+#[derive(Clone, Default, uniffi::Record)]
+pub struct SendRow {
+    pub progress: f32,
+    /// "Sending to Bob: 3 MB of 10 MB"
+    pub label: String,
 }
 
 /// One of the group's tabs: built-in ("files", "texts", "pad") or an app.
@@ -452,6 +468,7 @@ impl Inner {
         match event {
             Event::Name(name) => self.change(|s| s.ui.my_name = name),
             Event::Notice(text) => self.notice(text),
+            Event::Transfers(now) => crate::platform::show_transfers(&now),
             Event::Ticket(ticket) => self.change(|s| s.ui.ticket = ticket),
             Event::Peers(peers) => self.change(|s| s.peers = peers),
             Event::Groups(view) => {
@@ -1037,6 +1054,17 @@ impl App {
         }
     }
 
+    /// Call off a file's download in the open group, and keep it from starting again by itself.
+    pub fn hold_file(&self, id: String) {
+        let _g = self.inner.enter();
+        let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
+            return;
+        };
+        if let Err(err) = core.hold_file(&gid, &id) {
+            self.inner.notice(format!("{err:#}"));
+        }
+    }
+
     pub fn download_file(&self, id: String) {
         let _g = self.inner.enter();
         let (Some(core), Some(gid)) = (self.inner.core(), self.inner.open_group_id()) else {
@@ -1331,12 +1359,17 @@ fn build_state(shared: &Shared) -> UiState {
         .files
         .iter()
         .map(|f| {
-            let downloading = f.progress.is_some();
+            let downloading = f.progress.is_some() && !f.preparing;
             let (done, total) = f.progress.unwrap_or((0, f.size));
             FileRow {
                 id: f.id.clone(),
                 name: f.name.clone(),
-                size: format::size(f.size),
+                // A folder's size is only known once it has been gone through.
+                size: if f.preparing && f.size == 0 {
+                    "…".into()
+                } else {
+                    format::size(f.size)
+                },
                 meta: format!(
                     "{} · {}",
                     if f.mine {
@@ -1362,7 +1395,15 @@ fn build_state(shared: &Shared) -> UiState {
                 } else {
                     done as f32 / total as f32
                 },
-                progress_label: format!("{} of {}", format::size(done), format::size(total)),
+                progress_label: if f.preparing {
+                    format!(
+                        "Preparing: {} of {}",
+                        format::size(done),
+                        format::size(total)
+                    )
+                } else {
+                    format!("{} of {}", format::size(done), format::size(total))
+                },
                 audience: if f.audience == 0 {
                     String::new()
                 } else {
@@ -1394,6 +1435,26 @@ fn build_state(shared: &Shared) -> UiState {
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
                 can_remove: f.can_remove,
+                preparing: f.preparing,
+                on_hold: f.on_hold,
+                can_hold: f.can_hold,
+                sends: f
+                    .sending
+                    .iter()
+                    .map(|s| SendRow {
+                        progress: if s.total == 0 {
+                            0.0
+                        } else {
+                            s.done as f32 / s.total as f32
+                        },
+                        label: format!(
+                            "Sending to {}: {} of {}",
+                            s.to,
+                            format::size(s.done),
+                            format::size(s.total)
+                        ),
+                    })
+                    .collect(),
             }
         })
         .collect();

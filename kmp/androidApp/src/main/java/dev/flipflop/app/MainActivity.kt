@@ -12,13 +12,18 @@ import dev.flipflop.ui.Share
 import dev.flipflop.ui.startBackend
 
 class MainActivity : FlipflopActivity() {
+    private companion object {
+        /** The node: one per process, which can outlive an activity while files are moving. */
+        var node: Backend? = null
+    }
+
     private lateinit var backend: Backend
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // FlipflopActivity hands the activity to Rust first; the node starts after that.
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        backend = startBackend(filesDir.absolutePath)
+        backend = node ?: startBackend(filesDir.absolutePath).also { node = it }
         // Reopened from Recents, Android hands us the share we already took care of.
         if (savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) takeShare(intent)
         setContent { FlipflopApp(backend) }

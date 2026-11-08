@@ -12,8 +12,14 @@
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
+    io::Write,
     path::{Path, PathBuf},
-    sync::Mutex,
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    task::{Context as TaskContext, Poll},
     time::{Duration, Instant},
 };
 
@@ -27,7 +33,10 @@ use iroh::{
     endpoint::{Connection, RecvStream, SendStream},
 };
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf},
+    sync::Notify,
+};
 
 use super::{Core, Event, parse_gid, tabs::APP_KIND};
 use crate::{
@@ -42,6 +51,8 @@ pub const FOLDER_KIND: &str = "folder";
 const MAX_LISTING_BYTES: usize = 64 << 20;
 const MAX_TEXT_BYTES: usize = 256 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(15);
+/// How often a job with its own progress (hashing, sending) updates the UI.
+const SHOW_EVERY: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocMember {
@@ -51,7 +62,7 @@ pub struct DocMember {
     pub online: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct FileView {
     pub id: String,
     pub name: String,
@@ -90,6 +101,84 @@ pub struct FileView {
     pub can_remove: bool,
     /// Someone who has it is online: the offerer or a host (we ourselves excluded).
     pub source_online: bool,
+    /// We are still hashing it, so it is not on offer yet and `id` is only this card's; `progress`
+    /// is how far along that is.
+    pub preparing: bool,
+    /// We called its download off: it is not fetched again until asked for.
+    pub on_hold: bool,
+    /// It can be put on hold: it is downloading, or would be automatically.
+    pub can_hold: bool,
+    /// Who is getting it from us right now.
+    pub sending: Vec<SendView>,
+}
+
+/// One member getting a file from us.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SendView {
+    /// Their name.
+    pub to: String,
+    /// Bytes read from the file for them. Ahead of what they received by what is on its way.
+    pub done: u64,
+    pub total: u64,
+}
+
+/// Everything moving on this device right now, in every group.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TransfersNow {
+    /// Downloads, and uploads from guests.
+    pub receiving: usize,
+    /// Copies going to members and guests.
+    pub sending: usize,
+    /// Offers being hashed.
+    pub preparing: usize,
+    /// The file's name, when only one is moving.
+    pub name: Option<String>,
+    /// Bytes so far, of all of them.
+    pub done: u64,
+    /// `None` while the size of one of them is not known.
+    pub total: Option<u64>,
+}
+
+impl TransfersNow {
+    pub fn active(&self) -> bool {
+        self.receiving + self.sending + self.preparing > 0
+    }
+
+    /// What to tell the user: a title, a detail, and the percentage done (-1 if not known).
+    pub fn describe(&self) -> (String, String, i32) {
+        let jobs = [
+            ("downloading", self.receiving),
+            ("sending", self.sending),
+            ("preparing", self.preparing),
+        ];
+        let title = match &self.name {
+            Some(name) => {
+                let verb = jobs.iter().find(|j| j.1 > 0).map_or("moving", |j| j.0);
+                format!("{verb} {name}")
+            }
+            None => jobs
+                .iter()
+                .filter(|j| j.1 > 0)
+                .map(|(verb, n)| format!("{verb} {n} {}", if *n == 1 { "file" } else { "files" }))
+                .collect::<Vec<_>>()
+                .join(", "),
+        };
+        let mut chars = title.chars();
+        let title = chars
+            .next()
+            .map(|c| c.to_uppercase().chain(chars).collect())
+            .unwrap_or_default();
+        let done = crate::format::size(self.done);
+        match self.total {
+            Some(total) if total > 0 => (
+                title,
+                format!("{done} of {}", crate::format::size(total)),
+                (self.done as f64 / total as f64 * 100.0).min(100.0) as i32,
+            ),
+            _ if self.done > 0 => (title, done, -1),
+            _ => (title, String::new(), -1),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -143,11 +232,49 @@ pub struct GroupView {
 }
 
 struct Transfer {
+    name: String,
     done: u64,
     total: u64,
     active: bool,
     error: Option<String>,
     failed_at: Option<Instant>,
+    /// Stops the download: it was put on hold.
+    cancel: Arc<Notify>,
+}
+
+/// Bytes through a job, shared with the thread doing it.
+#[derive(Default)]
+struct Meter {
+    done: AtomicU64,
+    /// Zero until known.
+    total: AtomicU64,
+}
+
+/// An offer being hashed: on the screen already, in the document once that is done.
+struct Preparing {
+    group: String,
+    id: String,
+    name: String,
+    kind: String,
+    path: PathBuf,
+    ts: i64,
+    meter: Arc<Meter>,
+}
+
+/// A file on its way to a member.
+struct Sending {
+    group: String,
+    file: String,
+    name: String,
+    to: String,
+    total: u64,
+    done: Arc<AtomicU64>,
+}
+
+/// A file a guest is uploading to us. How big it is will only be known at the end.
+struct Incoming {
+    name: String,
+    done: Arc<AtomicU64>,
 }
 
 pub(super) struct Sharing {
@@ -157,6 +284,16 @@ pub(super) struct Sharing {
     docs: Mutex<HashMap<String, GroupDoc>>,
     dirty: Mutex<HashSet<String>>,
     transfers: Mutex<HashMap<(String, String), Transfer>>,
+    /// Auto-downloads take turns: the files queued for one wait here.
+    auto_turn: tokio::sync::Semaphore,
+    /// What is queued for an auto-download, so a repeated job does not queue a file twice.
+    auto_queued: Mutex<HashSet<(String, String)>>,
+    preparing: Mutex<Vec<Preparing>>,
+    next_preparing: AtomicU64,
+    sending: Mutex<Vec<Sending>>,
+    incoming: Mutex<Vec<Incoming>>,
+    /// What the UI was last told of what is moving.
+    transfers_now: Mutex<TransfersNow>,
     download_dir: Mutex<PathBuf>,
     /// What the UI was last told per group, so unchanged views are not sent again.
     shown: Mutex<HashMap<String, GroupView>>,
@@ -182,6 +319,13 @@ impl Sharing {
             docs: Mutex::default(),
             dirty: Mutex::default(),
             transfers: Mutex::default(),
+            auto_turn: tokio::sync::Semaphore::new(1),
+            auto_queued: Mutex::default(),
+            preparing: Mutex::default(),
+            next_preparing: AtomicU64::new(0),
+            sending: Mutex::default(),
+            incoming: Mutex::default(),
+            transfers_now: Mutex::default(),
             download_dir: Mutex::new(download_dir),
             shown: Mutex::default(),
             own_pad: Mutex::default(),
@@ -469,6 +613,17 @@ impl Core {
                     .unwrap_or_default(),
             )
         };
+        // What we put on hold, and whether what is not on hold comes by itself.
+        let (held, auto_download): (HashSet<String>, bool) = {
+            let store = self.0.store.lock().unwrap();
+            store
+                .state
+                .groups
+                .iter()
+                .find(|g| g.id == gid)
+                .map(|g| (g.held_files.iter().cloned().collect(), g.auto_download))
+                .unwrap_or_default()
+        };
         // Hashes we offer right now, so a file we already shared again is not offered twice.
         let offering: HashSet<&str> = files
             .iter()
@@ -476,6 +631,7 @@ impl Core {
             .map(|f| f.hash.as_str())
             .collect();
         let transfers = self.0.sharing.transfers.lock().unwrap();
+        let sending = self.0.sharing.sending.lock().unwrap();
         let name_of = |id: &str| {
             members
                 .iter()
@@ -497,6 +653,9 @@ impl Core {
                 let mine = f.from == me;
                 let t = transfers.get(&(gid.to_owned(), f.id.clone()));
                 let audience = members.iter().filter(|(id, _)| *id != f.from).count();
+                let have = mine || f.downloaded.contains_key(&me);
+                let on_hold = held.contains(&f.id) && !have;
+                let downloading = t.is_some_and(|t| t.active);
                 FileView {
                     id: f.id.clone(),
                     name: f.name.clone(),
@@ -518,7 +677,7 @@ impl Core {
                         .map(|id| name_of(id))
                         .collect(),
                     audience,
-                    have: mine || f.downloaded.contains_key(&me),
+                    have,
                     saved_to: received.get(&f.id).cloned(),
                     progress: t.filter(|t| t.active).map(|t| (t.done, t.total)),
                     error: t.and_then(|t| t.error.clone()),
@@ -533,18 +692,64 @@ impl Core {
                     can_reoffer: f.stopped
                         && if mine {
                             reofferable.contains(&f.id)
+                                && !files.iter().any(|o| {
+                                    o.from == me
+                                        && !o.stopped
+                                        && o.hash == f.hash
+                                        && o.name == f.name
+                                })
                         } else {
                             downloads.contains_key(&f.id) && !offering.contains(f.hash.as_str())
                         },
                     shared_from: mine.then(|| sources.get(&f.id).cloned()).flatten(),
-                    can_remove: (f.stopped || !mine && !f.hosts.contains(&me))
-                        && !t.is_some_and(|t| t.active),
+                    can_remove: (f.stopped || !mine && !f.hosts.contains(&me)) && !downloading,
                     source_online: online.contains(&f.from)
                         || f.hosts.iter().any(|h| *h != me && online.contains(h)),
+                    on_hold,
+                    can_hold: !have && !f.stopped && !on_hold && (downloading || auto_download),
+                    sending: sending
+                        .iter()
+                        .filter(|s| s.group == gid && s.file == f.id)
+                        .map(|s| SendView {
+                            to: name_of(&s.to),
+                            done: s.done.load(Ordering::Relaxed),
+                            total: s.total,
+                        })
+                        .collect(),
+                    ..FileView::default()
                 }
             })
             .collect();
         file_views.reverse();
+        // Not in the document yet, and the newest of all.
+        let preparing: Vec<FileView> = self
+            .0
+            .sharing
+            .preparing
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .filter(|p| p.group == gid)
+            .map(|p| {
+                let total = p.meter.total.load(Ordering::Relaxed);
+                FileView {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    size: total,
+                    kind: p.kind.clone(),
+                    from: me.clone(),
+                    mine: true,
+                    ts: p.ts,
+                    have: true,
+                    progress: Some((p.meter.done.load(Ordering::Relaxed), total)),
+                    preparing: true,
+                    shared_from: Some(p.path.clone()),
+                    ..FileView::default()
+                }
+            })
+            .collect();
+        file_views.splice(0..0, preparing);
         let tab_views = tabs
             .into_iter()
             .map(|tab| {
@@ -622,6 +827,66 @@ impl Core {
         let _ordered = self.0.publish_lock.lock().unwrap();
         self.emit_group(gid, scratch_local, true);
         self.emit_home();
+        self.emit_transfers();
+    }
+
+    /// Everything moving on this device right now.
+    pub fn transfers_now(&self) -> TransfersNow {
+        let sharing = &self.0.sharing;
+        let mut now = TransfersNow {
+            total: Some(0),
+            ..TransfersNow::default()
+        };
+        let mut names = Vec::new();
+        let mut add = |now: &mut TransfersNow, name: &str, done: u64, total: Option<u64>| {
+            names.push(name.to_owned());
+            now.done += done;
+            now.total = now.total.zip(total).map(|(a, b)| a + b);
+        };
+        for t in sharing.transfers.lock().unwrap().values() {
+            if t.active {
+                now.receiving += 1;
+                add(&mut now, &t.name, t.done, Some(t.total));
+            }
+        }
+        for up in sharing.incoming.lock().unwrap().iter() {
+            now.receiving += 1;
+            add(&mut now, &up.name, up.done.load(Ordering::Relaxed), None);
+        }
+        for s in sharing.sending.lock().unwrap().iter() {
+            now.sending += 1;
+            add(
+                &mut now,
+                &s.name,
+                s.done.load(Ordering::Relaxed),
+                Some(s.total),
+            );
+        }
+        for p in sharing.preparing.lock().unwrap().iter() {
+            now.preparing += 1;
+            let total = p.meter.total.load(Ordering::Relaxed);
+            let done = p.meter.done.load(Ordering::Relaxed);
+            add(&mut now, &p.name, done, (total > 0).then_some(total));
+        }
+        if let [name] = names.as_slice() {
+            now.name = Some(name.clone());
+        }
+        if !now.active() {
+            return TransfersNow::default();
+        }
+        now
+    }
+
+    /// Tell the UI what is moving, if that changed. The caller holds the publish lock.
+    fn emit_transfers(&self) {
+        let now = self.transfers_now();
+        let mut shown = self.0.sharing.transfers_now.lock().unwrap();
+        if *shown == now {
+            return;
+        }
+        *shown = now.clone();
+        drop(shown);
+        self.emit(Event::Transfers(now));
     }
 
     /// Emit a group's view if it differs from the last one sent (or `force`). The caller holds
@@ -838,22 +1103,163 @@ impl Core {
                 .map(|n| n.to_string_lossy().into_owned())
                 .context("that path has no file name")?,
         };
-        let (hash, size) = hash_source(path.clone()).await?;
+        let result = self.add_offer(gid, &path, &name, kind, staged).await;
+        if result.is_err() {
+            // Nothing will serve it: our copy and the permission to read it can go.
+            self.release_sources(vec![Share {
+                group: gid.to_owned(),
+                file: String::new(),
+                path,
+                staged,
+            }]);
+        }
+        result
+    }
+
+    /// Hash what is at `path`, showing it in the meantime (that can take long), and put it in the
+    /// group's document, unless the group has the same file (the same name and bytes) on offer.
+    async fn add_offer(
+        &self,
+        gid: &str,
+        path: &Path,
+        name: &str,
+        kind: &str,
+        staged: bool,
+    ) -> Result<String> {
         let kind = if path.is_dir() { FOLDER_KIND } else { kind };
+        // An app is not listed with the files, and adding it twice makes two tabs.
+        let app = kind == APP_KIND;
+        let meter = Arc::new(Meter::default());
+        let shown = if app {
+            None
+        } else {
+            Some(self.begin_preparing(gid, path, name, kind, meter.clone())?)
+        };
+        let (hash, size) = hash_source(path.to_owned(), meter).await?;
         let (me, my_name) = (self.me(), self.name());
-        let fid = self.with_doc(gid, |d| {
-            d.offer_file(&me, &my_name, &name, size, &hash, kind)
+        let online: HashSet<String> = self
+            .0
+            .peers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, p)| p.conn.as_ref().is_some_and(|c| c.close_reason().is_none()))
+            .map(|(id, _)| id.to_string())
+            .collect();
+        let added = self.with_doc(gid, |d| {
+            // Someone else's offer only counts if it can be downloaded now.
+            let holder = d.files().into_iter().find(|f| {
+                !app && f.kind != APP_KIND
+                    && !f.stopped
+                    && f.name == name
+                    && f.hash == hash
+                    && (f.from == me
+                        || f.hosts.contains(&me)
+                        || std::iter::once(&f.from)
+                            .chain(&f.hosts)
+                            .any(|id| online.contains(id)))
+            });
+            match holder {
+                Some(f) if f.from == me => Err("you already share".to_owned()),
+                Some(f) => Err(format!("{} already shares", f.from_name)),
+                None => Ok(d.offer_file(&me, &my_name, name, size, &hash, kind)),
+            }
         });
+        let fid = added.map_err(|who| anyhow!("{who} {name}"))?;
+        drop(shown);
         self.with_state(|st| {
             st.shares.push(Share {
                 group: gid.to_owned(),
                 file: fid.clone(),
-                path,
+                path: path.to_owned(),
                 staged,
             })
         });
         self.doc_changed(gid, false);
         Ok(fid)
+    }
+
+    /// Show an offer being hashed until the returned guard goes.
+    fn begin_preparing(
+        &self,
+        gid: &str,
+        path: &Path,
+        name: &str,
+        kind: &str,
+        meter: Arc<Meter>,
+    ) -> Result<PreparingGuard> {
+        let id = {
+            let mut preparing = self.0.sharing.preparing.lock().unwrap();
+            if preparing.iter().any(|p| p.group == gid && p.path == path) {
+                bail!("{name} is already being added");
+            }
+            let n = self
+                .0
+                .sharing
+                .next_preparing
+                .fetch_add(1, Ordering::Relaxed);
+            let id = format!("preparing-{n}");
+            preparing.push(Preparing {
+                group: gid.to_owned(),
+                id: id.clone(),
+                name: name.to_owned(),
+                kind: kind.to_owned(),
+                path: path.to_owned(),
+                ts: crate::groupdoc::now_ms(),
+                meter,
+            });
+            id
+        };
+        self.publish_group(gid, false);
+        Ok(PreparingGuard {
+            core: self.clone(),
+            group: gid.to_owned(),
+            id,
+            _ticker: self.ticker(gid),
+        })
+    }
+
+    /// Keep the group's view current while something it shows moves, until the ticker goes.
+    fn ticker(&self, gid: &str) -> Ticker {
+        let (this, gid) = (self.clone(), gid.to_owned());
+        Ticker(
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(SHOW_EVERY).await;
+                    let _ordered = this.0.publish_lock.lock().unwrap();
+                    this.emit_group(&gid, false, false);
+                    this.emit_transfers();
+                }
+            })
+            .abort_handle(),
+        )
+    }
+
+    /// Show a file going to `to` (a member's id) until the returned meter goes.
+    pub(super) fn track_send(
+        &self,
+        gid: &str,
+        fid: &str,
+        name: &str,
+        to: &str,
+        total: u64,
+    ) -> SendMeter {
+        let done = Arc::new(AtomicU64::new(0));
+        self.0.sharing.sending.lock().unwrap().push(Sending {
+            group: gid.to_owned(),
+            file: fid.to_owned(),
+            name: name.to_owned(),
+            to: to.to_owned(),
+            total,
+            done: done.clone(),
+        });
+        self.publish_group(gid, false);
+        SendMeter {
+            core: self.clone(),
+            group: gid.to_owned(),
+            done,
+            _ticker: self.ticker(gid),
+        }
     }
 
     /// A guest uploaded a file (now at `path`): offer it to the group in their name, served from here.
@@ -917,6 +1323,22 @@ impl Core {
         Ok(())
     }
 
+    /// Count a guest's upload as moving until the returned meter goes.
+    pub(super) fn track_incoming(&self, gid: &str, name: &str) -> IncomingMeter {
+        let done = Arc::new(AtomicU64::new(0));
+        self.0.sharing.incoming.lock().unwrap().push(Incoming {
+            name: name.to_owned(),
+            done: done.clone(),
+        });
+        self.publish_group(gid, false);
+        IncomingMeter {
+            core: self.clone(),
+            group: gid.to_owned(),
+            done,
+            _ticker: self.ticker(gid),
+        }
+    }
+
     /// Offer a stopped file again, if it is still where it was. Ours unchanged, the same entry
     /// comes back; changed, or someone else's we downloaded, it is offered anew, by us. Returns the file's id.
     pub async fn reoffer_file(&self, gid: &str, fid: &str) -> Result<String> {
@@ -962,16 +1384,26 @@ impl Core {
         if !share.path.exists() {
             bail!("{} is not there anymore", share.path.display());
         }
-        let (hash, size) = hash_source(share.path.clone()).await?;
-        self.with_state(|st| {
+        let (hash, size) = hash_source(share.path.clone(), Arc::default()).await?;
+        let forget_stopped = |st: &mut crate::state::State| {
             st.stopped_shares
                 .retain(|s| !(s.group == gid && s.file == fid))
-        });
+        };
         if hash != offer.hash || size != offer.size {
-            return self
+            let new = self
                 .offer_file(gid, share.path, Some(offer.name), &offer.kind, false)
-                .await;
+                .await?;
+            self.with_state(forget_stopped);
+            return Ok(new);
         }
+        if self
+            .with_doc(gid, |d| d.files())
+            .iter()
+            .any(|f| f.from == me && !f.stopped && f.hash == offer.hash && f.name == offer.name)
+        {
+            bail!("you already share {}", offer.name);
+        }
+        self.with_state(forget_stopped);
         self.with_doc(gid, |d| d.unstop_file(fid));
         self.with_state(|st| st.shares.push(share));
         self.doc_changed(gid, false);
@@ -1006,12 +1438,51 @@ impl Core {
         self.with_state(|st| {
             st.stopped_shares
                 .retain(|s| !(s.group == gid && s.file == fid));
-            if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid)
-                && !g.hidden_files.iter().any(|h| h == fid)
-            {
-                g.hidden_files.push(fid.to_owned());
+            if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid) {
+                g.held_files.retain(|h| h != fid);
+                if !g.hidden_files.iter().any(|h| h == fid) {
+                    g.hidden_files.push(fid.to_owned());
+                }
             }
         });
+        Ok(())
+    }
+
+    /// Call off a file's download, if it is running, and don't fetch it again until
+    /// [`Core::download_file`] is called for it, whatever the group's settings. What arrived so
+    /// far is thrown away. The others are not told: to them, we just don't have it yet.
+    pub fn hold_file(&self, gid: &str, fid: &str) -> Result<()> {
+        self.require_group(gid)?;
+        let me = self.me();
+        let offer = self
+            .with_doc(gid, |d| d.file(fid))
+            .context("no such file")?;
+        if offer.from == me {
+            bail!("that is your own file");
+        }
+        if offer.downloaded.contains_key(&me) {
+            bail!("already downloaded");
+        }
+        self.with_state(|st| {
+            if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid)
+                && !g.held_files.iter().any(|h| h == fid)
+            {
+                g.held_files.push(fid.to_owned());
+            }
+        });
+        {
+            let mut transfers = self.0.sharing.transfers.lock().unwrap();
+            let key = (gid.to_owned(), fid.to_owned());
+            match transfers.get(&key) {
+                Some(t) if t.active => t.cancel.notify_one(),
+                // A failed attempt: its error is old news.
+                Some(_) => {
+                    transfers.remove(&key);
+                }
+                None => {}
+            }
+        }
+        self.publish_group(gid, false);
         Ok(())
     }
 
@@ -1070,31 +1541,48 @@ impl Core {
         Ok(())
     }
 
-    fn begin_transfer(&self, gid: &str, fid: &str, total: u64, manual: bool) -> bool {
+    /// `None` if it is already running, or failed too recently to retry by itself.
+    fn begin_transfer(
+        &self,
+        gid: &str,
+        fid: &str,
+        name: &str,
+        total: u64,
+        manual: bool,
+    ) -> Option<Arc<Notify>> {
         let mut transfers = self.0.sharing.transfers.lock().unwrap();
         let key = (gid.to_owned(), fid.to_owned());
         if let Some(t) = transfers.get(&key) {
             let retry_ok = manual || t.failed_at.is_none_or(|at| at.elapsed() >= RETRY_AFTER);
             if t.active || !retry_ok {
-                return false;
+                return None;
             }
         }
+        let cancel = Arc::new(Notify::new());
         transfers.insert(
             key,
             Transfer {
+                name: name.to_owned(),
                 done: 0,
                 total,
                 active: true,
                 error: None,
                 failed_at: None,
+                cancel: cancel.clone(),
             },
         );
-        true
+        Some(cancel)
     }
 
-    /// Download an offered file into [`Core::download_dir`]; returns where it went. Resolves when
-    /// done. Progress and errors show up in the group's [`FileView`].
+    /// Download an offered file into [`Core::download_dir`], taking it off hold; returns where it
+    /// went. Resolves when done. Progress and errors show up in the group's [`FileView`].
     pub async fn download_file(&self, gid: &str, fid: &str) -> Result<PathBuf> {
+        self.require_group(gid)?;
+        self.with_state(|st| {
+            if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid) {
+                g.held_files.retain(|h| h != fid);
+            }
+        });
         self.download(gid, fid, true).await
     }
 
@@ -1123,30 +1611,56 @@ impl Core {
         {
             bail!("already downloaded");
         }
-        if !self.begin_transfer(gid, fid, offer.size, manual) {
-            bail!("already downloading");
+        // The hold may have come after the automatic jobs decided to fetch it.
+        if !manual
+            && self
+                .0
+                .store
+                .lock()
+                .unwrap()
+                .state
+                .groups
+                .iter()
+                .any(|g| g.id == gid && g.held_files.iter().any(|h| h == fid))
+        {
+            bail!("{} is on hold", offer.name);
         }
+        let Some(cancel) = self.begin_transfer(gid, fid, &offer.name, offer.size, manual) else {
+            bail!("already downloading");
+        };
         self.publish_group(gid, false);
         // An app's wasm goes with the apps, named after its hash; anything else to the downloads.
         let target = (offer.kind == APP_KIND).then(|| self.app_path(&offer.hash));
-        let result = self.fetch(gid, fid, &offer, target).await;
+        // Dropping the fetch drops its streams, which tells the sender to stop.
+        let fetched = tokio::select! {
+            result = self.fetch(gid, fid, &offer, target) => Some(result),
+            _ = cancel.notified() => None,
+        };
+        let Some(result) = fetched else {
+            let part = part_path(&self.download_dir(), fid);
+            let _ = if offer.kind == FOLDER_KIND {
+                tokio::fs::remove_dir_all(&part).await
+            } else {
+                tokio::fs::remove_file(&part).await
+            };
+            self.end_transfer(gid, fid);
+            self.publish_group(gid, false);
+            bail!("{} is on hold", offer.name);
+        };
         {
             let mut transfers = self.0.sharing.transfers.lock().unwrap();
-            match &result {
-                Ok(_) => {
-                    transfers.remove(&(gid.to_owned(), fid.to_owned()));
-                }
-                Err(err) => {
-                    if let Some(t) = transfers.get_mut(&(gid.to_owned(), fid.to_owned())) {
-                        t.active = false;
-                        t.error = Some(format!("{err:#}"));
-                        t.failed_at = Some(Instant::now());
-                    }
-                }
+            // Done, it is still moving until it is where it belongs (below).
+            if let Err(err) = &result
+                && let Some(t) = transfers.get_mut(&(gid.to_owned(), fid.to_owned()))
+            {
+                t.active = false;
+                t.error = Some(format!("{err:#}"));
+                t.failed_at = Some(Instant::now());
             }
         }
         match result {
             Ok(path) if offer.kind == APP_KIND => {
+                self.end_transfer(gid, fid);
                 self.serve_app(gid, fid, path.clone());
                 Ok(path)
             }
@@ -1156,8 +1670,16 @@ impl Core {
                 let path = if offer.kind == FOLDER_KIND {
                     path
                 } else {
-                    tokio::task::spawn_blocking(move || crate::platform::file_received(&path))
-                        .await?
+                    match tokio::task::spawn_blocking(move || crate::platform::file_received(&path))
+                        .await
+                    {
+                        Ok(path) => path,
+                        Err(err) => {
+                            self.end_transfer(gid, fid);
+                            self.publish_group(gid, false);
+                            return Err(err.into());
+                        }
+                    }
                 };
                 self.with_state(|st| {
                     st.received.push(Share {
@@ -1165,9 +1687,14 @@ impl Core {
                         file: fid.to_owned(),
                         path: path.clone(),
                         staged: false,
-                    })
+                    });
+                    // Put on hold just too late.
+                    if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid) {
+                        g.held_files.retain(|h| h != fid);
+                    }
                 });
                 self.with_doc(gid, |d| d.mark_downloaded(fid, &me));
+                self.end_transfer(gid, fid);
                 self.emit(Event::Notice(format!("downloaded {}", offer.name)));
                 self.doc_changed(gid, false);
                 if self
@@ -1196,6 +1723,15 @@ impl Core {
                 Err(err)
             }
         }
+    }
+
+    fn end_transfer(&self, gid: &str, fid: &str) {
+        self.0
+            .sharing
+            .transfers
+            .lock()
+            .unwrap()
+            .remove(&(gid.to_owned(), fid.to_owned()));
     }
 
     async fn fetch(
@@ -1244,7 +1780,7 @@ impl Core {
             bail!("the file changed on the sender's side");
         }
 
-        let part = dir.join(format!(".{fid}.part"));
+        let part = part_path(&dir, fid);
         let mut body = ZstdDecoder::new(BufReader::new(&mut rx));
         let folder = offer.kind == FOLDER_KIND;
         let result = if folder {
@@ -1401,10 +1937,15 @@ impl Core {
         mut tx: SendStream,
         mut rx: RecvStream,
     ) {
-        if let Err(err) = self.serve(from, &mut tx, &mut rx).await {
-            tracing::debug!("refused download to {}: {err:#}", from.fmt_short());
-            let _ = tx.write_all(&[1u8; 9]).await;
-        }
+        // Kept until the other side has it all, so the sender's bar stays until it really is done.
+        let _sending = match self.serve(from, &mut tx, &mut rx).await {
+            Ok(sending) => sending,
+            Err(err) => {
+                tracing::debug!("refused download to {}: {err:#}", from.fmt_short());
+                let _ = tx.write_all(&[1u8; 9]).await;
+                None
+            }
+        };
         let _ = tx.finish();
         let _ = tx.stopped().await;
     }
@@ -1414,12 +1955,12 @@ impl Core {
         from: EndpointId,
         tx: &mut SendStream,
         rx: &mut RecvStream,
-    ) -> Result<()> {
+    ) -> Result<Option<SendMeter>> {
         let raw = rx.read_to_end(4096).await?;
         if raw == b"ping" {
             // Liveness probe (see `Core::drop_stale`).
             tx.write_all(&[0xFF]).await?;
-            return Ok(());
+            return Ok(None);
         }
         let request: DownloadRequest = serde_json::from_slice(&raw)?;
         if !self.has_group(&request.group) || !self.group_peers(&request.group).contains(&from) {
@@ -1441,8 +1982,16 @@ impl Core {
             .find(|s| s.group == request.group && s.file == request.file)
             .map(|s| s.path.clone())
             .context("not shared here")?;
+        let sending = self.track_send(
+            &request.group,
+            &request.file,
+            &offer.name,
+            &from.to_string(),
+            offer.size,
+        );
         if offer.kind == FOLDER_KIND {
-            return serve_folder(path, offer.size, tx).await;
+            serve_folder(path, offer.size, tx, &sending).await?;
+            return Ok(Some(sending));
         }
         let file = tokio::fs::File::from_std(
             tokio::task::spawn_blocking(move || open_source(&path)).await??,
@@ -1454,9 +2003,10 @@ impl Core {
         let mut header = vec![0u8];
         header.extend_from_slice(&len.to_be_bytes());
         tx.write_all(&header).await?;
-        let mut body = ZstdEncoder::with_quality(BufReader::new(file), Level::Precise(1));
+        let mut body =
+            ZstdEncoder::with_quality(BufReader::new(sending.counted(file)), Level::Precise(1));
         tokio::io::copy(&mut body, tx).await?;
-        Ok(())
+        Ok(Some(sending))
     }
 
     // ---- automatic behaviour ----------------------------------------------------------
@@ -1477,11 +2027,56 @@ impl Core {
         }
     }
 
+    /// Fetch an offer automatically. They go one at a time, in the order they were queued, so a
+    /// group offering many files does not fetch them all at once.
+    fn auto_download(&self, gid: &str, fid: &str) {
+        let key = (gid.to_owned(), fid.to_owned());
+        if !self
+            .0
+            .sharing
+            .auto_queued
+            .lock()
+            .unwrap()
+            .insert(key.clone())
+        {
+            // A job ran again while this one still waits (or downloads).
+            return;
+        }
+        let this = self.clone();
+        tokio::spawn(async move {
+            let Ok(_turn) = this.0.sharing.auto_turn.acquire().await else {
+                this.0.sharing.auto_queued.lock().unwrap().remove(&key);
+                return;
+            };
+            // The group's settings may have changed while it waited, and it may have been put on
+            // hold or downloaded by hand.
+            let wanted = this
+                .0
+                .store
+                .lock()
+                .unwrap()
+                .state
+                .groups
+                .iter()
+                .find(|g| g.id == key.0)
+                .is_some_and(|g| {
+                    g.auto_download
+                        && !g.held_files.contains(&key.1)
+                        && !g.hidden_files.contains(&key.1)
+                });
+            if wanted {
+                // Errors are shown on the file and retried later.
+                let _ = this.download(&key.0, &key.1, false).await;
+            }
+            this.0.sharing.auto_queued.lock().unwrap().remove(&key);
+        });
+    }
+
     /// Per-group local settings at work: download new offers, stop sharing what everybody has. And
     /// apps, which every member fetches and serves whatever their settings.
     pub(super) fn auto_jobs(&self, gid: &str) {
         self.app_jobs(gid);
-        let Some((auto_download, auto_stop, hidden)) = self
+        let Some((auto_download, auto_stop, hidden, held)) = self
             .0
             .store
             .lock()
@@ -1490,7 +2085,14 @@ impl Core {
             .groups
             .iter()
             .find(|g| g.id == gid)
-            .map(|g| (g.auto_download, g.auto_stop, g.hidden_files.clone()))
+            .map(|g| {
+                (
+                    g.auto_download,
+                    g.auto_stop,
+                    g.hidden_files.clone(),
+                    g.held_files.clone(),
+                )
+            })
         else {
             return;
         };
@@ -1513,17 +2115,17 @@ impl Core {
                 {
                     let _ = self.stop_file(gid, &f.id);
                 }
-            } else if auto_download && !f.downloaded.contains_key(&me) && !hidden.contains(&f.id) {
+            } else if auto_download
+                && !f.downloaded.contains_key(&me)
+                && !hidden.contains(&f.id)
+                && !held.contains(&f.id)
+            {
                 let online = std::iter::once(&f.from)
                     .chain(&f.hosts)
                     .filter(|id| **id != me)
                     .any(|id| id.parse().ok().and_then(|id| self.connection(id)).is_some());
                 if online {
-                    let (this, gid, fid) = (self.clone(), gid.to_owned(), f.id.clone());
-                    tokio::spawn(async move {
-                        // Errors are shown on the file and retried later.
-                        let _ = this.download(&gid, &fid, false).await;
-                    });
+                    self.auto_download(gid, &f.id);
                 }
             }
         }
@@ -1534,21 +2136,160 @@ impl Core {
 /// until QUIC's idle timeout, so ask.
 /// Open what a share points at: a file path, or on Android a `content://` URI the user picked.
 /// blake3 (hex) and size of the file at `path`; for a folder, of the bytes it travels as.
-async fn hash_source(path: PathBuf) -> Result<(String, u64)> {
+async fn hash_source(path: PathBuf, meter: Arc<Meter>) -> Result<(String, u64)> {
     tokio::task::spawn_blocking(move || -> Result<(String, u64)> {
         if path.is_dir() {
-            return hash_folder(&path);
+            return hash_folder(&path, &meter);
         }
         let mut file =
             open_source(&path).with_context(|| format!("cannot read {}", path.display()))?;
         if !file.metadata()?.is_file() {
             bail!("{} is not a file", path.display());
         }
-        let mut hasher = blake3::Hasher::new();
-        let size = std::io::copy(&mut file, &mut hasher)?;
-        Ok((hasher.finalize().to_hex().to_string(), size))
+        meter.total.store(file.metadata()?.len(), Ordering::Relaxed);
+        let mut hashing = Hashing::new(&meter);
+        let size = std::io::copy(&mut file, &mut hashing)?;
+        Ok((hashing.hex(), size))
     })
     .await?
+}
+
+/// Hashes what is written to it, keeping count on a [`Meter`].
+struct Hashing<'a> {
+    hasher: blake3::Hasher,
+    meter: &'a Meter,
+}
+
+impl<'a> Hashing<'a> {
+    fn new(meter: &'a Meter) -> Self {
+        Hashing {
+            hasher: blake3::Hasher::new(),
+            meter,
+        }
+    }
+
+    fn hex(&self) -> String {
+        self.hasher.finalize().to_hex().to_string()
+    }
+}
+
+impl Write for Hashing<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.hasher.update(buf);
+        self.meter
+            .done
+            .fetch_add(buf.len() as u64, Ordering::Relaxed);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Publishes a group's view every so often, until dropped.
+struct Ticker(tokio::task::AbortHandle);
+
+impl Drop for Ticker {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// While alive, an offer being hashed shows in its group.
+struct PreparingGuard {
+    core: Core,
+    group: String,
+    id: String,
+    _ticker: Ticker,
+}
+
+impl Drop for PreparingGuard {
+    fn drop(&mut self) {
+        let sharing = &self.core.0.sharing;
+        sharing
+            .preparing
+            .lock()
+            .unwrap()
+            .retain(|p| p.id != self.id);
+        self.core.publish_group(&self.group, false);
+    }
+}
+
+/// While alive, a file going to someone shows in its group.
+pub(super) struct SendMeter {
+    core: Core,
+    group: String,
+    done: Arc<AtomicU64>,
+    _ticker: Ticker,
+}
+
+impl SendMeter {
+    /// `reader`, with what is read from it counted as sent.
+    pub(super) fn counted<R>(&self, reader: R) -> Counted<R> {
+        Counted {
+            reader,
+            done: self.done.clone(),
+        }
+    }
+}
+
+impl Drop for SendMeter {
+    fn drop(&mut self) {
+        let sharing = &self.core.0.sharing;
+        sharing
+            .sending
+            .lock()
+            .unwrap()
+            .retain(|s| !Arc::ptr_eq(&s.done, &self.done));
+        self.core.publish_group(&self.group, false);
+    }
+}
+
+/// While alive, a guest's upload counts as moving.
+pub(super) struct IncomingMeter {
+    core: Core,
+    group: String,
+    done: Arc<AtomicU64>,
+    _ticker: Ticker,
+}
+
+impl IncomingMeter {
+    pub(super) fn add(&self, bytes: usize) {
+        self.done.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+}
+
+impl Drop for IncomingMeter {
+    fn drop(&mut self) {
+        let sharing = &self.core.0.sharing;
+        sharing
+            .incoming
+            .lock()
+            .unwrap()
+            .retain(|up| !Arc::ptr_eq(&up.done, &self.done));
+        self.core.publish_group(&self.group, false);
+    }
+}
+
+/// See [`SendMeter::counted`].
+pub(super) struct Counted<R> {
+    reader: R,
+    done: Arc<AtomicU64>,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for Counted<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = Pin::new(&mut self.reader).poll_read(cx, buf);
+        self.done
+            .fetch_add((buf.filled().len() - before) as u64, Ordering::Relaxed);
+        polled
+    }
 }
 
 /// What a shared folder holds, in the order its files travel: its directories (so empty ones come
@@ -1607,24 +2348,32 @@ fn walk_folder(root: &Path) -> Result<(Listing, Vec<PathBuf>)> {
     Ok((Listing { dirs, files }, paths))
 }
 
-fn hash_folder(root: &Path) -> Result<(String, u64)> {
+fn hash_folder(root: &Path, meter: &Meter) -> Result<(String, u64)> {
     let (listing, paths) = walk_folder(root)?;
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&listing.encode());
+    let expected = listing.files.iter().map(|f| f.1).sum();
+    meter.total.store(expected, Ordering::Relaxed);
+    let mut hashing = Hashing::new(meter);
+    // The listing is hashed too, but it is not what the sizes count.
+    hashing.hasher.update(&listing.encode());
     let mut total = 0;
     for (path, (_, size)) in paths.iter().zip(&listing.files) {
         let file =
             std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
-        if std::io::copy(&mut std::io::Read::take(file, *size), &mut hasher)? != *size {
+        if std::io::copy(&mut std::io::Read::take(file, *size), &mut hashing)? != *size {
             bail!("{} changed while reading it", path.display());
         }
         total += size;
     }
-    Ok((hasher.finalize().to_hex().to_string(), total))
+    Ok((hashing.hex(), total))
 }
 
 /// Sends the folder at `root` (see [`Listing`]), compressed, as long as it still holds `size` bytes.
-async fn serve_folder(root: PathBuf, size: u64, tx: &mut SendStream) -> Result<()> {
+async fn serve_folder(
+    root: PathBuf,
+    size: u64,
+    tx: &mut SendStream,
+    sending: &SendMeter,
+) -> Result<()> {
     let (listing, paths) = tokio::task::spawn_blocking(move || walk_folder(&root)).await??;
     let len: u64 = listing.files.iter().map(|f| f.1).sum();
     if len != size {
@@ -1638,7 +2387,7 @@ async fn serve_folder(root: PathBuf, size: u64, tx: &mut SendStream) -> Result<(
     body.write_all(&listing.encode()).await?;
     for (path, (_, size)) in paths.iter().zip(&listing.files) {
         let file = tokio::fs::File::open(path).await?;
-        if tokio::io::copy(&mut file.take(*size), &mut body).await? != *size {
+        if tokio::io::copy(&mut sending.counted(file.take(*size)), &mut body).await? != *size {
             bail!("folder changed since it was offered");
         }
     }
@@ -1656,6 +2405,11 @@ fn safe_relative(rel: &str) -> Result<PathBuf> {
         out.push(part);
     }
     Ok(out)
+}
+
+/// Where a download is put together until it is complete.
+fn part_path(dir: &Path, fid: &str) -> PathBuf {
+    dir.join(format!(".{fid}.part"))
 }
 
 pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
@@ -1686,7 +2440,15 @@ impl Core {
                     .state
                     .shares
                     .iter()
-                    .any(|o| o.path == s.path);
+                    .any(|o| o.path == s.path)
+                    || self
+                        .0
+                        .sharing
+                        .preparing
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|p| p.path == s.path);
                 if !still_used {
                     crate::platform::release_content_uri(uri);
                 }
@@ -1769,6 +2531,39 @@ pub(super) fn clean_file_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfers_are_described() {
+        let one = TransfersNow {
+            receiving: 1,
+            name: Some("a.zip".into()),
+            done: 512,
+            total: Some(1024),
+            ..TransfersNow::default()
+        };
+        let (title, detail, percent) = one.describe();
+        assert_eq!(title, "Downloading a.zip");
+        assert!(detail.contains(" of "), "{detail}");
+        assert_eq!(percent, 50);
+
+        let many = TransfersNow {
+            receiving: 2,
+            sending: 1,
+            done: 0,
+            total: None,
+            ..TransfersNow::default()
+        };
+        assert_eq!(
+            many.describe(),
+            (
+                "Downloading 2 files, sending 1 file".to_owned(),
+                String::new(),
+                -1
+            )
+        );
+        assert!(many.active());
+        assert!(!TransfersNow::default().active());
+    }
 
     #[test]
     fn folder_paths_stay_inside() {

@@ -37,7 +37,9 @@ use crate::{
 
 pub use crate::state::MemberState;
 pub use guest::{GUEST_ALPN, GuestInfo, GuestPerson, is_guest};
-pub use sharing::{AppView, DocMember, FileView, GroupView, TabView, TextView};
+pub use sharing::{
+    AppView, DocMember, FileView, GroupView, SendView, TabView, TextView, TransfersNow,
+};
 pub use unseen::Unseen;
 
 pub const ALPN: &[u8] = b"flipflop/0";
@@ -124,6 +126,8 @@ pub enum Event {
     Group(GroupView),
     /// What is new in each group since the user last looked (sent when it changes).
     Home(Vec<Unseen>),
+    /// What is moving on this device changed: downloads, uploads, offers being hashed.
+    Transfers(TransfersNow),
     Notice(String),
 }
 

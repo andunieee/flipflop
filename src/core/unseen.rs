@@ -87,7 +87,12 @@ pub(super) fn hash(text: &str) -> String {
 /// What the view shows of the group now, as a `Seen`.
 fn now(view: &GroupView) -> Seen {
     Seen {
-        files: view.files.iter().map(|f| f.id.clone()).collect(),
+        files: view
+            .files
+            .iter()
+            .filter(|f| !f.preparing)
+            .map(|f| f.id.clone())
+            .collect(),
         texts: view.texts.iter().map(|t| t.id.clone()).collect(),
         scratch: hash(&view.scratch),
         members: view
