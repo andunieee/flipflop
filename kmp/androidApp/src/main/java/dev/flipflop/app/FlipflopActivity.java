@@ -112,6 +112,7 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
     private static volatile byte[] payload = new byte[0];
     private static boolean bleWanted = false;
     private static boolean notifyAsked = false;
+    private static boolean bleAsked = false;
     private boolean visible = false;
     private boolean bleRunning = false;
 
@@ -466,7 +467,9 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
             for (String p : neededPermissions()) {
                 if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) missing.add(p);
             }
-            if (!missing.isEmpty()) requestPermissions(missing.toArray(new String[0]), REQ_BLE);
+            if (missing.isEmpty() || bleAsked) return;
+            bleAsked = true;
+            requestPermissions(missing.toArray(new String[0]), REQ_BLE);
         });
     }
 
@@ -481,6 +484,9 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
             if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) missing.add(p);
         }
         if (!missing.isEmpty()) {
+            // Once per launch: this runs on every resume, and that includes the one after a denial.
+            if (bleAsked) return;
+            bleAsked = true;
             nativeBleStatus("Bluetooth: waiting for permission…");
             requestPermissions(missing.toArray(new String[0]), REQ_BLE);
             return;
@@ -497,6 +503,12 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
             return;
         }
         if (requestCode != REQ_BLE) return;
+        // Empty: another dialog was up, and Android answered from inside requestPermissions, so
+        // asking again here would never end. The resume after that dialog asks instead.
+        if (grantResults.length == 0) {
+            bleAsked = false;
+            return;
+        }
         for (int r : grantResults) {
             if (r != PackageManager.PERMISSION_GRANTED) {
                 nativeBleStatus("Bluetooth: permission denied");

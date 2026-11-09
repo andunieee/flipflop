@@ -50,8 +50,9 @@ const MAX_MSG_BYTES: usize = 64 * 1024;
 const MAX_SYNC_BYTES: usize = 32 * 1024 * 1024;
 /// How much of a stream may be in flight, unacknowledged. A stream can't go faster than this per
 /// round trip, and iroh's default (1.25 MB) holds a file to 10 MB/s at 100 ms. It is also what one
-/// stream can make the receiver buffer, should it fall behind.
-const STREAM_WINDOW: u32 = 16 * 1024 * 1024;
+/// stream can make the receiver buffer, should it fall behind, and noq closes the whole connection
+/// ("too many gaps in stream buffer") past 2048 buffered packets, about 2.8 MiB: stay under that.
+const STREAM_WINDOW: u32 = 2 * 1024 * 1024;
 /// The same for everything a connection is sending at once.
 const SEND_WINDOW: u64 = 2 * STREAM_WINDOW as u64;
 
