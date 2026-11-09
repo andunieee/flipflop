@@ -512,8 +512,9 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
         visible = true;
         // The user may have just switched Bluetooth on.
         if (bleWanted && !bleRunning) startBleIfPermitted();
-        // Something that began while we were away could not start the service (Android 12+).
-        TransferService.sync(this);
+        // Start now, while Android allows it: a transfer that begins later, out of sight, must find
+        // the service already running.
+        TransferService.visible(this);
         askToNotify();
     }
 

@@ -125,24 +125,20 @@ mod android {
     /// Keep the app running, with a notification, while something is moving; let it go after. The
     /// count changing shows at once, mere progress once a second (Android drops faster updates).
     pub fn show_transfers(now: &crate::core::TransfersNow) {
-        type Shown = (Instant, usize, usize, usize);
+        type Shown = (Instant, usize, usize, usize, usize);
         static SHOWN: Mutex<Option<Shown>> = Mutex::new(None);
-        let jobs = (now.receiving, now.sending, now.preparing);
+        let jobs = (now.receiving, now.sending, now.preparing, now.queued);
         {
             let mut shown = SHOWN.lock().unwrap();
-            if let Some((at, r, s, p)) = *shown
-                && (r, s, p) == jobs
+            if let Some((at, r, s, p, q)) = *shown
+                && (r, s, p, q) == jobs
                 && at.elapsed() < Duration::from_secs(1)
             {
                 return;
             }
-            *shown = Some((Instant::now(), jobs.0, jobs.1, jobs.2));
+            *shown = Some((Instant::now(), jobs.0, jobs.1, jobs.2, jobs.3));
         }
-        let (title, text, percent) = if now.active() {
-            now.describe()
-        } else {
-            Default::default()
-        };
+        let (title, text, percent) = now.describe();
         with_activity(|env, a| {
             let (title, text) = (env.new_string(title)?, env.new_string(text)?);
             env.call_method(

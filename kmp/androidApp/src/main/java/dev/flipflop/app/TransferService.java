@@ -32,6 +32,8 @@ public class TransferService extends Service {
 
     private static TransferService running;
     private static boolean starting = false;
+    /** The app has been opened: stay alive out of sight from now on, so a transfer can begin there. */
+    private static boolean keep = false;
     private static String title = "";
     private static String text = "";
     private static int percent = -1;
@@ -51,16 +53,30 @@ public class TransferService extends Service {
         return !title.isEmpty();
     }
 
+    /**
+     * The app is visible. Android 12+ only lets a foreground service start while it is, and since a
+     * transfer can begin at any time (the other side offers a file), the service must already be
+     * running: start it now and keep it while the process lives.
+     */
+    static void visible(Context context) {
+        keep = true;
+        sync(context);
+    }
+
+    private static boolean needed() {
+        return keep || wanted();
+    }
+
     /** Make the service match what is moving. Android 12+ refuses to start it from the background. */
     static void sync(Context context) {
         if (running != null) {
-            if (wanted()) running.show();
+            if (needed()) running.show();
             else running.finish();
             return;
         }
         // A service asked to start must reach startForeground, so it can't be called off before that:
         // `onStartCommand` looks again.
-        if (!wanted() || starting) return;
+        if (!needed() || starting) return;
         Context app = context.getApplicationContext();
         try {
             starting = true;
@@ -86,7 +102,6 @@ public class TransferService extends Service {
         if (wifi != null) {
             wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "flipflop:transfers");
             wifiLock.setReferenceCounted(false);
-            wifiLock.acquire();
         }
     }
 
@@ -108,13 +123,22 @@ public class TransferService extends Service {
     }
 
     private void show() {
-        wakeLock.acquire(AWAKE_MS);
+        // Idle (kept for what the other side may send next): no wake locks, only the notification.
+        if (wanted()) {
+            wakeLock.acquire(AWAKE_MS);
+            if (wifiLock != null) wifiLock.acquire();
+        } else {
+            if (wakeLock.isHeld()) wakeLock.release();
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        }
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) manager.notify(NOTIFICATION, notification());
     }
 
     private void finish() {
         running = null;
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
@@ -123,17 +147,19 @@ public class TransferService extends Service {
         Intent open = new Intent(this, MainActivity.class)
                 .setAction(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LAUNCHER);
-        return new NotificationCompat.Builder(this, CHANNEL)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(wanted() ? title : "flipflop")
-                .setContentText(text)
-                .setProgress(100, Math.max(percent, 0), percent < 0)
+                .setContentText(wanted() ? text : "Connected, waiting for files")
                 .setContentIntent(PendingIntent.getActivity(this, 0, open,
                         PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
                 .setCategory(NotificationCompat.CATEGORY_PROGRESS)
                 .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .build();
+                .setOnlyAlertOnce(true);
+        if (wanted()) {
+            builder.setProgress(100, Math.max(percent, 0), percent < 0);
+        }
+        return builder.build();
     }
 
     @Override

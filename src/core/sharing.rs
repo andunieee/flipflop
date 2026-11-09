@@ -34,7 +34,10 @@ use iroh::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadBuf},
+    io::{
+        AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, ReadBuf,
+        SeekFrom,
+    },
     sync::Notify,
 };
 
@@ -168,6 +171,16 @@ impl TransfersNow {
 
     /// What to tell the user: a title, a detail, and the percentage done (-1 if not known).
     pub fn describe(&self) -> (String, String, i32) {
+        if !self.active() {
+            // Queued automatic downloads are not moving yet, but they are why the app must stay
+            // awake: say so instead of leaving the notification empty (which stops the service).
+            let title = match self.queued {
+                0 => String::new(),
+                1 => "Waiting to download 1 file".to_owned(),
+                n => format!("Waiting to download {n} files"),
+            };
+            return (title, String::new(), -1);
+        }
         let jobs = [
             ("downloading", self.receiving),
             ("sending", self.sending),
@@ -380,6 +393,12 @@ impl Sharing {
 struct DownloadRequest {
     group: String,
     file: String,
+    /// Start sending from this byte of the transfer's uncompressed stream.
+    #[serde(default)]
+    from: u64,
+    /// The downloader understands the reply header with the start offset (see [`Core::serve`]).
+    #[serde(default)]
+    resume: bool,
 }
 
 impl Core {
@@ -1745,11 +1764,9 @@ impl Core {
         };
         let Some(result) = fetched else {
             let part = part_path(&self.download_dir(), fid);
-            let _ = if offer.kind == FOLDER_KIND {
-                tokio::fs::remove_dir_all(&part).await
-            } else {
-                tokio::fs::remove_file(&part).await
-            };
+            // The part is a plain file now; older versions kept a folder's as a directory.
+            let _ = tokio::fs::remove_file(&part).await;
+            let _ = tokio::fs::remove_dir_all(&part).await;
             self.end_transfer(gid, fid);
             self.publish_group(gid, false);
             bail!("{} is on hold", offer.name);
@@ -1867,10 +1884,23 @@ impl Core {
             .await
             .with_context(|| format!("cannot create {}", dir.display()))?;
 
+        let part = part_path(&dir, fid);
+        // Older versions kept a folder's partial download as a directory; that cannot be resumed.
+        if tokio::fs::metadata(&part).await.is_ok_and(|m| m.is_dir()) {
+            let _ = tokio::fs::remove_dir_all(&part).await;
+        }
+        // What already arrived; a file of exactly the expected size is verified and renamed below.
+        let existing = match tokio::fs::metadata(&part).await {
+            Ok(m) if m.is_file() && m.len() > 0 => m.len(),
+            _ => 0,
+        };
+
         let (mut tx, mut rx) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
         let request = serde_json::to_vec(&DownloadRequest {
             group: gid.to_owned(),
             file: fid.to_owned(),
+            from: existing,
+            resume: true,
         })?;
         tx.write_all(&request).await.map_err(|e| anyhow!("{e}"))?;
         tx.finish().map_err(|e| anyhow!("{e}"))?;
@@ -1879,35 +1909,82 @@ impl Core {
         rx.read_exact(&mut header)
             .await
             .map_err(|_| anyhow!("the sender refused or went away"))?;
-        if header[0] != 0 {
+        if header[0] == 1 {
             bail!("the sender no longer shares it");
         }
         let len = u64::from_be_bytes(header[1..].try_into().unwrap());
+        // A resumed reply also says where it starts and how long the whole stream is. Without it
+        // (an older sender), it starts at the beginning, and a folder's total is known only once
+        // its listing has arrived.
+        let (start, stream_len) = if header[0] == 2 {
+            let mut more = [0u8; 16];
+            rx.read_exact(&mut more)
+                .await
+                .map_err(|_| anyhow!("the sender went away"))?;
+            (
+                u64::from_be_bytes(more[..8].try_into().unwrap()),
+                Some(u64::from_be_bytes(more[8..].try_into().unwrap())),
+            )
+        } else {
+            (0, (offer.kind != FOLDER_KIND).then_some(len))
+        };
+        let folder = offer.kind == FOLDER_KIND;
         if len != offer.size {
+            let _ = tokio::fs::remove_file(&part).await;
             bail!("the file changed on the sender's side");
         }
+        if start > existing || stream_len.is_some_and(|total| total < start) {
+            let _ = tokio::fs::remove_file(&part).await;
+            bail!("the sender started at an impossible place");
+        }
+        if start != existing {
+            // The sender ignored our offset (an older version) or could not honor it: keep only
+            // what it is about to resend.
+            match tokio::fs::OpenOptions::new().write(true).open(&part).await {
+                Ok(file) => file.set_len(start).await?,
+                Err(_) if start == 0 => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
 
-        let part = part_path(&dir, fid);
         let started = Instant::now();
         let mut body = ZstdDecoder::new(BufReader::with_capacity(CHUNK, &mut rx));
-        let folder = offer.kind == FOLDER_KIND;
-        let result = if folder {
-            self.receive_folder(gid, fid, &mut body, &part, len).await
+        // A folder's stream starts with its listing, which is not part of the progress.
+        let prefix = if folder {
+            listing_len(&part, start).await
         } else {
-            self.receive_file(gid, fid, &mut body, &part, len).await
+            0
+        };
+        let hash = self
+            .receive_flat(gid, fid, &mut body, &part, start, stream_len, prefix)
+            .await?;
+        if hash != offer.hash {
+            let _ = tokio::fs::remove_file(&part).await;
+            bail!("the file arrived corrupted");
         }
-        .and_then(|hash| {
-            (hash == offer.hash)
-                .then_some(())
-                .context("the file arrived corrupted")
-        });
-        if let Err(err) = result {
-            let _ = if folder {
-                tokio::fs::remove_dir_all(&part).await
-            } else {
-                tokio::fs::remove_file(&part).await
-            };
-            return Err(err);
+        if folder {
+            if let Some(total) = stream_len
+                && tokio::fs::metadata(&part).await?.len() != total
+            {
+                let _ = tokio::fs::remove_file(&part).await;
+                bail!("the folder arrived incomplete");
+            }
+            let target = target.unwrap_or_else(|| unique_path(&dir, &offer.name));
+            if let Err(err) = Self::unpack_folder(&part, &target).await {
+                let _ = tokio::fs::remove_dir_all(&target).await;
+                return Err(err);
+            }
+            let _ = tokio::fs::remove_file(&part).await;
+            tracing::info!(
+                "received {} ({len} bytes in {:?}), route {}",
+                offer.name,
+                started.elapsed(),
+                super::route(&conn)
+            );
+            return Ok(target);
+        }
+        if tokio::fs::metadata(&part).await?.len() != offer.size {
+            bail!("the file arrived incomplete");
         }
         tracing::info!(
             "received {} ({len} bytes in {:?}), route {}",
@@ -1920,82 +1997,91 @@ impl Core {
         Ok(target)
     }
 
-    /// Writes the (decompressed) bytes of a file to `part`; returns their hash.
-    async fn receive_file(
+    /// Writes the (decompressed) stream to `part`, starting at `start`, and returns the hash of the
+    /// whole thing (the bytes already there included). `total` is the full stream's length when the
+    /// sender told us. `prefix` is a folder's listing, which is not part of the progress.
+    async fn receive_flat(
         &self,
         gid: &str,
         fid: &str,
         body: &mut (impl AsyncRead + Unpin),
         part: &Path,
-        len: u64,
+        start: u64,
+        total: Option<u64>,
+        prefix: u64,
     ) -> Result<String> {
-        let mut out = tokio::fs::File::create(part).await?;
-        out.set_max_buf_size(CHUNK);
+        let lost = |e: std::io::Error| anyhow!("connection lost: {e}");
         let mut hasher = blake3::Hasher::new();
         let mut buf = vec![0u8; CHUNK];
-        let (mut done, mut shown) = (0u64, Instant::now());
+        // Hash what a previous attempt left us, so the final check covers the whole file.
+        if start > 0 {
+            let mut old = tokio::fs::File::open(part).await?;
+            old.set_max_buf_size(CHUNK);
+            let mut left = start;
+            while left > 0 {
+                let want = left.min(CHUNK as u64) as usize;
+                let n = old.read(&mut buf[..want]).await.map_err(lost)?;
+                if n == 0 {
+                    bail!("the partial file is shorter than expected");
+                }
+                hasher.update(&buf[..n]);
+                left -= n as u64;
+            }
+        }
+        let mut out = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(part)
+            .await?;
+        out.set_max_buf_size(CHUNK);
+        out.set_len(start).await?;
+        out.seek(SeekFrom::Start(start)).await?;
+        let (mut done, mut shown) = (start, Instant::now());
         loop {
-            let n = body
-                .read(&mut buf)
-                .await
-                .map_err(|e| anyhow!("connection lost: {e}"))?;
+            let n = body.read(&mut buf).await.map_err(lost)?;
             if n == 0 {
                 break;
             }
-            if done + n as u64 > len {
+            if let Some(total) = total
+                && done + n as u64 > total
+            {
                 bail!("the sender sent more than the file holds");
             }
             hasher.update(&buf[..n]);
             out.write_all(&buf[..n]).await?;
             done += n as u64;
-            self.progressed(gid, fid, done, &mut shown);
+            self.progressed(gid, fid, done.saturating_sub(prefix), &mut shown);
         }
         out.flush().await?;
-        if done != len {
-            bail!("connection lost after {done} of {len} bytes");
+        if let Some(total) = total
+            && done != total
+        {
+            bail!("connection lost after {done} of {total} bytes");
         }
         Ok(hasher.finalize().to_hex().to_string())
     }
 
-    /// Unpacks the (decompressed) bytes of a folder into the folder `part`; returns their hash.
-    async fn receive_folder(
-        &self,
-        gid: &str,
-        fid: &str,
-        body: &mut (impl AsyncRead + Unpin),
-        part: &Path,
-        len: u64,
-    ) -> Result<String> {
-        let lost = |e: std::io::Error| anyhow!("connection lost: {e}");
-        let mut hasher = blake3::Hasher::new();
+    /// Unpacks a whole folder (its stream, as written by [`receive_flat`]) into `target`.
+    async fn unpack_folder(part: &Path, target: &Path) -> Result<()> {
+        let lost = |e: std::io::Error| anyhow!("the download is incomplete: {e}");
+        let mut src = tokio::fs::File::open(part).await?;
         let mut head = [0u8; 4];
-        body.read_exact(&mut head).await.map_err(lost)?;
+        src.read_exact(&mut head).await.map_err(lost)?;
         let n = u32::from_be_bytes(head) as usize;
         if n > MAX_LISTING_BYTES {
             bail!("the folder's listing is too big");
         }
         let mut raw = vec![0u8; n];
-        body.read_exact(&mut raw).await.map_err(lost)?;
-        hasher.update(&head);
-        hasher.update(&raw);
+        src.read_exact(&mut raw).await.map_err(lost)?;
         let listing: Listing = serde_json::from_slice(&raw).context("bad folder listing")?;
-        let total = listing
-            .files
-            .iter()
-            .try_fold(0u64, |sum, (_, size)| sum.checked_add(*size));
-        if total != Some(len) {
-            bail!("the folder changed on the sender's side");
-        }
 
-        let _ = tokio::fs::remove_dir_all(part).await;
-        tokio::fs::create_dir_all(part).await?;
+        tokio::fs::create_dir_all(target).await?;
         for dir in &listing.dirs {
-            tokio::fs::create_dir_all(part.join(safe_relative(dir)?)).await?;
+            tokio::fs::create_dir_all(target.join(safe_relative(dir)?)).await?;
         }
         let mut buf = vec![0u8; CHUNK];
-        let (mut done, mut shown) = (0u64, Instant::now());
         for (rel, size) in &listing.files {
-            let path = part.join(safe_relative(rel)?);
+            let path = target.join(safe_relative(rel)?);
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
@@ -2010,22 +2096,19 @@ impl Core {
             let mut left = *size;
             while left > 0 {
                 let want = left.min(CHUNK as u64) as usize;
-                let n = body.read(&mut buf[..want]).await.map_err(lost)?;
+                let n = src.read(&mut buf[..want]).await.map_err(lost)?;
                 if n == 0 {
-                    bail!("connection lost after {done} of {len} bytes");
+                    bail!("the folder arrived incomplete");
                 }
-                hasher.update(&buf[..n]);
                 out.write_all(&buf[..n]).await?;
                 left -= n as u64;
-                done += n as u64;
-                self.progressed(gid, fid, done, &mut shown);
             }
             out.flush().await?;
         }
-        if body.read(&mut buf).await.map_err(lost)? != 0 {
+        if src.read(&mut buf).await.map_err(lost)? != 0 {
             bail!("the sender sent more than the folder holds");
         }
-        Ok(hasher.finalize().to_hex().to_string())
+        Ok(())
     }
 
     /// A download got to `done` bytes: show it (at most every 200 ms).
@@ -2120,8 +2203,42 @@ impl Core {
                 super::route(&conn)
             );
         }
-        if offer.kind == FOLDER_KIND {
-            serve_folder(path, offer.size, tx, &sending).await?;
+        let folder = offer.kind == FOLDER_KIND;
+        // What travels, in order: a folder's listing, then its files' bytes.
+        let (listing, listing_len, stream_len) = if folder {
+            let walk = {
+                let path = path.clone();
+                tokio::task::spawn_blocking(move || walk_folder(&path))
+            }
+            .await??;
+            let bytes: u64 = walk.0.files.iter().map(|f| f.1).sum();
+            if bytes != offer.size {
+                bail!("folder changed since it was offered");
+            }
+            let listing_len = walk.0.encode().len() as u64;
+            (Some(walk), listing_len, listing_len + bytes)
+        } else {
+            (None, 0, offer.size)
+        };
+        let start = if request.resume {
+            request.from.min(stream_len)
+        } else {
+            0
+        };
+        // A resumed send starts part-way, so the sender's bar does too.
+        sending.set_done(start.saturating_sub(listing_len));
+        let mut header = vec![if request.resume { 2u8 } else { 0u8 }];
+        header.extend_from_slice(&offer.size.to_be_bytes());
+        if request.resume {
+            header.extend_from_slice(&start.to_be_bytes());
+            header.extend_from_slice(&stream_len.to_be_bytes());
+        }
+        tx.write_all(&header).await?;
+        if start >= stream_len {
+            return Ok(Some(sending));
+        }
+        if let Some((listing, paths)) = listing {
+            serve_folder(listing, paths, listing_len, start, tx, &sending).await?;
             return Ok(Some(sending));
         }
         let mut file = tokio::fs::File::from_std(
@@ -2132,9 +2249,7 @@ impl Core {
         if len != offer.size {
             bail!("file changed since it was offered");
         }
-        let mut header = vec![0u8];
-        header.extend_from_slice(&len.to_be_bytes());
-        tx.write_all(&header).await?;
+        file.seek(SeekFrom::Start(start)).await?;
         let body = ZstdEncoder::with_quality(
             BufReader::with_capacity(CHUNK, sending.counted(file)),
             Level::Precise(1),
@@ -2387,6 +2502,11 @@ impl SendMeter {
             done: self.done.clone(),
         }
     }
+
+    /// Count a prefix that is not read now (a resumed send).
+    fn set_done(&self, done: u64) {
+        self.done.store(done, Ordering::Relaxed);
+    }
 }
 
 impl Drop for SendMeter {
@@ -2522,33 +2642,42 @@ fn hash_folder(root: &Path, meter: &Meter) -> Result<(String, u64)> {
     Ok((hashing.hex(), total))
 }
 
-/// Sends the folder at `root` (see [`Listing`]), compressed, as long as it still holds `size` bytes.
+/// Sends the folder (see [`Listing`]) from `start`, compressed.
 async fn serve_folder(
-    root: PathBuf,
-    size: u64,
+    listing: Listing,
+    paths: Vec<PathBuf>,
+    listing_len: u64,
+    start: u64,
     tx: &mut SendStream,
     sending: &SendMeter,
 ) -> Result<()> {
-    let (listing, paths) = tokio::task::spawn_blocking(move || walk_folder(&root)).await??;
-    let len: u64 = listing.files.iter().map(|f| f.1).sum();
-    if len != size {
-        bail!("folder changed since it was offered");
-    }
-    let mut header = vec![0u8];
-    header.extend_from_slice(&len.to_be_bytes());
-    tx.write_all(&header).await?;
     let mut body = async_compression::tokio::write::ZstdEncoder::with_quality(
         BufWriter::with_capacity(CHUNK, &mut *tx),
         Level::Precise(1),
     );
-    body.write_all(&listing.encode()).await?;
+    if start < listing_len {
+        let bytes = listing.encode();
+        let from = start.min(bytes.len() as u64) as usize;
+        body.write_all(&bytes[from..]).await?;
+    }
+    let mut pos = listing_len;
     for (path, (_, size)) in paths.iter().zip(&listing.files) {
+        if pos + size <= start {
+            pos += size;
+            continue;
+        }
+        let skip = start.saturating_sub(pos).min(*size);
         let mut file = tokio::fs::File::open(path).await?;
         file.set_max_buf_size(CHUNK);
-        let mut reader = BufReader::with_capacity(CHUNK, sending.counted(file.take(*size)));
-        if tokio::io::copy_buf(&mut reader, &mut body).await? != *size {
+        if skip > 0 {
+            file.seek(SeekFrom::Start(skip)).await?;
+        }
+        let left = *size - skip;
+        let mut reader = BufReader::with_capacity(CHUNK, sending.counted(file.take(left)));
+        if tokio::io::copy_buf(&mut reader, &mut body).await? != left {
             bail!("folder changed since it was offered");
         }
+        pos += *size;
     }
     body.shutdown().await?;
     Ok(())
@@ -2569,6 +2698,22 @@ fn safe_relative(rel: &str) -> Result<PathBuf> {
 /// Where a download is put together until it is complete.
 fn part_path(dir: &Path, fid: &str) -> PathBuf {
     dir.join(format!(".{fid}.part"))
+}
+
+/// How many bytes the folder listing at the start of `part` takes, if it has already arrived.
+async fn listing_len(part: &Path, have: u64) -> u64 {
+    if have < 4 {
+        return 0;
+    }
+    let Ok(mut file) = tokio::fs::File::open(part).await else {
+        return 0;
+    };
+    let mut head = [0u8; 4];
+    if file.read_exact(&mut head).await.is_err() {
+        return 0;
+    }
+    let n = u32::from_be_bytes(head) as u64;
+    if 4 + n <= have { 4 + n } else { 0 }
 }
 
 pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {

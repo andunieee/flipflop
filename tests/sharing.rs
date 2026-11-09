@@ -450,6 +450,72 @@ async fn folders_arrive_whole() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn downloads_resume_from_what_already_arrived() {
+    let (a, da) = node("alice").await;
+    let (b, _db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    b.set_group_settings(&gid, Some(false), None, None);
+
+    let content: Vec<u8> = (0..400_000u32).flat_map(|i| i.to_le_bytes()).collect();
+    let src = da.path().join("resume.bin");
+    std::fs::write(&src, &content).unwrap();
+    let fid = a.offer_file(&gid, src, None, "file", false).await.unwrap();
+    until("offer visible", || {
+        b.group_view(&gid)
+            .unwrap()
+            .files
+            .iter()
+            .any(|f| f.id == fid)
+    })
+    .await;
+
+    // As if an earlier attempt had been cut off after this many bytes.
+    std::fs::create_dir_all(b.download_dir()).unwrap();
+    let part = b.download_dir().join(format!(".{fid}.part"));
+    std::fs::write(&part, &content[..123_456]).unwrap();
+    let saved = b.download_file(&gid, &fid).await.unwrap();
+    assert_eq!(std::fs::read(&saved).unwrap(), content);
+    assert!(!part.exists(), "the part is gone once it is whole");
+
+    // A folder's stream is its listing followed by its files, and resumes the same way.
+    let folder = da.path().join("resume-folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("a.txt"), b"hello").unwrap();
+    std::fs::write(folder.join("b.bin"), &content[..200_000]).unwrap();
+    let fid = a
+        .offer_file(&gid, folder, None, "file", false)
+        .await
+        .unwrap();
+    until("folder offer visible", || {
+        b.group_view(&gid)
+            .unwrap()
+            .files
+            .iter()
+            .any(|f| f.id == fid)
+    })
+    .await;
+    let listing = format!(
+        r#"{{"dirs":[],"files":[["a.txt",5],["b.bin",{}]]}}"#,
+        200_000
+    );
+    let mut prefix = (listing.len() as u32).to_be_bytes().to_vec();
+    prefix.extend(listing.as_bytes());
+    prefix.extend(b"hel"); // 3 of a.txt's 5 bytes
+    let part = b.download_dir().join(format!(".{fid}.part"));
+    std::fs::write(&part, &prefix).unwrap();
+    let saved = b.download_file(&gid, &fid).await.unwrap();
+    assert_eq!(std::fs::read(saved.join("a.txt")).unwrap(), b"hello");
+    assert_eq!(
+        std::fs::read(saved.join("b.bin")).unwrap(),
+        &content[..200_000]
+    );
+    assert!(!part.exists());
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_same_file_is_not_offered_twice() {
     let (a, da) = node("alice").await;
     let (b, db) = node("bob").await;
