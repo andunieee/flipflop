@@ -208,7 +208,7 @@ Every icon comes from `assets/top.png` and is committed: the Linux hicolor PNGs 
     just web                       # rebuild the guest page's wasm (see Guest links)
     cargo test                     # unit tests + multi-node integration tests
 
-Android needs cargo-ndk, NDK 27 and an Android SDK with platform 35 (`kmp/local.properties`: `sdk.dir=...`).
+Android needs cargo-ndk (`cargo install cargo-ndk`), NDK 27 and an Android SDK with platform 35 (`kmp/local.properties`: `sdk.dir=...`).
 The desktop app needs a JDK 17+ and loads `libflipflop` from the cargo target directory.
 
 Linux BLE needs BlueZ (`bluetoothd`) and libdbus.

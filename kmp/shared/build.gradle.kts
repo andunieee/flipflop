@@ -63,11 +63,14 @@ kotlin {
         val desktopMain by getting { dependsOn(jvmShared) }
 
         commonMain.dependencies {
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.ui)
-            implementation(compose.components.resources)
+            // The compose.* accessors are deprecated in Compose Multiplatform 1.10; spell the
+            // coordinates out. Keep these versions in step with the plugin in kmp/build.gradle.kts
+            // (material3 has its own release line).
+            implementation("org.jetbrains.compose.runtime:runtime:1.10.3")
+            implementation("org.jetbrains.compose.foundation:foundation:1.10.3")
+            implementation("org.jetbrains.compose.material3:material3:1.9.0")
+            implementation("org.jetbrains.compose.ui:ui:1.10.3")
+            implementation("org.jetbrains.compose.components:components-resources:1.10.3")
         }
         androidMain.dependencies {
             implementation("net.java.dev.jna:jna:5.17.0@aar")

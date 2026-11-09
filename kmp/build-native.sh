@@ -9,6 +9,12 @@ abis=("${@:-arm64-v8a}")
 export ANDROID_HOME=${ANDROID_HOME:-/opt/android-sdk}
 export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.2.12479018}
 
+# cargo's own "no such command: ndk" gives no hint about how to get it.
+if ! command -v cargo-ndk >/dev/null; then
+    echo "cargo-ndk is not installed; install it with: cargo install cargo-ndk" >&2
+    exit 1
+fi
+
 targets=(); for abi in "${abis[@]}"; do targets+=(-t "$abi"); done
 rm -rf androidApp/src/main/jniLibs
 flags=(); [ "$profile" = release ] && flags+=(--release)
