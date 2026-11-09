@@ -393,10 +393,16 @@ async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
         }
     };
     let (tx, rx) = mpsc::channel(8);
-    let (core, gid, fid, guest) = (core.clone(), gid.to_owned(), fid.to_owned(), origin.id());
+    let (core, gid, fid, guest, guest_name) = (
+        core.clone(),
+        gid.to_owned(),
+        fid.to_owned(),
+        origin.id(),
+        origin.name(),
+    );
     let file_name = name.clone();
     tokio::spawn(async move {
-        let sending = core.track_send(&gid, &fid, &file_name, &guest, len);
+        let sending = core.track_send(&gid, &fid, &file_name, &guest, &guest_name, len);
         let mut file = sending.counted(file);
         let mut buf = vec![0u8; CHUNK];
         loop {

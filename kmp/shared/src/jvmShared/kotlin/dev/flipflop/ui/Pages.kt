@@ -32,6 +32,7 @@ import uniffi.flipflop.GroupRow
 import uniffi.flipflop.HomeRow
 import uniffi.flipflop.InviteRow
 import uniffi.flipflop.PeerRow
+import uniffi.flipflop.TransferRow
 import uniffi.flipflop.UiState
 import uniffi.flipflop.qrMatrix
 
@@ -109,6 +110,30 @@ private fun HomeCard(item: HomeRow, nav: Nav) {
     }
 }
 
+/** A file moving (or waiting its turn): its progress, opening the group's files. */
+@Composable
+private fun TransferCard(t: TransferRow, nav: Nav) {
+    ClickCard({ nav.openGroup(t.groupId, "files") }) {
+        Row(Modifier.padding(Theme.d.cardPadding), horizontalArrangement = Arrangement.spacedBy(Theme.d.space3), verticalAlignment = Alignment.CenterVertically) {
+            IconTile(
+                when (t.kind) {
+                    "upload" -> Icons.send
+                    "receive" -> Icons.inbox
+                    "prepare" -> Icons.file
+                    else -> Icons.arrowDown
+                },
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Txt(t.name, Theme.d.fontMd, Theme.c.textStrong, 650, elide = true)
+                Txt(t.detail, Theme.d.fontSm, Theme.c.textMuted, elide = true)
+                if (!t.queued && t.progress >= 0f) ProgressBar(t.progress)
+            }
+            if (t.queued) Badge("Queued", "muted")
+            Icon(Icons.chevronRight, tint = Theme.c.textFaint)
+        }
+    }
+}
+
 /** A paired peer that is online: its summary, opening its page. */
 @Composable
 private fun OnlinePeerCard(peer: PeerRow, nav: Nav) {
@@ -131,6 +156,8 @@ fun HomePage(s: UiState, nav: Nav) {
         val requests = s.peers.filter { it.pairRequest }
         requests.forEach { PairRequestCard(it, nav) }
         s.invites.forEach { InviteCard(it, nav) }
+        if (s.transfers.isNotEmpty()) Overline("TRANSFERS")
+        s.transfers.forEach { TransferCard(it, nav) }
         if (s.home.isNotEmpty()) Overline("NEW")
         s.home.forEach { HomeCard(it, nav) }
         val peers = s.peers.filter { it.connected && it.groupId.isNotEmpty() }
@@ -138,7 +165,7 @@ fun HomePage(s: UiState, nav: Nav) {
         if (peers.isNotEmpty() || groups.isNotEmpty()) Overline("ONLINE NOW")
         peers.forEach { OnlinePeerCard(it, nav) }
         groups.forEach { GroupCard(it, nav, onHome = true) }
-        if (s.home.isEmpty() && s.invites.isEmpty() && requests.isEmpty() && peers.isEmpty() && groups.isEmpty()) {
+        if (s.home.isEmpty() && s.transfers.isEmpty() && s.invites.isEmpty() && requests.isEmpty() && peers.isEmpty() && groups.isEmpty()) {
             HintText("All caught up. New files, texts and members of your groups show up here.", center = true)
         }
     }

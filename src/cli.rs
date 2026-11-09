@@ -306,6 +306,39 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
             sleep(wait.min(Duration::from_secs(2))).await;
             let invites = core.groups().invites;
             let news = core.unseen();
+            let moving = core.transfers_now();
+            for t in &moving.items {
+                let action = if t.queued {
+                    "queued"
+                } else {
+                    match t.kind.as_str() {
+                        "upload" => "uploading",
+                        "receive" => "receiving",
+                        "prepare" => "preparing",
+                        _ => "downloading",
+                    }
+                };
+                let bytes = match t.total {
+                    Some(total) if total > 0 => {
+                        format!("  {} of {}", format::size(t.done), format::size(total))
+                    }
+                    _ if t.done > 0 => format!("  {}", format::size(t.done)),
+                    _ => String::new(),
+                };
+                let peer = if t.peer.is_empty() {
+                    String::new()
+                } else if t.kind == "upload" {
+                    format!(" to {}", t.peer)
+                } else {
+                    format!(" from {}", t.peer)
+                };
+                say!(
+                    cx,
+                    "transfer  {}  {action} {}{peer}{bytes}",
+                    &t.group[..t.group.len().min(8)],
+                    t.name
+                );
+            }
             for i in &invites {
                 say!(
                     cx,
@@ -327,7 +360,7 @@ pub async fn run(core: &Core, cx: &Ctx, cli: &Cli) -> Result<()> {
                     say!(cx, "    {line}");
                 }
             }
-            if invites.is_empty() && news.is_empty() {
+            if invites.is_empty() && news.is_empty() && moving.items.is_empty() {
                 say!(cx, "all caught up");
             }
             if *seen {

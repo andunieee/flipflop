@@ -17,7 +17,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::{Context as TaskContext, Poll},
     time::{Duration, Instant},
@@ -124,6 +124,22 @@ pub struct SendView {
     pub total: u64,
 }
 
+/// One transfer, for the Home page's summary.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TransferItem {
+    pub group: String,
+    pub name: String,
+    /// "download", "upload", "receive" (a guest's upload) or "prepare" (hashing an offer).
+    pub kind: String,
+    /// The member at the other end, when there is one.
+    pub peer: String,
+    pub done: u64,
+    /// `None` while the size is not known.
+    pub total: Option<u64>,
+    /// Waiting for its turn: an automatic download that has not started yet.
+    pub queued: bool,
+}
+
 /// Everything moving on this device right now, in every group.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TransfersNow {
@@ -133,12 +149,16 @@ pub struct TransfersNow {
     pub sending: usize,
     /// Offers being hashed.
     pub preparing: usize,
+    /// Automatic downloads waiting for their turn (not counted in the three above).
+    pub queued: usize,
     /// The file's name, when only one is moving.
     pub name: Option<String>,
     /// Bytes so far, of all of them.
     pub done: u64,
     /// `None` while the size of one of them is not known.
     pub total: Option<u64>,
+    /// Every transfer and queued file, in the order they are shown on Home.
+    pub items: Vec<TransferItem>,
 }
 
 impl TransfersNow {
@@ -234,7 +254,10 @@ pub struct GroupView {
 }
 
 struct Transfer {
+    group: String,
     name: String,
+    /// Who offers it.
+    from: String,
     done: u64,
     total: u64,
     active: bool,
@@ -269,12 +292,25 @@ struct Sending {
     file: String,
     name: String,
     to: String,
+    /// The member's name, for the Home page.
+    to_name: String,
     total: u64,
     done: Arc<AtomicU64>,
 }
 
+/// An automatic download waiting for its turn.
+struct Queued {
+    name: String,
+    size: u64,
+    /// Who offers it.
+    from: String,
+    /// Its turn came. It is no longer shown as queued, even before its download shows.
+    started: Arc<AtomicBool>,
+}
+
 /// A file a guest is uploading to us. How big it is will only be known at the end.
 struct Incoming {
+    group: String,
     name: String,
     done: Arc<AtomicU64>,
 }
@@ -289,7 +325,7 @@ pub(super) struct Sharing {
     /// Auto-downloads take turns: the files queued for one wait here.
     auto_turn: tokio::sync::Semaphore,
     /// What is queued for an auto-download, so a repeated job does not queue a file twice.
-    auto_queued: Mutex<HashSet<(String, String)>>,
+    auto_queued: Mutex<HashMap<(String, String), Queued>>,
     preparing: Mutex<Vec<Preparing>>,
     next_preparing: AtomicU64,
     sending: Mutex<Vec<Sending>>,
@@ -832,7 +868,13 @@ impl Core {
         self.emit_transfers();
     }
 
-    /// Everything moving on this device right now.
+    /// Tell the UI the queue changed. The caller does not hold the publish lock.
+    fn publish_transfers(&self) {
+        let _ordered = self.0.publish_lock.lock().unwrap();
+        self.emit_transfers();
+    }
+
+    /// Everything moving on this device right now, and what waits for its turn.
     pub fn transfers_now(&self) -> TransfersNow {
         let sharing = &self.0.sharing;
         let mut now = TransfersNow {
@@ -845,35 +887,86 @@ impl Core {
             now.done += done;
             now.total = now.total.zip(total).map(|(a, b)| a + b);
         };
-        for t in sharing.transfers.lock().unwrap().values() {
-            if t.active {
-                now.receiving += 1;
-                add(&mut now, &t.name, t.done, Some(t.total));
+        {
+            let transfers = sharing.transfers.lock().unwrap();
+            for t in transfers.values() {
+                if t.active {
+                    now.receiving += 1;
+                    add(&mut now, &t.name, t.done, Some(t.total));
+                    now.items.push(TransferItem {
+                        group: t.group.clone(),
+                        name: t.name.clone(),
+                        kind: "download".into(),
+                        peer: t.from.clone(),
+                        done: t.done,
+                        total: Some(t.total),
+                        queued: false,
+                    });
+                }
+            }
+            for ((gid, fid), q) in sharing.auto_queued.lock().unwrap().iter() {
+                // The one that has its turn is described above as a download.
+                if q.started.load(Ordering::Relaxed)
+                    || transfers.contains_key(&(gid.clone(), fid.clone()))
+                {
+                    continue;
+                }
+                now.queued += 1;
+                now.items.push(TransferItem {
+                    group: gid.clone(),
+                    name: q.name.clone(),
+                    kind: "download".into(),
+                    peer: q.from.clone(),
+                    done: 0,
+                    total: Some(q.size),
+                    queued: true,
+                });
             }
         }
         for up in sharing.incoming.lock().unwrap().iter() {
             now.receiving += 1;
-            add(&mut now, &up.name, up.done.load(Ordering::Relaxed), None);
+            let done = up.done.load(Ordering::Relaxed);
+            add(&mut now, &up.name, done, None);
+            now.items.push(TransferItem {
+                group: up.group.clone(),
+                name: up.name.clone(),
+                kind: "receive".into(),
+                done,
+                ..TransferItem::default()
+            });
         }
         for s in sharing.sending.lock().unwrap().iter() {
             now.sending += 1;
-            add(
-                &mut now,
-                &s.name,
-                s.done.load(Ordering::Relaxed),
-                Some(s.total),
-            );
+            let done = s.done.load(Ordering::Relaxed);
+            add(&mut now, &s.name, done, Some(s.total));
+            now.items.push(TransferItem {
+                group: s.group.clone(),
+                name: s.name.clone(),
+                kind: "upload".into(),
+                peer: s.to_name.clone(),
+                done,
+                total: Some(s.total),
+                queued: false,
+            });
         }
         for p in sharing.preparing.lock().unwrap().iter() {
             now.preparing += 1;
             let total = p.meter.total.load(Ordering::Relaxed);
             let done = p.meter.done.load(Ordering::Relaxed);
             add(&mut now, &p.name, done, (total > 0).then_some(total));
+            now.items.push(TransferItem {
+                group: p.group.clone(),
+                name: p.name.clone(),
+                kind: "prepare".into(),
+                done,
+                total: (total > 0).then_some(total),
+                ..TransferItem::default()
+            });
         }
         if let [name] = names.as_slice() {
             now.name = Some(name.clone());
         }
-        if !now.active() {
+        if !now.active() && now.queued == 0 {
             return TransfersNow::default();
         }
         now
@@ -1244,6 +1337,7 @@ impl Core {
         fid: &str,
         name: &str,
         to: &str,
+        to_name: &str,
         total: u64,
     ) -> SendMeter {
         let done = Arc::new(AtomicU64::new(0));
@@ -1252,6 +1346,7 @@ impl Core {
             file: fid.to_owned(),
             name: name.to_owned(),
             to: to.to_owned(),
+            to_name: to_name.to_owned(),
             total,
             done: done.clone(),
         });
@@ -1329,6 +1424,7 @@ impl Core {
     pub(super) fn track_incoming(&self, gid: &str, name: &str) -> IncomingMeter {
         let done = Arc::new(AtomicU64::new(0));
         self.0.sharing.incoming.lock().unwrap().push(Incoming {
+            group: gid.to_owned(),
             name: name.to_owned(),
             done: done.clone(),
         });
@@ -1549,6 +1645,7 @@ impl Core {
         gid: &str,
         fid: &str,
         name: &str,
+        from: &str,
         total: u64,
         manual: bool,
     ) -> Option<Arc<Notify>> {
@@ -1564,7 +1661,9 @@ impl Core {
         transfers.insert(
             key,
             Transfer {
+                group: gid.to_owned(),
                 name: name.to_owned(),
+                from: from.to_owned(),
                 done: 0,
                 total,
                 active: true,
@@ -1627,7 +1726,13 @@ impl Core {
         {
             bail!("{} is on hold", offer.name);
         }
-        let Some(cancel) = self.begin_transfer(gid, fid, &offer.name, offer.size, manual) else {
+        let from = if offer.from_name.is_empty() {
+            &offer.from
+        } else {
+            &offer.from_name
+        };
+        let Some(cancel) = self.begin_transfer(gid, fid, &offer.name, from, offer.size, manual)
+        else {
             bail!("already downloading");
         };
         self.publish_group(gid, false);
@@ -1978,8 +2083,9 @@ impl Core {
             bail!("not a member");
         }
         let me = self.me();
-        let offer = self
-            .with_doc(&request.group, |d| d.file(&request.file))
+        let (offer, members) =
+            self.with_doc(&request.group, |d| (d.file(&request.file), d.members()));
+        let offer = offer
             .filter(|f| (f.from == me || f.hosts.contains(&me)) && !f.stopped)
             .context("not on offer")?;
         let path = self
@@ -1993,11 +2099,17 @@ impl Core {
             .find(|s| s.group == request.group && s.file == request.file)
             .map(|s| s.path.clone())
             .context("not shared here")?;
+        let to_name = members
+            .into_iter()
+            .find(|(id, _)| *id == from.to_string())
+            .map(|(_, name)| name)
+            .unwrap_or_else(|| from.fmt_short().to_string());
         let sending = self.track_send(
             &request.group,
             &request.file,
             &offer.name,
             &from.to_string(),
+            &to_name,
             offer.size,
         );
         if let Some(conn) = self.connection(from) {
@@ -2051,25 +2163,36 @@ impl Core {
 
     /// Fetch an offer automatically. They go one at a time, in the order they were queued, so a
     /// group offering many files does not fetch them all at once.
-    fn auto_download(&self, gid: &str, fid: &str) {
+    fn auto_download(&self, gid: &str, fid: &str, name: String, size: u64, from: String) {
         let key = (gid.to_owned(), fid.to_owned());
-        if !self
+        let started = Arc::new(AtomicBool::new(false));
+        let queued = Queued {
+            name,
+            size,
+            from,
+            started: started.clone(),
+        };
+        if self
             .0
             .sharing
             .auto_queued
             .lock()
             .unwrap()
-            .insert(key.clone())
+            .insert(key.clone(), queued)
+            .is_some()
         {
             // A job ran again while this one still waits (or downloads).
             return;
         }
+        self.publish_transfers();
         let this = self.clone();
         tokio::spawn(async move {
             let Ok(_turn) = this.0.sharing.auto_turn.acquire().await else {
                 this.0.sharing.auto_queued.lock().unwrap().remove(&key);
+                this.publish_transfers();
                 return;
             };
+            started.store(true, Ordering::Relaxed);
             // The group's settings may have changed while it waited, and it may have been put on
             // hold or downloaded by hand.
             let wanted = this
@@ -2091,6 +2214,7 @@ impl Core {
                 let _ = this.download(&key.0, &key.1, false).await;
             }
             this.0.sharing.auto_queued.lock().unwrap().remove(&key);
+            this.publish_transfers();
         });
     }
 
@@ -2147,7 +2271,16 @@ impl Core {
                     .filter(|id| **id != me)
                     .any(|id| id.parse().ok().and_then(|id| self.connection(id)).is_some());
                 if online {
-                    self.auto_download(gid, &f.id);
+                    let from = if f.from_name.is_empty() {
+                        members
+                            .iter()
+                            .find(|(id, _)| *id == f.from)
+                            .map(|(_, name)| name.clone())
+                            .unwrap_or_else(|| f.from.clone())
+                    } else {
+                        f.from_name.clone()
+                    };
+                    self.auto_download(gid, &f.id, f.name.clone(), f.size, from);
                 }
             }
         }

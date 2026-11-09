@@ -38,7 +38,8 @@ use crate::{
 pub use crate::state::MemberState;
 pub use guest::{GUEST_ALPN, GuestInfo, GuestPerson, is_guest};
 pub use sharing::{
-    AppView, DocMember, FileView, GroupView, SendView, TabView, TextView, TransfersNow,
+    AppView, DocMember, FileView, GroupView, SendView, TabView, TextView, TransferItem,
+    TransfersNow,
 };
 pub use unseen::Unseen;
 

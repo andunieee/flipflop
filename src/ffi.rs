@@ -16,7 +16,9 @@ use iroh::EndpointId;
 use tokio::runtime::{EnterGuard, Runtime};
 
 use crate::{
-    core::{Core, Event, GroupInfo, GroupView, GroupsView, MemberState, Peer, Unseen},
+    core::{
+        Core, Event, GroupInfo, GroupView, GroupsView, MemberState, Peer, TransferItem, Unseen,
+    },
     format, groupdoc,
 };
 
@@ -69,6 +71,21 @@ pub struct HomeRow {
     pub paired: bool,
     /// The group tab showing the first kind of news.
     pub tab: String,
+}
+
+/// One file moving (or waiting to move), for the Home page's summary.
+#[derive(Clone, Default, uniffi::Record)]
+pub struct TransferRow {
+    pub group_id: String,
+    pub name: String,
+    /// "download", "upload", "receive" (a guest's upload) or "prepare" (hashing an offer).
+    pub kind: String,
+    /// "Downloading from Alice · 3 MB of 10 MB · pale moon"
+    pub detail: String,
+    /// 0 to 1, or -1 while the size is not known (and for queued files).
+    pub progress: f32,
+    /// Waiting for its turn: an automatic download that has not started yet.
+    pub queued: bool,
 }
 
 #[derive(Clone, Default, uniffi::Record)]
@@ -198,6 +215,8 @@ pub struct UiState {
     pub groups: Vec<GroupRow>,
     pub invites: Vec<InviteRow>,
     pub home: Vec<HomeRow>,
+    /// Files moving or waiting to move, in every group.
+    pub transfers: Vec<TransferRow>,
 
     // the open group ("" = none)
     pub open_group: String,
@@ -349,6 +368,8 @@ struct Shared {
     open_group: Option<String>,
     /// What is new in each group (the Home page).
     home: Vec<Unseen>,
+    /// What is moving (the Home page's transfers).
+    transfers: Vec<TransferItem>,
     /// The page the UI shows. A group counts as looked at while its page is the one.
     page: String,
     /// The group whose page is showing.
@@ -468,7 +489,11 @@ impl Inner {
         match event {
             Event::Name(name) => self.change(|s| s.ui.my_name = name),
             Event::Notice(text) => self.notice(text),
-            Event::Transfers(now) => crate::platform::show_transfers(&now),
+            Event::Transfers(now) => {
+                let items = now.items.clone();
+                self.change(|s| s.transfers = items);
+                crate::platform::show_transfers(&now);
+            }
             Event::Ticket(ticket) => self.change(|s| s.ui.ticket = ticket),
             Event::Peers(peers) => self.change(|s| s.peers = peers),
             Event::Groups(view) => {
@@ -1177,6 +1202,65 @@ fn group_title(g: &GroupInfo) -> String {
     }
 }
 
+/// One line for a moving (or queued) file: what it is doing, how far it is, and in which group.
+fn transfer_row(t: &TransferItem, shared: &Shared) -> TransferRow {
+    let group = shared
+        .groups
+        .groups
+        .iter()
+        .find(|g| g.id == t.group)
+        .map(group_title)
+        .unwrap_or_default();
+    let bytes = match t.total {
+        Some(total) if total > 0 => format!("{} of {}", format::size(t.done), format::size(total)),
+        _ if t.done > 0 => format::size(t.done),
+        _ => String::new(),
+    };
+    let mut parts = Vec::new();
+    if t.queued {
+        parts.push("Queued".to_owned());
+        if !t.peer.is_empty() {
+            parts.push(format!("from {}", t.peer));
+        }
+    } else {
+        let action = match t.kind.as_str() {
+            "upload" => "Uploading",
+            "receive" => "Receiving from a guest",
+            "prepare" => "Preparing to share",
+            _ => "Downloading",
+        };
+        if t.peer.is_empty() {
+            parts.push(action.to_owned());
+        } else {
+            parts.push(format!(
+                "{action} {} {}",
+                if t.kind == "upload" { "to" } else { "from" },
+                t.peer
+            ));
+        }
+    }
+    if !bytes.is_empty() {
+        parts.push(bytes);
+    }
+    if !group.is_empty() {
+        parts.push(group);
+    }
+    TransferRow {
+        group_id: t.group.clone(),
+        name: t.name.clone(),
+        kind: t.kind.clone(),
+        detail: parts.join(" · "),
+        progress: if t.queued {
+            -1.0
+        } else {
+            t.total
+                .filter(|total| *total > 0)
+                .map_or(-1.0, |total| (t.done as f32 / total as f32).clamp(0.0, 1.0))
+        },
+        queued: t.queued,
+    }
+}
+
 /// The groups the open peer page offers to invite the peer to, in the order of the dropdown: the
 /// listed groups the peer is not part of (a declined invite can be sent again).
 fn invitable_groups(shared: &Shared) -> Vec<&GroupInfo> {
@@ -1259,6 +1343,11 @@ fn build_state(shared: &Shared) -> UiState {
             paired: n.with.is_some(),
             tab: n.tab().into(),
         })
+        .collect();
+    ui.transfers = shared
+        .transfers
+        .iter()
+        .map(|t| transfer_row(t, shared))
         .collect();
 
     ui.open_group = shared.open_group.clone().unwrap_or_default();

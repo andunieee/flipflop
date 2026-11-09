@@ -747,9 +747,15 @@ async fn automatic_downloads_are_fetched_one_at_a_time() {
 
     b.set_group_settings(&gid, Some(true), None, None);
     let mut seen_moving = false;
+    let mut seen_queued = false;
     until("bob has them all", || {
         let now = b.transfers_now();
         seen_moving |= now.receiving > 0;
+        seen_queued |= now.queued > 0
+            && now
+                .items
+                .iter()
+                .any(|t| t.queued && names.iter().any(|n| n == &t.name));
         assert!(now.receiving <= 1, "two files moved at once: {now:?}");
         b.group_view(&gid)
             .unwrap()
@@ -761,6 +767,7 @@ async fn automatic_downloads_are_fetched_one_at_a_time() {
     })
     .await;
     assert!(seen_moving, "nothing was ever moving");
+    assert!(seen_queued, "the waiting files were never listed");
 
     a.shutdown().await;
     b.shutdown().await;
