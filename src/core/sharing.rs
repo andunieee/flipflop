@@ -1789,20 +1789,17 @@ impl Core {
                 Ok(path)
             }
             Ok(path) => {
-                // On Android this moves the file to the public Downloads folder (not folders: they
-                // stay in the app's download folder).
-                let path = if offer.kind == FOLDER_KIND {
-                    path
-                } else {
-                    match tokio::task::spawn_blocking(move || crate::platform::file_received(&path))
-                        .await
-                    {
-                        Ok(path) => path,
-                        Err(err) => {
-                            self.end_transfer(gid, fid);
-                            self.publish_group(gid, false);
-                            return Err(err.into());
-                        }
+                // On Android this moves it to the public Downloads folder.
+                let path = match tokio::task::spawn_blocking(move || {
+                    crate::platform::file_received(&path)
+                })
+                .await
+                {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.end_transfer(gid, fid);
+                        self.publish_group(gid, false);
+                        return Err(err.into());
                     }
                 };
                 self.with_state(|st| {

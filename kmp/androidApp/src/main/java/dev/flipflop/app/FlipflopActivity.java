@@ -371,24 +371,15 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
 
     /**
      * Called from Rust when a download finished in app storage: move it to the public
-     * Download/flipflop folder. Returns the file's new location, or "" if it stays where it is.
+     * Download/flipflop folder. Returns the file's or folder's new location, or "" if it stays where it is.
      */
     public String saveToDownloads(String path) {
         File src = new File(path);
+        if (src.isDirectory()) return saveFolderToDownloads(src);
         try {
             if (Build.VERSION.SDK_INT >= 29) {
-                String mime = MimeTypeMap.getSingleton()
-                        .getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(Uri.encode(src.getName())));
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Downloads.DISPLAY_NAME, src.getName());
-                values.put(MediaStore.Downloads.MIME_TYPE, mime == null ? "application/octet-stream" : mime);
-                values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/flipflop");
                 ContentResolver cr = getContentResolver();
-                Uri uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                if (uri == null) return "";
-                try (InputStream in = new FileInputStream(src); OutputStream out = cr.openOutputStream(uri)) {
-                    copy(in, out);
-                }
+                Uri uri = insertDownload(src, Environment.DIRECTORY_DOWNLOADS + "/flipflop");
                 String name = src.getName();
                 try (Cursor c = cr.query(uri, new String[]{MediaStore.Downloads.DISPLAY_NAME}, null, null, null)) {
                     if (c != null && c.moveToFirst()) name = c.getString(0);
@@ -409,6 +400,85 @@ public class FlipflopActivity extends androidx.activity.ComponentActivity {
             Log.w(TAG, "could not save " + path + " to Downloads", e);
             return "";
         }
+    }
+
+    /** A new entry in the public Downloads under relativePath, with the bytes of src. */
+    private Uri insertDownload(File src, String relativePath) throws java.io.IOException {
+        String mime = MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(MimeTypeMap.getFileExtensionFromUrl(Uri.encode(src.getName())));
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Downloads.DISPLAY_NAME, src.getName());
+        values.put(MediaStore.Downloads.MIME_TYPE, mime == null ? "application/octet-stream" : mime);
+        values.put(MediaStore.Downloads.RELATIVE_PATH, relativePath);
+        ContentResolver cr = getContentResolver();
+        Uri uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+        if (uri == null) throw new java.io.IOException("no entry for " + src.getName());
+        try (InputStream in = new FileInputStream(src); OutputStream out = cr.openOutputStream(uri)) {
+            copy(in, out);
+        } catch (Exception e) {
+            cr.delete(uri, null, null);
+            throw e;
+        }
+        return uri;
+    }
+
+    /** All or nothing: if anything fails, what was copied goes away and the folder stays where it is. */
+    private String saveFolderToDownloads(File src) {
+        File base = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "flipflop");
+        File dest = new File(base, src.getName());
+        for (int n = 2; folderTaken(dest); n++) dest = new File(base, src.getName() + " (" + n + ")");
+        List<Uri> inserted = new ArrayList<>();
+        try {
+            copyFolder(src, dest, Environment.DIRECTORY_DOWNLOADS + "/flipflop/" + dest.getName(), inserted);
+        } catch (Exception e) {
+            Log.w(TAG, "could not save " + src + " to Downloads", e);
+            for (Uri uri : inserted) getContentResolver().delete(uri, null, null);
+            deleteTree(dest);
+            return "";
+        }
+        deleteTree(src);
+        return dest.getAbsolutePath();
+    }
+
+    /** On Android 10 the file system does not show us the public folders; MediaStore shows what we saved there. */
+    private boolean folderTaken(File folder) {
+        if (Build.VERSION.SDK_INT != 29) return folder.exists();
+        String name = folder.getName().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        try (Cursor c = getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                new String[]{MediaStore.Downloads._ID}, MediaStore.Downloads.RELATIVE_PATH + " LIKE ? ESCAPE '\\'",
+                new String[]{Environment.DIRECTORY_DOWNLOADS + "/flipflop/" + name + "/%"}, null)) {
+            return c != null && c.moveToFirst();
+        }
+    }
+
+    /**
+     * Android 10 only lets us into the public folders through MediaStore (where empty folders cannot
+     * exist). Elsewhere, plain files: MediaStore would rename some (".env" to "_.env"), and then the
+     * folder could not be rehosted, its hash having changed.
+     */
+    private void copyFolder(File from, File to, String relativePath, List<Uri> inserted) throws java.io.IOException {
+        boolean mediaStore = Build.VERSION.SDK_INT == 29;
+        File[] children = from.listFiles();
+        if (children == null) throw new java.io.IOException("cannot read " + from);
+        if (!mediaStore && !to.isDirectory() && !to.mkdirs()) throw new java.io.IOException("cannot create " + to);
+        for (File child : children) {
+            if (child.isDirectory()) {
+                copyFolder(child, new File(to, child.getName()), relativePath + "/" + child.getName(), inserted);
+            } else if (mediaStore) {
+                inserted.add(insertDownload(child, relativePath));
+            } else {
+                try (InputStream in = new FileInputStream(child);
+                     OutputStream out = new FileOutputStream(new File(to, child.getName()))) {
+                    copy(in, out);
+                }
+            }
+        }
+    }
+
+    private static void deleteTree(File file) {
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) deleteTree(child);
+        file.delete();
     }
 
     // ---- transfers ------------------------------------------------------------------------

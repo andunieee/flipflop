@@ -1496,7 +1496,7 @@ fn build_state(shared: &Shared) -> UiState {
                 audience: if f.audience == 0 {
                     String::new()
                 } else {
-                    format!("{} of {} have it", f.downloaded_by.len(), f.audience)
+                    format!("{} of {} got it", f.downloaded_by.len(), f.audience)
                 },
                 audience_tone: match f.downloaded_by.len() {
                     0 => "error",

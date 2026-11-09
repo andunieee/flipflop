@@ -155,7 +155,7 @@ mod android {
         });
     }
 
-    /// Move a downloaded file into the public Downloads folder; returns where it ended up.
+    /// Move a downloaded file or folder into the public Downloads folder; returns where it ended up.
     pub fn file_received(path: &std::path::Path) -> std::path::PathBuf {
         let moved = with_activity(|env, a| {
             let arg = env.new_string(path.to_string_lossy())?;
@@ -348,7 +348,7 @@ pub fn ensure_ble_permission() -> bool {
 #[cfg(not(target_os = "android"))]
 pub fn show_transfers(_: &crate::core::TransfersNow) {}
 
-/// A downloaded file is complete. On Android it is moved into the public Downloads folder; the
+/// A downloaded file or folder is complete. On Android it is moved into the public Downloads folder; the
 /// returned path is where it ended up.
 #[cfg(not(target_os = "android"))]
 pub fn file_received(path: &std::path::Path) -> std::path::PathBuf {

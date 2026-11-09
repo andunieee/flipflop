@@ -912,7 +912,7 @@ fn file_line(f: &crate::core::FileView) -> String {
         "stopped".to_string()
     } else if f.mine {
         format!(
-            "sharing, {} of {} have it",
+            "sharing, {} of {} got it",
             f.downloaded_by.len(),
             f.audience
         )
