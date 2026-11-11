@@ -857,7 +857,7 @@ fn guest_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
         items.push(match g.web_url {
             Some(url) => guest_address(
                 "Anywhere",
-                "Opens the flipflop page on the web, uses Iroh to connect to this device.",
+                "Opens the FlipFlop page on the web, uses Iroh to connect to this device.",
                 url,
                 nav,
             ),

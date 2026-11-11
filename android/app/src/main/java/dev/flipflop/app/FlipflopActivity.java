@@ -280,7 +280,7 @@ public class FlipflopActivity extends android.app.NativeActivity {
     public void startQrScan() {
         runOnUiThread(() -> new IntentIntegrator(this)
                 .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                .setPrompt("Scan a flipflop QR code")
+                .setPrompt("Scan a FlipFlop QR code")
                 .setBeepEnabled(false)
                 .setOrientationLocked(false)
                 .initiateScan());

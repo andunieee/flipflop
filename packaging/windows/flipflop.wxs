@@ -3,11 +3,11 @@
      Start menu entry and an uninstaller. Built by packaging/windows/msi.ps1. The UpgradeCode is the one the jpackage
      installers used, so this one upgrades them. -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="flipflop" Language="1033" Version="$(var.Version)" Manufacturer="andunie"
+  <Product Id="*" Name="FlipFlop" Language="1033" Version="$(var.Version)" Manufacturer="andunie"
            UpgradeCode="8f3c6a52-5b1e-4f0c-9a57-4d2e7b1c0f31">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited"
              Description="Share files, texts and a scratchpad with your devices, peer to peer" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of flipflop is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of FlipFlop is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <Icon Id="flipflop.ico" SourceFile="$(var.Icon)" />
     <Property Id="ARPPRODUCTICON" Value="flipflop.ico" />
@@ -29,7 +29,7 @@
     </DirectoryRef>
     <DirectoryRef Id="ProgramMenuFolder">
       <Component Id="StartMenu" Guid="b7a2d4c9-6e18-4f3b-8a05-9c1e7d3f2b64">
-        <Shortcut Id="StartMenuShortcut" Name="flipflop" Description="Share files, texts and a scratchpad with your devices"
+        <Shortcut Id="StartMenuShortcut" Name="FlipFlop" Description="Share files, texts and a scratchpad with your devices"
                   Target="[INSTALLDIR]flipflop.exe" WorkingDirectory="INSTALLDIR" Icon="flipflop.ico" />
         <RegistryValue Root="HKCU" Key="Software\flipflop" Name="shortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>

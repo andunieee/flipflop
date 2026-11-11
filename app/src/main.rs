@@ -44,7 +44,7 @@ fn main() {
     let backend = Backend::start(rt.handle().clone(), data_dir());
     launch(launch_app(backend.clone(), |window| {
         window
-            .with_title("flipflop")
+            .with_title("FlipFlop")
             .with_app_id("dev.flipflop.app")
             .with_icon(LaunchConfig::window_icon(ICON))
             .with_size(960., 660.)

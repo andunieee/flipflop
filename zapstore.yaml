@@ -1,9 +1,9 @@
 # Zapstore listing for the Android app; the release workflow publishes the .apk of each GitHub release with zsp.
 repository: https://github.com/andunieee/flipflop
-name: flipflop
+name: FlipFlop
 summary: Share files, texts and a scratchpad with your devices, peer to peer
 description: |
-  flipflop connects your devices directly, over the local network, Bluetooth or the internet, with no account and no server in the middle. Make groups, offer files, paste texts and edit a shared scratchpad. Guests can join a group from a browser with a link.
+  FlipFlop connects your devices directly, over the local network, Bluetooth or the internet, with no account and no server in the middle. Make groups, offer files, paste texts and edit a shared scratchpad. Guests can join a group from a browser with a link.
 license: AGPL-3.0-or-later
 website: https://github.com/andunieee/flipflop
 icon: packaging/icons/512.png

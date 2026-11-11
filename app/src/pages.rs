@@ -430,7 +430,7 @@ impl Component for PeersPage {
         let mut items: Vec<Element> = m.peers.iter().map(|p| peer_card(p, nav)).collect();
         if items.is_empty() {
             items.push(
-                hint_center("No one around yet. Other flipflop devices on this network or in Bluetooth range show up here.")
+                hint_center("No one around yet. Other FlipFlop devices on this network or in Bluetooth range show up here.")
                     .into_element(),
             );
         }
@@ -537,7 +537,7 @@ impl Component for ScanView {
             .spacing(Dim::SPACE3)
             .content(Content::flex())
             .child(
-                txt("Point the camera at a flipflop code", d.font_md(), c.text_strong, 400)
+                txt("Point the camera at a FlipFlop code", d.font_md(), c.text_strong, 400)
                     .width(Size::fill())
                     .text_align(TextAlign::Center),
             )

@@ -22,8 +22,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>flipflop</string>
-    <key>CFBundleDisplayName</key><string>flipflop</string>
+    <key>CFBundleName</key><string>FlipFlop</string>
+    <key>CFBundleDisplayName</key><string>FlipFlop</string>
     <key>CFBundleIdentifier</key><string>dev.flipflop.app</string>
     <key>CFBundleExecutable</key><string>flipflop</string>
     <key>CFBundleIconFile</key><string>flipflop.icns</string>
@@ -33,7 +33,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSCameraUsageDescription</key><string>To scan another device's flipflop code.</string>
+    <key>NSCameraUsageDescription</key><string>To scan another device's FlipFlop code.</string>
     <key>NSBluetoothAlwaysUsageDescription</key><string>To find and reach your devices nearby over Bluetooth.</string>
     <key>NSLocalNetworkUsageDescription</key><string>To find and reach your devices on this network.</string>
     <key>NSBonjourServices</key><array><string>_flipflop._udp</string></array>

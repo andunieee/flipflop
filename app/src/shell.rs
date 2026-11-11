@@ -126,7 +126,7 @@ fn brand(logo: f32, status: impl IntoElement) -> Rect {
         .child(
             rect()
                 .spacing(1.)
-                .child(txt("flipflop", d.font_lg(), c.text_strong, 700))
+                .child(txt("FlipFlop", d.font_lg(), c.text_strong, 700))
                 .child(status),
         )
 }

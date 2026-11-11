@@ -149,7 +149,7 @@ public class TransferService extends Service {
                 .addCategory(Intent.CATEGORY_LAUNCHER);
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(wanted() ? title : "flipflop")
+                .setContentTitle(wanted() ? title : "FlipFlop")
                 .setContentText(wanted() ? text : "Connected, waiting for files")
                 .setContentIntent(PendingIntent.getActivity(this, 0, open,
                         PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
