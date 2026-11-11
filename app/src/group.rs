@@ -569,7 +569,10 @@ impl Component for InfoTab {
         let mut items: Vec<Element> = vec![];
         match peer {
             Some(peer) => items.extend(peer_section(peer, &m, nav)),
-            None => items.extend(members_section(info, &m, nav)),
+            None => {
+                items.extend(rename_section(info, nav));
+                items.extend(members_section(info, &m, nav));
+            }
         }
         items.extend(tabs_section(&view, &self.gid, nav));
         items.extend(device_section(info, nav));
@@ -647,6 +650,38 @@ fn peer_section(peer: &Peer, m: &Model, nav: Nav) -> Vec<Element> {
                     "No group to invite them to: create a group first, or they are in all of yours already.",
                 )))
             })
+            .into_element(),
+    ]
+}
+
+fn rename_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
+    let (c, d) = look();
+    let edit = Edit {
+        kind: EditKind::Group,
+        id: info.id.clone(),
+        original: info.haiku.clone(),
+        text: info.alias.clone().unwrap_or_default(),
+    };
+    vec![
+        overline("GROUP").into_element(),
+        card()
+            .child(
+                card_body(Dim::SPACE3)
+                    .child(
+                        rect()
+                            .width(Size::fill())
+                            .spacing(3.)
+                            .child(txt(group_title(info), d.font_lg(), c.text_strong, 650).elide())
+                            .maybe(info.alias.is_some(), |el| {
+                                el.child(txt(info.haiku.clone(), d.font_xs(), c.text_faint, 400).elide())
+                            }),
+                    )
+                    .child(
+                        Btn::secondary("Rename")
+                            .icon(Icon::Edit)
+                            .on_press(move |_| nav.edit(Some(edit.clone()))),
+                    ),
+            )
             .into_element(),
     ]
 }
@@ -879,43 +914,37 @@ fn leave_section(info: &GroupInfo, nav: Nav, confirm: &mut State<bool>) -> Vec<E
     let mut confirm = *confirm;
     let guest = info.guest.is_some();
     let gid = info.id.clone();
-    let edit = Edit {
-        kind: EditKind::Group,
-        id: info.id.clone(),
-        original: info.haiku.clone(),
-        text: info.alias.clone().unwrap_or_default(),
-    };
     let closing = if guest { "Close link" } else { "Leave group" };
     vec![
-        rect()
-            .horizontal()
-            .spacing(Dim::SPACE2)
-            .child(Btn::secondary("Rename").icon(Icon::Edit).on_press(move |_| nav.edit(Some(edit.clone()))))
-            // Leaving needs a second press.
+        overline("LEAVE").into_element(),
+        card()
             .child(
-                Btn::danger(if *confirm.read() { "Confirm" } else { closing })
-                    .icon(Icon::Trash)
-                    .on_press(move |_| {
-                        if !*confirm.peek() {
-                            confirm.set(true);
-                            return;
-                        }
-                        confirm.set(false);
-                        let gid = gid.clone();
-                        if guest {
-                            nav.backend().run(move |core| Ok(core.disable_guest_link(&gid)));
-                        } else {
-                            nav.close_group();
-                            nav.backend().run(move |core| Ok(core.delete_group(&gid)));
-                        }
-                    }),
+                card_body(Dim::SPACE2)
+                    .child(hint(if guest {
+                        "Closing the link disconnects its guests and keeps the group, with its members and files."
+                    } else {
+                        "Leaving removes the group from this device only. Downloaded files are not affected."
+                    }))
+                    // Leaving needs a second press.
+                    .child(
+                        Btn::danger(if *confirm.read() { "Confirm" } else { closing })
+                            .icon(Icon::Trash)
+                            .on_press(move |_| {
+                                if !*confirm.peek() {
+                                    confirm.set(true);
+                                    return;
+                                }
+                                confirm.set(false);
+                                let gid = gid.clone();
+                                if guest {
+                                    nav.backend().run(move |core| Ok(core.disable_guest_link(&gid)));
+                                } else {
+                                    nav.close_group();
+                                    nav.backend().run(move |core| Ok(core.delete_group(&gid)));
+                                }
+                            }),
+                    ),
             )
             .into_element(),
-        hint(if guest {
-            "Closing the link disconnects its guests and keeps the group, with its members and files."
-        } else {
-            "Leaving removes the group from this device only. Downloaded files are not affected."
-        })
-        .into_element(),
     ]
 }
