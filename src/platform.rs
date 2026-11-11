@@ -313,6 +313,14 @@ mod android {
         call_string("deliverShared", group);
     }
 
+    /// Dark system bar icons (on a light UI) or light ones.
+    pub fn set_light_bars(light: bool) {
+        with_activity(|env, a| {
+            env.call_method(a, "setLightBars", "(Z)V", &[JValue::Bool(light.into())])
+                .map(|_| ())
+        });
+    }
+
     /// Nothing left to go back to: leave the app the way Back leaves any other.
     pub fn move_to_back() {
         with_activity(|env, a| {

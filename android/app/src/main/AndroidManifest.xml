@@ -41,7 +41,7 @@
         <activity
             android:name=".FlipflopActivity"
             android:exported="true"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|density|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|navigation|touchscreen|mcc|mnc|grammaticalGender"
             android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask">
             <!-- The UI and the node: libflipflop_app (crate app/), started by NativeActivity. -->

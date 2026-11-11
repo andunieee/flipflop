@@ -198,6 +198,16 @@ public class FlipflopActivity extends android.app.NativeActivity {
         });
     }
 
+    /** Called from Rust: dark status and navigation bar icons on a light UI, light ones on a dark UI. */
+    public void setLightBars(boolean light) {
+        runOnUiThread(() -> {
+            androidx.core.view.WindowInsetsControllerCompat bars =
+                    WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+            bars.setAppearanceLightStatusBars(light);
+            bars.setAppearanceLightNavigationBars(light);
+        });
+    }
+
     private static View findSurface(View view) {
         if (view instanceof SurfaceView) return view;
         if (view instanceof ViewGroup) {
@@ -250,10 +260,17 @@ public class FlipflopActivity extends android.app.NativeActivity {
         });
     }
 
+    /**
+     * The UI's event loop cannot be started again in this process (winit allows one per process), and NativeActivity
+     * waits here for it to end, which it never does: the app would hang. So the activity's end is the process's (the
+     * manifest handles every configuration change, so that is only when the user or the system closes it). The next
+     * launch starts afresh.
+     */
     @Override
     protected void onDestroy() {
         stopBle();
         if (multicastLock != null && multicastLock.isHeld()) multicastLock.release();
+        android.os.Process.killProcess(android.os.Process.myPid());
         super.onDestroy();
     }
 

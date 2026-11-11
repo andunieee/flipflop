@@ -118,15 +118,18 @@ impl Component for PadEditor {
                 dragging.set_if_modified(true);
             }
             movement.reset();
-            editable.process_event(EditableEvent::Down {
-                location: e.element_location(),
-                editor_line: EditorLine::SingleParagraph,
-                holder: &holder.read(),
-            });
+            // An empty pad shows its placeholder in the paragraph: no position in it is one in the text.
+            if editable.editor().peek().rope().len_chars() > 0 {
+                editable.process_event(EditableEvent::Down {
+                    location: e.element_location(),
+                    editor_line: EditorLine::SingleParagraph,
+                    holder: &holder.read(),
+                });
+            }
             a11y_id.request_focus();
         };
         let on_global_pointer_move = move |e: Event<PointerEventData>| {
-            if a11y_id.is_focused() && *dragging.read() {
+            if a11y_id.is_focused() && *dragging.read() && editable.editor().peek().rope().len_chars() > 0 {
                 let location = (e.global_location() - area.read().min().to_f64()).to_point();
                 editable.process_event(EditableEvent::Move {
                     location,

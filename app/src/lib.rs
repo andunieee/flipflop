@@ -60,11 +60,8 @@ pub fn app() -> impl IntoElement {
     // Dark status bar icons on the light theme, light ones on the dark.
     #[cfg(target_os = "android")]
     use_side_effect(move || {
-        use freya::android::AndroidExt;
         let dark = look_state.read().palette.dark;
-        if let Err(err) = Platform::get().set_status_bar_light(!dark) {
-            tracing::warn!("status bar: {err:?}");
-        }
+        flipflop::platform::set_light_bars(!dark);
     });
 
     use_hook(move || {
