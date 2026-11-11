@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // blew's BLE layer is Kotlin (copied from the crate by build-native.sh); the app itself is Java.
@@ -40,23 +42,40 @@ android {
         ndk { abiFilters += abis }
     }
 
-    // Release signing: FLIPFLOP_KEYSTORE (path), FLIPFLOP_KEYSTORE_PASSWORD and optionally
-    // FLIPFLOP_KEY_PASSWORD (the key alias is always "flipflop"), as environment variables or gradle properties. Without them the release APK is
-    // signed with the debug key, so it installs but cannot be updated from a build signed by someone else.
-    // CI exports unset secrets as empty strings, so treat blank as missing: otherwise a missing
-    // FLIPFLOP_KEY_PASSWORD would become "" and fail with "Given final block not properly padded".
-    fun secret(name: String) =
+    // Release signing, in order of precedence:
+    //   1. ANDROID_KEYSTORE (path), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD, as
+    //      environment variables or gradle properties. CI sets these from the ANDROID_KEYSTORE_* secrets (release.yml).
+    //   2. The signing properties file (storeFile, storePassword, keyAlias, keyPassword): android/keystore.properties
+    //      if it exists, else the shared ~/android-release/signing.properties. Set ANDROID_SIGNING_PROPERTIES to use
+    //      another path. This is what makes local release builds use the stable key without exporting anything.
+    //   3. The older FLIPFLOP_KEYSTORE* names, for setups that predate the shared key.
+    // Without any of them the release APK is signed with the debug key, so it installs but cannot be updated from a
+    // build signed by someone else. CI exports unset secrets as empty strings, so treat blank as missing: otherwise a
+    // missing ANDROID_KEY_PASSWORD would become "" and fail with "Given final block not properly padded".
+    fun secret(vararg names: String) = names.firstNotNullOfOrNull { name ->
         (System.getenv(name) ?: findProperty(name) as String?)?.takeIf { it.isNotBlank() }
-    val releaseKeystore = secret("FLIPFLOP_KEYSTORE")
+    }
+    val signingProperties = secret("ANDROID_SIGNING_PROPERTIES")?.let { file(it) }
+        ?: listOf(
+            rootProject.file("keystore.properties"),
+            file(System.getProperty("user.home")).resolve("android-release/signing.properties"),
+        ).firstOrNull { it.isFile }
+    val shared = signingProperties?.takeIf { it.isFile }?.let { propertiesFile ->
+        Properties().apply { propertiesFile.inputStream().use { load(it) } }
+    }
+    val releaseKeystore = secret("ANDROID_KEYSTORE", "FLIPFLOP_KEYSTORE") ?: shared?.getProperty("storeFile")
     if (releaseKeystore != null) {
-        val storePassword = secret("FLIPFLOP_KEYSTORE_PASSWORD")
-            ?: error("FLIPFLOP_KEYSTORE is set but FLIPFLOP_KEYSTORE_PASSWORD is not")
+        val storePassword = secret("ANDROID_KEYSTORE_PASSWORD", "FLIPFLOP_KEYSTORE_PASSWORD")
+            ?: shared?.getProperty("storePassword")
+            ?: error("$releaseKeystore is set but neither ANDROID_KEYSTORE_PASSWORD nor the signing properties file has the password")
         signingConfigs.create("release") {
             storeFile = file(releaseKeystore)
             this.storePassword = storePassword
-            keyAlias = "flipflop"
+            keyAlias = secret("ANDROID_KEY_ALIAS", "FLIPFLOP_KEY_ALIAS")
+                ?: shared?.getProperty("keyAlias") ?: "flipflop"
             // PKCS12 keystores use one password for the store and the key; JKS may have a separate one.
-            keyPassword = secret("FLIPFLOP_KEY_PASSWORD") ?: storePassword
+            keyPassword = secret("ANDROID_KEY_PASSWORD", "FLIPFLOP_KEY_PASSWORD")
+                ?: shared?.getProperty("keyPassword") ?: storePassword
         }
     }
     buildTypes {

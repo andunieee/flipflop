@@ -6,6 +6,7 @@ android/app/src/main/jniLibs/
 android/app/blew-kt/
 /dist/
 android/local.properties
+android/keystore.properties
 *.jks
 *.keystore
 /packaging/flatpak/flipflop.tar.gz

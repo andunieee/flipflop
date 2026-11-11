@@ -4,7 +4,7 @@ name: Release
 #   linux   : .deb, .rpm, .AppImage, .flatpak, an Arch .pkg.tar.zst and a .tar.gz of the portable app (x86_64)
 #   windows : .msi installer and a portable .zip (x86_64)
 #   macos   : .dmg (Apple Silicon, unsigned)
-#   android : .apk (signed with the FLIPFLOP_* secrets when set, with the debug key otherwise)
+#   android : .apk (signed with the ANDROID_KEYSTORE_* secrets when set, with the debug key otherwise)
 # The desktop packages are the release flipflop-gui (crate app/, the Freya UI over the core), on its own.
 # After the GitHub release, the Arch package goes to the AUR (flipflop-bin) and the .apk to Zapstore; each is skipped,
 # with a warning, until its secrets are set (see "Publishing" in the README).
@@ -223,24 +223,27 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      # A base64 of your .jks in the FLIPFLOP_KEYSTORE_B64 secret; without it the APK is signed with the debug key.
+      # The base64 of the release .jks is in ANDROID_KEYSTORE_BASE64, with ANDROID_KEYSTORE_PASSWORD,
+      # ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD; without them the APK is signed with the debug key.
       - name: Keystore
         env:
-          B64: ${{ secrets.FLIPFLOP_KEYSTORE_B64 }}
-          STORE_PASSWORD: ${{ secrets.FLIPFLOP_KEYSTORE_PASSWORD }}
+          B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           [ -n "$B64" ] || exit 0
-          printf '%s' "$B64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/flipflop.jks"
-          if ! keytool -list -keystore "$RUNNER_TEMP/flipflop.jks" -storepass "$STORE_PASSWORD" -alias flipflop >/dev/null 2>&1; then
-            echo "::error::Cannot open the release keystore with FLIPFLOP_KEYSTORE_PASSWORD (the alias must be 'flipflop'). Check that FLIPFLOP_KEYSTORE_B64 was base64-encoded from the .jks and that the password matches."
+          printf '%s' "$B64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/android-release.jks"
+          if ! keytool -list -keystore "$RUNNER_TEMP/android-release.jks" -storepass "$STORE_PASSWORD" ${KEY_ALIAS:+-alias "$KEY_ALIAS"} >/dev/null 2>&1; then
+            echo "::error::Cannot open the release keystore with ANDROID_KEYSTORE_PASSWORD. Check that ANDROID_KEYSTORE_BASE64 was base64-encoded from the .jks, that the password matches and that ANDROID_KEY_ALIAS names an entry in it."
             exit 1
           fi
-          echo "FLIPFLOP_KEYSTORE=$RUNNER_TEMP/flipflop.jks" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE=$RUNNER_TEMP/android-release.jks" >> "$GITHUB_ENV"
 
       - name: Build
         env:
-          FLIPFLOP_KEYSTORE_PASSWORD: ${{ secrets.FLIPFLOP_KEYSTORE_PASSWORD }}
-          FLIPFLOP_KEY_PASSWORD: ${{ secrets.FLIPFLOP_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
@@ -315,7 +318,7 @@ jobs:
           commit_message: "upgpkg: flipflop-bin ${{ steps.stage.outputs.version }}-1"
 
   # Publishes the release's .apk to Zapstore (zapstore.yaml). Needs ZAPSTORE_SIGN_WITH: the nsec (or a bunker:// URL)
-  # of the Nostr key that publishes it. Zapstore ties the app to its signing certificate, so set the FLIPFLOP_KEYSTORE_*
+  # of the Nostr key that publishes it. Zapstore ties the app to its signing certificate, so set the ANDROID_KEYSTORE_*
   # secrets first: a debug-signed .apk would bind it to the runner's throwaway key.
   zapstore:
     needs: release
