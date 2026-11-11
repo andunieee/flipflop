@@ -1,11 +1,11 @@
 /target
-kmp/.gradle/
-kmp/.kotlin/
-kmp/**/build/
-kmp/androidApp/src/main/jniLibs/
-kmp/androidApp/blew-kt/
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/app/src/main/jniLibs/
+android/app/blew-kt/
 /dist/
-kmp/local.properties
+android/local.properties
 *.jks
 *.keystore
 /packaging/flatpak/flipflop.tar.gz

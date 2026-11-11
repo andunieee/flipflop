@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Build flipflop-<version>-x86_64.AppImage from the Compose distributable (which already carries its own JRE
-# and the release libflipflop.so). Needs a JDK 17+ with jpackage, cargo, and appimagetool in PATH (or it is
-# downloaded). Usage: packaging/linux/appimage.sh   -> dist/
+# Build flipflop-<version>-x86_64.AppImage from the portable folder (dist/stage, see stage.sh, which this runs).
+# Needs cargo, and appimagetool in PATH (or it is downloaded). Usage: packaging/linux/appimage.sh   -> dist/
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-(cd kmp && ./gradlew :desktopApp:createDistributable)
+[ -x dist/stage/portable/flipflop/bin/flipflop-gui ] || packaging/linux/stage.sh
 
-app=kmp/desktopApp/build/compose/binaries/main/app/flipflop
+app=dist/stage/portable/flipflop
 dir=$(mktemp -d)/flipflop.AppDir
 mkdir -p "$dir/usr/lib" "$dir/usr/share/applications" "$dir/usr/share/metainfo"
 cp -r "$app" "$dir/usr/lib/flipflop"
@@ -22,7 +21,7 @@ done
 cat > "$dir/AppRun" <<'RUN'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
-exec "$HERE/usr/lib/flipflop/bin/flipflop" "$@"
+exec "$HERE/usr/lib/flipflop/bin/flipflop-gui" "$@"
 RUN
 chmod +x "$dir/AppRun"
 

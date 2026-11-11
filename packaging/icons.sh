@@ -21,7 +21,7 @@ rounded() {
         -draw "roundrectangle 0,0,$((s-1)),$((s-1)),$r,$r" \) -alpha off -compose CopyOpacity -composite "$2"
 }
 
-# Linux hicolor theme, and the 512 px one the Compose window and .deb/.rpm use
+# Linux hicolor theme (the packages, the window and `--install-desktop-entry` use these)
 for s in 16 24 32 48 64 128 256 512; do rounded $s "$out/$s.png"; done
 
 # Windows .ico (installer, exe, shortcuts)
@@ -31,10 +31,10 @@ magick "$out/16.png" "$out/24.png" "$out/32.png" "$out/48.png" "$out/64.png" "$o
 magick "$out/16.png" "$out/32.png" "$out/64.png" "$out/128.png" "$out/256.png" "$out/512.png" packaging/macos/flipflop.icns
 
 # the logo inside the app
-rounded 256 kmp/shared/src/commonMain/composeResources/drawable/logo.png
+rounded 256 app/icons/logo.png
 
 # Android: legacy launcher icons, plus an adaptive icon (cream background colour + the shoes on transparent)
-res=kmp/androidApp/src/main/res
+res=android/app/src/main/res
 mkdir -p "$res/mipmap-anydpi-v26" "$res/values"
 for d in mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxhdpi:192:432; do
     IFS=: read -r n legacy fg <<<"$d"

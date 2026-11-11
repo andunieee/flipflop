@@ -1,0 +1,41 @@
+[package]
+name = "flipflop-app"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+# The Android app loads this (`android.app.lib_name`, `System.loadLibrary`); the desktop links it into the binary.
+[lib]
+name = "flipflop_app"
+crate-type = ["cdylib", "rlib"]
+
+# The desktop app. `flipflop gui` looks for it in PATH or next to the command line client.
+[[bin]]
+name = "flipflop-gui"
+path = "src/main.rs"
+
+[dependencies]
+flipflop = { path = ".." }
+freya = { git = "https://github.com/marc2332/freya", rev = "e506b09328e52cc0ab10d0adbef7dbd3ce0f063e", features = ["radio", "engine"] }
+freya-winit = { git = "https://github.com/marc2332/freya", rev = "e506b09328e52cc0ab10d0adbef7dbd3ce0f063e" }
+iroh = "1.4.1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+anyhow = "1"
+tracing = "0.1"
+bytes = "1"
+
+[dev-dependencies]
+freya-testing = { git = "https://github.com/marc2332/freya", rev = "e506b09328e52cc0ab10d0adbef7dbd3ce0f063e" }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+nokhwa = { version = "0.10", default-features = false, features = ["input-native"] }
+rfd = "0.15"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+android_logger = "0.15"
+log = "0.4"
+winit = { version = "0.30.12", features = ["android-native-activity", "rwh_06"] }

@@ -5,7 +5,7 @@ name: Release
 #   windows : .msi installer and a portable .zip (x86_64)
 #   macos   : .dmg (Apple Silicon, unsigned)
 #   android : .apk (signed with the FLIPFLOP_* secrets when set, with the debug key otherwise)
-# The desktop packages bundle their own Java runtime and the release libflipflop.
+# The desktop packages are the release flipflop-gui (crate app/, the Freya UI over the core), on its own.
 # After the GitHub release, the Arch package goes to the AUR (flipflop-bin) and the .apk to Zapstore; each is skipped,
 # with a warning, until its secrets are set (see "Publishing" in the README).
 
@@ -42,34 +42,30 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libv4l-dev libclang-dev libssl-dev libwayland-dev pkg-config rpm fakeroot imagemagick
+            libdbus-1-dev libv4l-dev libclang-dev libssl-dev libwayland-dev pkg-config rpm fakeroot imagemagick \
+            libfontconfig1-dev libfreetype-dev libgl-dev libegl-dev
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-home-cache-cleanup: true
 
       - name: Package
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
-          mkdir -p dist
-          (cd kmp && ./gradlew :desktopApp:packageDeb :desktopApp:packageRpm :desktopApp:createDistributable)
-          cp kmp/desktopApp/build/compose/binaries/main/deb/*.deb "dist/flipflop-linux-amd64-v${version}.deb"
-          cp kmp/desktopApp/build/compose/binaries/main/rpm/*.rpm "dist/flipflop-linux-x86_64-v${version}.rpm"
-          tar -czf "dist/flipflop-linux-x86_64-v${version}.tar.gz" -C kmp/desktopApp/build/compose/binaries/main/app flipflop
+          packaging/linux/stage.sh
+          packaging/linux/deb.sh
+          packaging/linux/rpm.sh
           packaging/linux/appimage.sh
-          mv "dist/flipflop-${version}-x86_64.AppImage" "dist/flipflop-linux-x86_64-v${version}.AppImage"
+          mkdir -p out
+          mv "dist/flipflop_${version}_amd64.deb" "out/flipflop-linux-amd64-v${version}.deb"
+          mv dist/flipflop-*.x86_64.rpm "out/flipflop-linux-x86_64-v${version}.rpm"
+          mv "dist/flipflop-${version}-x86_64.AppImage" "out/flipflop-linux-x86_64-v${version}.AppImage"
+          tar -czf "out/flipflop-linux-x86_64-v${version}.tar.gz" -C dist/stage/portable flipflop
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: dist/
+          path: out/
 
   # The portable app from the linux job, in the freedesktop runtime (packaging/flatpak).
   flatpak:
@@ -150,20 +146,14 @@ jobs:
   windows:
     name: windows (x86_64)
     runs-on: windows-latest
-    # Fail instead of hanging for GitHub's 6-hour job limit (bundleNative used to deadlock).
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@v4
 
-      # jpackage builds .msi files with WiX 3.
+      # packaging/windows/flipflop.wxs is a WiX 3 installer.
       - name: Install WiX
         shell: pwsh
         run: |
@@ -175,15 +165,15 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
-          mkdir -p dist
-          (cd kmp && ./gradlew :desktopApp:packageMsi :desktopApp:createDistributable)
-          cp kmp/desktopApp/build/compose/binaries/main/msi/*.msi "dist/flipflop-windows-x64-setup-v${version}.msi"
-          powershell -NoProfile -Command "Compress-Archive -Force -Path kmp/desktopApp/build/compose/binaries/main/app/flipflop -DestinationPath 'dist/flipflop-windows-x64-v${version}.zip'"
+          powershell -NoProfile -File packaging/windows/msi.ps1
+          mkdir -p out
+          mv "dist/flipflop-${version}.msi" "out/flipflop-windows-x64-setup-v${version}.msi"
+          powershell -NoProfile -Command "Compress-Archive -Force -Path dist/flipflop -DestinationPath 'out/flipflop-windows-x64-v${version}.zip'"
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/
+          path: out/
 
   macos:
     name: macos (arm64)
@@ -193,38 +183,25 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@v4
 
       - name: Package
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
-          mkdir -p dist
-          (cd kmp && ./gradlew :desktopApp:packageDmg)
-          cp kmp/desktopApp/build/compose/binaries/main/dmg/*.dmg "dist/flipflop-macos-arm64-v${version}.dmg"
+          packaging/macos/dmg.sh
+          mkdir -p out
+          mv "dist/flipflop-${version}.dmg" "out/flipflop-macos-arm64-v${version}.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: dist/
+          path: out/
 
   android:
     name: android
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      # generateBindings builds the library for the host to read its UniFFI metadata, so the host-only
-      # desktop dependencies have to build here too.
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libdbus-1-dev libv4l-dev libclang-dev libwayland-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -233,6 +210,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-ndk
+      # Gradle packages the APK (the UI and the node are libflipflop_app, built by cargo-ndk).
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -243,7 +221,7 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
-          echo "sdk.dir=$ANDROID_HOME" > kmp/local.properties
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       # A base64 of your .jks in the FLIPFLOP_KEYSTORE_B64 secret; without it the APK is signed with the debug key.
       - name: Keystore
@@ -266,9 +244,9 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
-          (cd kmp && ./gradlew :androidApp:assembleRelease -Pprofile=release -Pabis=arm64-v8a,armeabi-v7a,x86_64)
+          (cd android && ./gradlew :app:assembleRelease -Pprofile=release -Pabis=arm64-v8a,armeabi-v7a,x86_64)
           mkdir -p dist
-          cp kmp/androidApp/build/outputs/apk/release/*.apk "dist/flipflop-android-v${version}.apk"
+          cp android/app/build/outputs/apk/release/*.apk "dist/flipflop-android-v${version}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -292,9 +270,7 @@ jobs:
         run: |
           FLAT=$(mktemp -d); NOTES=$(mktemp); cp -v -r dist/*/* "$FLAT"/
           cat > "$NOTES" <<'EOF'
-          Every desktop package bundles its own Java runtime.
-
-          - **linux**: `.flatpak` (`flatpak install --user flipflop-*.flatpak`), `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE), `.pkg.tar.zst` (Arch, or `flipflop-bin` from the AUR), `.AppImage` (any distro, needs FUSE: or run it with `--appimage-extract-and-run`; `--install-desktop-entry` adds it to the menu) or `.tar.gz` (unpack and run `flipflop/bin/flipflop`). Bluetooth needs BlueZ.
+          - **linux**: `.flatpak` (`flatpak install --user flipflop-*.flatpak`), `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE), `.pkg.tar.zst` (Arch, or `flipflop-bin` from the AUR), `.AppImage` (any distro, needs FUSE: or run it with `--appimage-extract-and-run`; `--install-desktop-entry` adds it to the menu) or `.tar.gz` (unpack and run `flipflop/bin/flipflop-gui`). Bluetooth needs BlueZ.
           - **windows**: the `-setup-` `.msi` (per user, no admin rights), or extract the `.zip` and run `flipflop\flipflop.exe`. Unsigned: SmartScreen asks "Run anyway".
           - **macos**: Apple Silicon `.dmg`, unsigned: first launch right-click > Open, or `xattr -dr com.apple.quarantine /Applications/flipflop.app`.
           - **android**: the `.apk` (Android 7+), or from [Zapstore](https://zapstore.dev). Allow installing from unknown sources.

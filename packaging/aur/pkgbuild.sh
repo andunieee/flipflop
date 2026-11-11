@@ -13,27 +13,20 @@ pkgdesc="Share files, texts and a scratchpad with your devices, peer to peer"
 arch=('x86_64')
 url="https://github.com/andunieee/flipflop"
 license=('AGPL-3.0-or-later')
-depends=('dbus' 'wayland' 'libxtst' 'libxrender' 'libxi' 'fontconfig' 'freetype2')
-optdepends=('bluez: Bluetooth discovery and transport')
-# the bundled Java runtime is shipped as it is
+depends=('gcc-libs' 'dbus' 'fontconfig' 'freetype2' 'libglvnd' 'libxkbcommon')
+optdepends=('bluez: Bluetooth discovery and transport'
+            'wayland: running on Wayland'
+            'libxcursor: running on X11'
+            'libxrandr: running on X11'
+            'libxi: running on X11')
+# already stripped by the release profile
 options=('!strip' '!debug')
 install=flipflop-bin.install
 source=("flipflop-\${pkgver}.deb::https://github.com/andunieee/flipflop/releases/download/v\${pkgver}/flipflop-linux-amd64-v\${pkgver}.deb")
 sha256sums=('${sha}')
 
 package() {
+  # /opt/flipflop, flipflop-gui in /usr/bin (\`flipflop\` is the command line client's name), the menu entry and icons
   bsdtar -xOf "flipflop-\${pkgver}.deb" 'data.tar.*' | bsdtar -xf - -C "\${pkgdir}"
-
-  # jpackage's .deb installs its menu entry from a postinst script; ship it as a file instead
-  local entry
-  for entry in "\${pkgdir}"/opt/flipflop/lib/*.desktop; do
-    install -Dm644 "\${entry}" "\${pkgdir}/usr/share/applications/flipflop.desktop"
-  done
-  grep -q '^StartupWMClass=' "\${pkgdir}/usr/share/applications/flipflop.desktop" \\
-    || echo 'StartupWMClass=dev-flipflop-desktop-MainKt' >> "\${pkgdir}/usr/share/applications/flipflop.desktop"
-
-  # \`flipflop\` is the command line client's name, so the app goes in PATH as flipflop-gui (as \`flipflop gui\` expects)
-  install -d "\${pkgdir}/usr/bin"
-  ln -s /opt/flipflop/bin/flipflop "\${pkgdir}/usr/bin/flipflop-gui"
 }
 PKGBUILD

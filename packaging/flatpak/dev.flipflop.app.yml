@@ -1,7 +1,6 @@
-# The Flatpak repackages the portable app (the createDistributable folder, with its own Java runtime and the release
-# libflipflop) rather than building it: Gradle and cargo cannot run offline in flatpak-builder without vendoring every
-# dependency. `just flatpak` puts that folder at packaging/flatpak/flipflop.tar.gz and builds the bundle; so does the
-# release workflow.
+# The Flatpak repackages the portable app (packaging/linux/stage.sh: the release flipflop-gui) rather than building
+# it: cargo cannot run offline in flatpak-builder without vendoring every dependency. `just flatpak` puts that folder
+# at packaging/flatpak/flipflop.tar.gz and builds the bundle; so does the release workflow.
 app-id: dev.flipflop.app
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
@@ -10,9 +9,9 @@ command: flipflop
 finish-args:
   - --share=ipc
   - --share=network # iroh, and mDNS on the LAN
-  - --socket=x11 # AWT has no Wayland backend
-  - --socket=wayland # the clipboard (arboard)
-  - --device=all # the webcam, for QR codes
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=all # the GPU, and the webcam for QR codes
   - --allow=bluetooth
   - --system-talk-name=org.bluez
   # files to offer can be anywhere; downloads go to ~/Downloads/flipflop
@@ -22,7 +21,7 @@ finish-args:
 modules:
   - name: flipflop
     buildsystem: simple
-    # the bundled Java runtime is shipped as it is
+    # already stripped by the release profile
     build-options:
       strip: false
       no-debuginfo: true

@@ -2,7 +2,7 @@
 
 # flipflop
 
-Rust peer-to-peer app (desktop and Android) with a Kotlin Multiplatform (Compose) UI. Peers connect with [iroh](https://iroh.computer).
+Rust peer-to-peer app (desktop and Android) with a [Freya](https://freyaui.dev) UI. Peers connect with [iroh](https://iroh.computer).
 
 - **LAN**: devices announce over mDNS (service `_flipflop._udp`) with their name; they appear under *Nearby*.
 - **QR**: *Add by QR* shows your ticket as a QR code and scans others' (webcam on desktop, system scanner on Android). Tickets can also be pasted.
@@ -47,7 +47,7 @@ The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that 
 
 ## CLI
 
-`flipflop` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process runs a node on a `--dir`. If the GUI (or a `serve`) already has it, the CLI checks the lock, finds the Unix socket (`ipc.sock` in the dir; a named pipe on Windows, untested) and sends the command there; the GUI runs it and the output comes back. Relative file paths are resolved in the CLI's working directory. `--downloads` is ignored in that case. Give one of them its own `FLIPFLOP_DIR` to keep two identities. `serve` keeps a node running (downloading, serving files) so offers stay available. `flipflop gui` (or `flipflop open`) starts the desktop app on the same `--dir`: `flipflop-gui` from `PATH` or next to `flipflop`, else the installed app (`/opt/flipflop`, `/Applications/flipflop.app`, `%LOCALAPPDATA%\flipflop`, then the Flatpak). On Linux and macOS the app ships a `bin/flipflop-gui` link to its launcher (the app and its shortcuts are still called flipflop), so `ln -s /opt/flipflop/bin/flipflop-gui ~/.local/bin/` puts it in `PATH` without taking the `flipflop` name.
+`flipflop` (clap) does everything the GUI does. Each command starts a node with the identity in `--dir` (default `~/.local/share/flipflop`, the same as the GUI, so both are the same device), waits for the peers it needs, does its job and gives the change a moment to sync. Only one process runs a node on a `--dir`. If the GUI (or a `serve`) already has it, the CLI checks the lock, finds the Unix socket (`ipc.sock` in the dir; a named pipe on Windows, untested) and sends the command there; the GUI runs it and the output comes back. Relative file paths are resolved in the CLI's working directory. `--downloads` is ignored in that case. Give one of them its own `FLIPFLOP_DIR` to keep two identities. `serve` keeps a node running (downloading, serving files) so offers stay available. `flipflop gui` (or `flipflop open`) starts the desktop app on the same `--dir`: `flipflop-gui` from `PATH` or next to `flipflop`, else the installed app (`/opt/flipflop`, `/Applications/flipflop.app`, `%LOCALAPPDATA%\flipflop`, then the Flatpak). The Linux packages put `flipflop-gui` in `/usr/bin`; the portable folder has it in `bin/` (`ln -s /opt/flipflop/bin/flipflop-gui ~/.local/bin/` puts it in `PATH` without taking the `flipflop` name), and so does the macOS app (`flipflop.app/Contents/MacOS/flipflop-gui`).
 
     flipflop id                                  # id, name, ticket
     flipflop peers                               # nearby peers and contacts
@@ -67,15 +67,17 @@ The page is `src/core/guest/page.html`; its engine is `web/`, a wasm crate that 
 
 ## Layout
 
-The core, networking and CLI are Rust (`src/`). The UI is Compose Multiplatform in `kmp/`, a pure view over
-a [UniFFI](https://mozilla.github.io/uniffi-rs/) bridge (`src/ffi.rs`): Rust builds a whole `UiState` and hands
-it to the UI on every change; the UI calls commands on `App`. `kmp/shared` is the UI (and the generated
-bindings), `kmp/desktopApp` the JVM desktop app, `kmp/androidApp` the Android app. Gradle builds the Rust
-library itself (host for desktop, `cargo-ndk` for Android).
+Everything is Rust. The core, networking and CLI are the `flipflop` crate (`src/`). The UI is the `flipflop-app`
+crate (`app/`), in [Freya](https://freyaui.dev): it builds the desktop app (`flipflop-gui`) and, as
+`libflipflop_app`, the Android app. It runs the core in the same process and reads what it reports as plain Rust
+values (`app/src/model.rs`), calling the core directly for everything it does. `android/` is the Android shell: a
+Java `NativeActivity` for what only Android can do (permissions, pickers, shares, the foreground service, Bluetooth
+LE), packaged by Gradle, which builds the Rust library itself (`cargo-ndk`). blew's Android Bluetooth layer ships as
+Kotlin sources inside the crate, so that build still compiles some Kotlin.
 
 ## Install
 
-Grab the file for your system from the [latest release](https://github.com/andunieee/flipflop/releases/latest), or use the commands below, which all download the latest one. Each desktop package carries its own Java runtime.
+Grab the file for your system from the [latest release](https://github.com/andunieee/flipflop/releases/latest), or use the commands below, which all download the latest one.
 
 <details>
 <summary>Linux</summary>
@@ -166,25 +168,25 @@ curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/lat
 
 ## Building the packages
 
-`.github/workflows/release.yml` builds all of these when a `v*` tag is pushed (the tag has to match `version` in `Cargo.toml`, which is also the version of every package). To build one yourself, you must be on the target OS (jpackage cannot cross-build desktop packages); the release build of the Rust library is made and bundled for you. Everything needs Rust, a **full JDK 17+** (with `jpackage`; a bare JRE will not do) and the usual [Run](#run) requirements. Packages end up in `kmp/desktopApp/build/compose/binaries/main/<format>/`.
+`.github/workflows/release.yml` builds all of these when a `v*` tag is pushed (the tag has to match `version` in `Cargo.toml`, which is also the version of every package). To build one yourself, you must be on the target OS; the scripts in `packaging/` build the release `flipflop-gui` and package it. Everything needs Rust and the usual [Run](#run) requirements. Packages end up in `dist/`.
 
 | Package | Run on | Command | Also needs |
 | --- | --- | --- | --- |
-| `.deb` | Linux | `just deb` | `dpkg`, `fakeroot` |
+| `.deb` | Linux | `just deb` | `dpkg-deb` |
 | `.rpm` | Linux | `just rpm` | `rpmbuild` (`rpm` / `rpm-build`) |
-| `.AppImage` | Linux | `just appimage` (→ `dist/`) | `curl` (fetches appimagetool), FUSE or `APPIMAGE_EXTRACT_AND_RUN=1` |
-| `.flatpak` | Linux | `just flatpak` (→ `dist/`) | `flatpak-builder` (fetches the freedesktop 25.08 runtime from flathub) |
-| `.pkg.tar.zst` | Arch | `just arch` (→ `dist/`) | what `.deb` needs, `makepkg` |
-| portable folder / `.tar.gz` | any desktop | `just portable` | |
-| `.msi` | Windows | `just msi` | [WiX 3](https://wixtoolset.org/docs/wix3/) in `PATH` |
+| `.AppImage` | Linux | `just appimage` | `curl` (fetches appimagetool), FUSE or `APPIMAGE_EXTRACT_AND_RUN=1` |
+| `.flatpak` | Linux | `just flatpak` | `flatpak-builder` (fetches the freedesktop 25.08 runtime from flathub) |
+| `.pkg.tar.zst` | Arch | `just arch` | what `.deb` needs, `makepkg` |
+| portable folder / `.tar.gz` | Linux | `just portable` (→ `dist/stage/portable`) | |
+| `.msi`, portable folder | Windows | `just msi` | [WiX 3](https://wixtoolset.org/docs/wix3/) in `PATH` |
 | `.dmg` | macOS | `just dmg` | Xcode command line tools |
-| `.apk` | any | `just apk` | cargo-ndk, NDK 27, Android SDK 35 (see [Run](#run)) |
+| `.apk` | any | `just apk` (→ `android/app/build/outputs/apk/release`) | a JDK 17+, cargo-ndk, NDK 27, Android SDK 35 (see [Run](#run)) |
 
-Linux also needs libdbus, libv4l, libclang and libwayland development headers to compile the Rust library (`libdbus-1-dev libv4l-dev libclang-dev libwayland-dev` on Debian). The Android build needs them as well, even though it targets Android: its Kotlin bindings are generated from a host build of the library.
+Linux also needs development headers to compile the app (`libdbus-1-dev libv4l-dev libclang-dev libwayland-dev libfontconfig1-dev libfreetype-dev libgl-dev libegl-dev` on Debian).
 
 Android release APKs are signed with the debug key unless you set `FLIPFLOP_KEYSTORE` (path to a `.jks`), `FLIPFLOP_KEYSTORE_PASSWORD` and optionally `FLIPFLOP_KEY_PASSWORD`, as environment variables or gradle properties. In CI, store the base64 of the keystore in the `FLIPFLOP_KEYSTORE_B64` secret and the password as the `FLIPFLOP_KEYSTORE_PASSWORD` secret. Only set `FLIPFLOP_KEY_PASSWORD` if the keystore really has a separate key password: modern `keytool` creates PKCS12 keystores, which use the store password for the key too, so a differing (or blank) `FLIPFLOP_KEY_PASSWORD` makes the build fail with `Given final block not properly padded`. The key alias is always `flipflop`; create the keystore with `keytool -genkeypair -v -keystore flipflop.jks -alias flipflop -keyalg RSA -keysize 2048 -validity 10000`. Use one key for good: Android refuses to update an app signed with a different one.
 
-The Flatpak is not built from source: it wraps the portable app (with its Java runtime) in the freedesktop runtime (`packaging/flatpak`), since Gradle and cargo would need every dependency vendored to build offline in flatpak-builder. The Arch package is the `.deb` repackaged by `packaging/aur/pkgbuild.sh`, which is also the PKGBUILD the AUR gets. The AppImage and the portable app take `--install-desktop-entry`, which writes `dev.flipflop.app.desktop` and the icons to `~/.local/share` with `Exec` pointing at the AppImage (or the launcher).
+The Flatpak is not built from source: it wraps the portable app in the freedesktop runtime (`packaging/flatpak`), since cargo would need every dependency vendored to build offline in flatpak-builder. The Arch package is the `.deb` repackaged by `packaging/aur/pkgbuild.sh`, which is also the PKGBUILD the AUR gets. The AppImage and the portable app take `--install-desktop-entry`, which writes `dev.flipflop.app.desktop` and the icons to `~/.local/share` with `Exec` pointing at the AppImage (or `flipflop-gui`).
 
 ### Publishing
 
@@ -194,22 +196,22 @@ After the GitHub release the workflow publishes to two stores. Each job only war
 - **Zapstore** (`zapstore.yaml`): `ZAPSTORE_SIGN_WITH`, the `nsec` (or a `bunker://` URL) of the Nostr key that publishes it. Zapstore ties the app to its signing certificate, so set the Android keystore secrets above before the first one.
 - The Arch `.pkg.tar.zst` on the release is signed when `GPG_PRIVATE_KEY` (base64 of `gpg --export-secret-keys`) and `GPG_KEY_ID` are set.
 
-On macOS and Windows the packages are not code-signed or notarized. To do so, add `signing { }` / `notarization { }` to `nativeDistributions.macOS` in `kmp/desktopApp/build.gradle.kts` ([docs](https://github.com/JetBrains/compose-multiplatform/blob/master/tutorials/Signing_and_notarization_on_macOS/README.md)) and sign the `.msi` with `signtool`.
+On macOS and Windows the packages are not code-signed or notarized. To do so, `codesign` and `notarytool` `dist/flipflop.app` in `packaging/macos/dmg.sh` before the `.dmg` is made, and sign `flipflop.exe` and the `.msi` with `signtool` in `packaging/windows/msi.ps1`.
 
 ### Icons
 
-Every icon comes from `assets/top.png` and is committed: the Linux hicolor PNGs (`packaging/icons`), `packaging/windows/flipflop.ico`, `packaging/macos/flipflop.icns`, the Android launcher icons (`kmp/androidApp/src/main/res`, adaptive) and the logo in the app and on the guest page. After changing the artwork run `packaging/icons.sh` (needs ImageMagick 7). `assets/side.png` is the banner above. The `.desktop` file and AppStream metadata for Linux are in `packaging/linux/`.
+Every icon comes from `assets/top.png` and is committed: the Linux hicolor PNGs (`packaging/icons`), `packaging/windows/flipflop.ico`, `packaging/macos/flipflop.icns`, the Android launcher icons (`android/app/src/main/res`, adaptive) and the logo in the app (`app/icons/logo.png`) and on the guest page. After changing the artwork run `packaging/icons.sh` (needs ImageMagick 7). `assets/side.png` is the banner above. The `.desktop` file and AppStream metadata for Linux are in `packaging/linux/`.
 
 ## Run
 
-    just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity)
+    just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity, FLIPFLOP_PHONE_LAYOUT=1 for the phone's layout)
     just android                   # APK; `just install` to put it on a device
     cargo run --bin flipflop -- --help
     just web                       # rebuild the guest page's wasm (see Guest links)
     cargo test                     # unit tests + multi-node integration tests
+    just snapshots                 # render the app's pages to PNGs, headless, over a throwaway node
 
-Android needs cargo-ndk (`cargo install cargo-ndk`), NDK 27 and an Android SDK with platform 35 (`kmp/local.properties`: `sdk.dir=...`).
-The desktop app needs a JDK 17+ and loads `libflipflop` from the cargo target directory.
+Android needs cargo-ndk (`cargo install cargo-ndk`), NDK 27, an Android SDK with platform 35 (`android/local.properties`: `sdk.dir=...`) and a JDK 17+ for Gradle.
 
 Linux BLE needs BlueZ (`bluetoothd`) and libdbus.
 

@@ -7,33 +7,25 @@ default:
 
 # --- Desktop ---
 
-# run the desktop app (Compose UI over the Rust core; rebuilds the Rust library first)
-desktop: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # A release lib left over from packaging would shadow the debug one, so drop the bundled copies.
-    rm -rf kmp/desktopApp/build/native kmp/desktopApp/build/compose/tmp/prepareAppResources
-    target=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"])')
-    cd kmp
-    LD_LIBRARY_PATH="$target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" DYLD_LIBRARY_PATH="$target/debug" ./gradlew :desktopApp:run
+# run the desktop app (Freya UI over the Rust core). FLIPFLOP_PHONE_LAYOUT=1 shows the phone layout.
+desktop *args:
+    cargo run -p flipflop-app --bin flipflop-gui -- {{args}}
 
 # install the desktop app system-wide in /opt/flipflop and add its menu entry and icons for the current user (Linux)
 desktop-install: portable
     #!/usr/bin/env bash
     set -euo pipefail
-    app=kmp/desktopApp/build/compose/binaries/main/app/flipflop
-    # Replace the installed copy, keeping the bundled runtime, then put the launcher in PATH without taking the
-    # `flipflop` name from the command line client (`flipflop gui` looks for `flipflop-gui`).
+    # Replace the installed copy, then put the app in PATH as flipflop-gui (`flipflop` is the command line client).
     sudo rm -rf /opt/flipflop
-    sudo cp -a "$app" /opt/flipflop
-    sudo ln -sf /opt/flipflop/bin/flipflop /usr/local/bin/flipflop-gui
+    sudo cp -a dist/stage/portable/flipflop /opt/flipflop
+    sudo ln -sf /opt/flipflop/bin/flipflop-gui /usr/local/bin/flipflop-gui
     # The menu entry and icons go to ~/.local/share/applications and ~/.local/share/icons, with Exec pointing at
-    # the launcher we just installed.
-    /opt/flipflop/bin/flipflop --install-desktop-entry
+    # the app we just installed.
+    /opt/flipflop/bin/flipflop-gui --install-desktop-entry
 
-# build the Rust library (debug)
+# build the Rust code (debug)
 build:
-    cargo build
+    cargo build --workspace
 
 # unit + two-node integration tests
 test:
@@ -43,27 +35,34 @@ test:
 cli *cargs:
     cargo run --bin flipflop -- {{cargs}}
 
+# render the app's pages to PNGs without a window, over a throwaway node (FLIPFLOP_PHONE_LAYOUT=1 for the phone's)
+snapshots dir="dist/snapshots":
+    cargo run -p flipflop-app --example snapshot -- {{dir}}
+
 # --- Packages (each on its own OS; see the README) ---
 
-# .deb in kmp/desktopApp/build/compose/binaries/main/deb
-deb:
-    cd kmp && ./gradlew :desktopApp:packageDeb
+# portable app folder in dist/stage/portable/flipflop (Linux; also the root the .deb and .rpm install)
+portable:
+    packaging/linux/stage.sh
 
-# .rpm in kmp/desktopApp/build/compose/binaries/main/rpm
-rpm:
-    cd kmp && ./gradlew :desktopApp:packageRpm
+# .deb in dist/
+deb: portable
+    packaging/linux/deb.sh
+
+# .rpm in dist/
+rpm: portable
+    packaging/linux/rpm.sh
 
 # .AppImage in dist/
-appimage:
+appimage: portable
     packaging/linux/appimage.sh
 
 # .flatpak in dist/, made from the portable app (needs flatpak-builder; the freedesktop 25.08 runtime comes from flathub)
-flatpak:
+flatpak: portable
     #!/usr/bin/env bash
     set -euo pipefail
     version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-    (cd kmp && ./gradlew :desktopApp:createDistributable)
-    tar -czf packaging/flatpak/flipflop.tar.gz -C kmp/desktopApp/build/compose/binaries/main/app flipflop
+    tar -czf packaging/flatpak/flipflop.tar.gz -C dist/stage/portable flipflop
     flatpak-builder --user --force-clean --install-deps-from=flathub --state-dir=dist/flatpak-state \
         --repo=dist/flatpak-repo dist/flatpak-build packaging/flatpak/dev.flipflop.app.yml
     flatpak build-bundle dist/flatpak-repo "dist/flipflop-linux-x86_64-v${version}.flatpak" dev.flipflop.app
@@ -74,28 +73,24 @@ arch: deb
     set -euo pipefail
     version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
     dir=$(mktemp -d)
-    cp kmp/desktopApp/build/compose/binaries/main/deb/*.deb "$dir/flipflop-${version}.deb"
+    cp "dist/flipflop_${version}_amd64.deb" "$dir/flipflop-${version}.deb"
     packaging/aur/pkgbuild.sh "$version" "$(sha256sum "$dir"/*.deb | cut -d' ' -f1)" > "$dir/PKGBUILD"
     cp packaging/aur/flipflop-bin.install "$dir/"
     (cd "$dir" && makepkg --nodeps --noconfirm)
     mkdir -p dist
     mv "$dir"/flipflop-bin-*.pkg.tar.zst dist/
 
-# portable app folder (with its own Java runtime) in kmp/desktopApp/build/compose/binaries/main/app
-portable:
-    cd kmp && ./gradlew :desktopApp:createDistributable
-
-# .msi (Windows, needs WiX 3)
+# .msi and the portable dist\flipflop folder (Windows, needs WiX 3)
 msi:
-    cd kmp && ./gradlew :desktopApp:packageMsi
+    powershell -NoProfile -File packaging/windows/msi.ps1
 
-# .dmg (macOS)
+# .dmg and dist/flipflop.app (macOS)
 dmg:
-    cd kmp && ./gradlew :desktopApp:packageDmg
+    packaging/macos/dmg.sh
 
-# release APK in kmp/androidApp/build/outputs/apk/release (all ABIs; see README for signing)
+# release APK in android/app/build/outputs/apk/release (all ABIs; see README for signing)
 apk:
-    cd kmp && ./gradlew :androidApp:assembleRelease -Pprofile=release -Pabis=arm64-v8a,armeabi-v7a,x86_64
+    cd android && ./gradlew :app:assembleRelease -Pprofile=release -Pabis=arm64-v8a,armeabi-v7a,x86_64
 
 # regenerate every icon from assets/top.png
 icons:
@@ -113,7 +108,7 @@ web-serve: web
     cd web/dist && python3 -m http.server 8099
 
 # --- Android ---
-# gradle builds the Rust library with cargo-ndk (see kmp/build-native.sh). Needs NDK 27, Android SDK 35.
+# gradle builds the Rust library with cargo-ndk (see android/build-native.sh). Needs NDK 27, Android SDK 35.
 
 # install APK on connected device (build first). `just install android` = debug, default ABIs.
 android *args:
@@ -134,9 +129,9 @@ android *args:
         esac
     fi
     task=Debug; [ "$profile" = release ] && task=Release
-    (cd kmp && ./gradlew ":androidApp:assemble$task" -Pprofile="$profile" ${abis[@]:+-Pabis="$(IFS=,; echo "${abis[*]}")"})
+    (cd android && ./gradlew ":app:assemble$task" -Pprofile="$profile" ${abis[@]:+-Pabis="$(IFS=,; echo "${abis[*]}")"})
     for serial in $(adb devices | awk 'NR>1 && $2 == "device" {print $1}'); do
-        adb -s "$serial" install -r "kmp/androidApp/build/outputs/apk/$profile/androidApp-$profile.apk"
+        adb -s "$serial" install -r "android/app/build/outputs/apk/$profile/app-$profile.apk"
     done
 
 # follow logcat for the app

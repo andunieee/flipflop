@@ -33,42 +33,31 @@ mod android {
 
     /// The latest Activity: the process can outlive one while files are moving (see `TransferService`).
     static ACTIVITY: Mutex<Option<jni::objects::GlobalRef>> = Mutex::new(None);
+    static VM: OnceLock<JavaVM> = OnceLock::new();
 
-    /// Called by every Activity before anything else: hand it to us. The first one also goes to
-    /// `ndk_context` (blew and friends read it), with the JVM, and sets up logging.
+    /// Called by every Activity before anything else: hand it to us. The first one also sets up
+    /// logging. (`ndk_context`, which blew and friends read, is set up by android-activity.)
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeInit(
         env: JNIEnv,
         _: JClass,
         activity: JObject,
     ) {
+        if let Ok(vm) = env.get_java_vm() {
+            let _ = VM.set(vm);
+        }
         if let Ok(app) = env.new_global_ref(&activity) {
             *ACTIVITY.lock().unwrap() = Some(app);
         }
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            // Quiet by default; `adb shell setprop debug.flipflop.log "warn,iroh_ble_transport=debug"` turns up
-            // individual crates (takes effect on the next launch).
-            let filter = system_property("debug.flipflop.log").unwrap_or_else(|| "warn".into());
-            android_logger::init_once(
-                android_logger::Config::default()
-                    .with_max_level(log::LevelFilter::Trace)
-                    .with_filter(android_logger::FilterBuilder::new().parse(&filter).build())
-                    .with_tag("flipflop"),
-            );
-            let (Ok(vm), Ok(app)) = (env.get_java_vm(), env.new_global_ref(&activity)) else {
-                return;
-            };
-            // `ndk_context` wants a Context that lives forever: the Activity's global reference is leaked on purpose.
-            let context = app.as_obj().as_raw();
-            std::mem::forget(app);
-            unsafe {
-                ndk_context::initialize_android_context(
-                    vm.get_java_vm_pointer().cast(),
-                    context.cast(),
-                )
-            };
-        });
+        // Quiet by default; `adb shell setprop debug.flipflop.log "warn,iroh_ble_transport=debug"` turns up
+        // individual crates (takes effect on the next launch).
+        let filter = system_property("debug.flipflop.log").unwrap_or_else(|| "warn".into());
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Trace)
+                .with_filter(android_logger::FilterBuilder::new().parse(&filter).build())
+                .with_tag("flipflop"),
+        );
     }
 
     /// Run `f` with an attached JNIEnv and the Activity object.
@@ -76,9 +65,7 @@ mod android {
         f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<R>,
     ) -> Option<R> {
         let activity = ACTIVITY.lock().unwrap().clone()?;
-        let ctx = ndk_context::android_context();
-        let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
-        let mut env = vm.attach_current_thread().ok()?;
+        let mut env = VM.get()?.attach_current_thread().ok()?;
         let result = f(&mut env, activity.as_obj());
         if env.exception_check().unwrap_or(false) {
             let _ = env.exception_describe();
@@ -107,8 +94,10 @@ mod android {
     /// Hand blew (the BLE layer under iroh-ble-transport) the JVM, then make sure the Bluetooth
     /// permission is granted, asking if needed. Returns false if it was denied or timed out.
     pub fn ensure_ble_permission() -> bool {
-        let ctx = ndk_context::android_context();
-        blew::platform::android::init_jvm(unsafe { jni22::JavaVM::from_raw(ctx.vm().cast()) });
+        let Some(vm) = VM.get() else {
+            return false;
+        };
+        blew::platform::android::init_jvm(unsafe { jni22::JavaVM::from_raw(vm.get_java_vm_pointer().cast()) });
         if ble_permissions_granted() {
             return true;
         }
@@ -181,12 +170,6 @@ mod android {
         call_string("copyText", text);
     }
 
-    pub fn copy_primary(_text: &str) {}
-
-    pub fn paste_primary() -> String {
-        String::new()
-    }
-
     pub fn paste_text() -> String {
         with_activity(|env, a| {
             let obj = env
@@ -207,7 +190,7 @@ mod android {
     }
 
     /// Ask the Activity to show a system picker; `kind` is "file" or "media". The chosen files arrive
-    /// through [`set_file_handler`].
+    /// as [`ActivityEvent::FilePicked`].
     pub fn pick_files(kind: &str) {
         call_string("pickFiles", kind);
     }
@@ -224,16 +207,57 @@ mod android {
         serde_json::from_str::<Vec<(String, String, String)>>(&json).unwrap_or_default()
     }
 
-    type FileHandler = Box<dyn Fn(String, String, String, String) + Send + Sync>;
-    static FILE_HANDLER: OnceLock<FileHandler> = OnceLock::new();
+    /// What the Activity tells the app.
+    pub enum ActivityEvent {
+        /// The user picked a file, or another app shared one, for `group` ("" = the open one). `path`
+        /// is a `content://` URI (shared where it is; `name` is its display name) or an app-storage
+        /// copy (`name` empty).
+        FilePicked {
+            kind: String,
+            path: String,
+            name: String,
+            group: String,
+        },
+        /// Another app shared a text and/or `files` files: the user picks where they go, then
+        /// [`deliver_shared`] stages the files.
+        Shared { text: String, files: u32 },
+        QrScanned(String),
+        /// Room taken by the system bars and the keyboard, in logical pixels.
+        Insets {
+            left: f32,
+            top: f32,
+            right: f32,
+            bottom: f32,
+        },
+    }
 
-    /// Called with `(kind, path, name, group)` for each file the user picked or another app shared.
-    /// `path` is a `content://` URI (shared where it is; `name` is its display name) or an
-    /// app-storage copy (`name` empty); `group` is the group it goes to ("" = the open one).
-    pub fn set_file_handler(
-        handler: impl Fn(String, String, String, String) + Send + Sync + 'static,
-    ) {
-        let _ = FILE_HANDLER.set(Box::new(handler));
+    type Handler = std::sync::Arc<dyn Fn(ActivityEvent) + Send + Sync>;
+    /// The handler, or what the Activity reported before there was one (a share that started the app).
+    static HANDLER: Mutex<(Option<Handler>, Vec<ActivityEvent>)> = Mutex::new((None, Vec::new()));
+
+    /// Called on the Java main thread with everything the Activity reports, starting with what it
+    /// reported before.
+    pub fn set_handler(handler: impl Fn(ActivityEvent) + Send + Sync + 'static) {
+        let handler: Handler = std::sync::Arc::new(handler);
+        let pending = {
+            let mut slot = HANDLER.lock().unwrap();
+            slot.0 = Some(handler.clone());
+            std::mem::take(&mut slot.1)
+        };
+        for event in pending {
+            handler(event);
+        }
+    }
+
+    fn report(event: ActivityEvent) {
+        let handler = {
+            let mut slot = HANDLER.lock().unwrap();
+            match &slot.0 {
+                Some(handler) => handler.clone(),
+                None => return slot.1.push(event),
+            }
+        };
+        handler(event);
     }
 
     #[unsafe(no_mangle)]
@@ -245,15 +269,56 @@ mod android {
         name: JString,
         group: JString,
     ) {
-        let (kind, path, name, group) = (
-            jstr(&mut env, &kind),
-            jstr(&mut env, &path),
-            jstr(&mut env, &name),
-            jstr(&mut env, &group),
-        );
-        if let Some(handler) = FILE_HANDLER.get() {
-            handler(kind, path, name, group);
-        }
+        report(ActivityEvent::FilePicked {
+            kind: jstr(&mut env, &kind),
+            path: jstr(&mut env, &path),
+            name: jstr(&mut env, &name),
+            group: jstr(&mut env, &group),
+        });
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeShared(
+        mut env: JNIEnv,
+        _: JClass,
+        text: JString,
+        files: jni::sys::jint,
+    ) {
+        let text = jstr(&mut env, &text);
+        report(ActivityEvent::Shared {
+            text,
+            files: files.max(0) as u32,
+        });
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeInsets(
+        _: JNIEnv,
+        _: JClass,
+        left: jni::sys::jfloat,
+        top: jni::sys::jfloat,
+        right: jni::sys::jfloat,
+        bottom: jni::sys::jfloat,
+    ) {
+        report(ActivityEvent::Insets {
+            left,
+            top,
+            right,
+            bottom,
+        });
+    }
+
+    /// Stage the files of the last share for `group`; each arrives as [`ActivityEvent::FilePicked`].
+    pub fn deliver_shared(group: &str) {
+        call_string("deliverShared", group);
+    }
+
+    /// Nothing left to go back to: leave the app the way Back leaves any other.
+    pub fn move_to_back() {
+        with_activity(|env, a| {
+            env.call_method(a, "moveTaskToBack", "(Z)Z", &[JValue::Bool(1)])
+                .map(|_| ())
+        });
     }
 
     /// A new read-only descriptor for a picked `content://` file (the caller owns it).
@@ -281,13 +346,6 @@ mod android {
         call_void("startQrScan");
     }
 
-    type QrHandler = Box<dyn Fn(String) + Send + Sync>;
-    static QR_HANDLER: OnceLock<QrHandler> = OnceLock::new();
-
-    pub fn set_qr_handler(handler: impl Fn(String) + Send + Sync + 'static) {
-        let _ = QR_HANDLER.set(Box::new(handler));
-    }
-
     fn jstr(env: &mut JNIEnv, s: &JString) -> String {
         env.get_string(s).map(Into::into).unwrap_or_default()
     }
@@ -298,10 +356,7 @@ mod android {
         _: JClass,
         text: JString,
     ) {
-        let text = jstr(&mut env, &text);
-        if let Some(handler) = QR_HANDLER.get() {
-            handler(text);
-        }
+        report(ActivityEvent::QrScanned(jstr(&mut env, &text)));
     }
 
     #[unsafe(no_mangle)]
