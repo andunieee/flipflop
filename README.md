@@ -154,7 +154,7 @@ curl -fL "$(curl -s https://api.github.com/repos/andunieee/flipflop/releases/lat
 <details>
 <summary>Android</summary>
 
-Android 7+.
+Android 8+.
 
 **Zapstore**: install [Zapstore](https://zapstore.dev) and search for flipflop. It keeps the app up to date.
 

@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libdbus-1-dev libv4l-dev libclang-dev libssl-dev libwayland-dev pkg-config rpm fakeroot imagemagick \
-            libfontconfig1-dev libfreetype-dev libgl-dev libegl-dev
+            libfontconfig1-dev libfreetype-dev libgl-dev libegl-dev libgles-dev
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -276,7 +276,7 @@ jobs:
           - **linux**: `.flatpak` (`flatpak install --user flipflop-*.flatpak`), `.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE), `.pkg.tar.zst` (Arch, or `flipflop-bin` from the AUR), `.AppImage` (any distro, needs FUSE: or run it with `--appimage-extract-and-run`; `--install-desktop-entry` adds it to the menu) or `.tar.gz` (unpack and run `flipflop/bin/flipflop-gui`). Bluetooth needs BlueZ.
           - **windows**: the `-setup-` `.msi` (per user, no admin rights), or extract the `.zip` and run `flipflop\flipflop.exe`. Unsigned: SmartScreen asks "Run anyway".
           - **macos**: Apple Silicon `.dmg`, unsigned: first launch right-click > Open, or `xattr -dr com.apple.quarantine /Applications/flipflop.app`.
-          - **android**: the `.apk` (Android 7+), or from [Zapstore](https://zapstore.dev). Allow installing from unknown sources.
+          - **android**: the `.apk` (Android 8+), or from [Zapstore](https://zapstore.dev). Allow installing from unknown sources.
           EOF
           gh release create "$TAG" --verify-tag --generate-notes --notes-file "$NOTES"
           gh release upload "$TAG" "$FLAT"/* --clobber

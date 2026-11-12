@@ -33,7 +33,8 @@ android {
 
     defaultConfig {
         applicationId = "dev.flipflop.app"
-        minSdk = 24
+        // Freya's skia is built against API 26 (see android/build-native.sh), so the app needs Android 8.
+        minSdk = 26
         targetSdk = 34
         val cargoVersion = Regex("""(?m)^version = "([^"]+)"""").find(rootDir.parentFile.resolve("Cargo.toml").readText())!!.groupValues[1]
         versionName = cargoVersion

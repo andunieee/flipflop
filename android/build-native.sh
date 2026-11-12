@@ -21,7 +21,10 @@ fi
 targets=(); for abi in "${abis[@]}"; do targets+=(-t "$abi"); done
 rm -rf app/src/main/jniLibs
 flags=(); [ "$profile" = release ] && flags+=(--release)
-(cd .. && cargo ndk "${targets[@]}" -o android/app/src/main/jniLibs build -p flipflop-app --lib "${flags[@]}")
+# Freya's skia compiles against API 26 (freya-skia-bindings hardcodes -D__ANDROID_API__=26). cargo-ndk
+# defaults to 21, and the NDK headers then reject API-26 calls such as strtof_l in the C++ standard library.
+# Keep this in step with minSdk in app/build.gradle.kts.
+(cd .. && cargo ndk "${targets[@]}" -P 26 -o android/app/src/main/jniLibs build -p flipflop-app --lib "${flags[@]}")
 # cargo-ndk copies every cdylib of the build (iroh's own, too); the app only loads its own.
 find app/src/main/jniLibs -name '*.so' ! -name libflipflop_app.so -delete
 
