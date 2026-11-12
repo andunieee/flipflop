@@ -1,5 +1,8 @@
-# Zapstore listing for the Android app; the release workflow publishes the .apk of each GitHub release with zsp.
+# Zapstore listing for the Android app. The "Publish to Zapstore" step in
+# .github/workflows/release.yml publishes the .apk of each v* GitHub release.
 repository: https://github.com/andunieee/flipflop
+release_filter: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+match: '^flipflop-android-.*\.apk$'
 name: FlipFlop
 summary: Share files, texts and a scratchpad with your devices, peer to peer
 description: |

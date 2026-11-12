@@ -195,7 +195,7 @@ The Flatpak is not built from source: it wraps the portable app in the freedeskt
 After the GitHub release the workflow publishes to two stores. Each job only warns and skips while its secret is missing:
 
 - **AUR** (`flipflop-bin`): `AUR_SSH_PRIVATE_KEY`, the private half of an SSH key added to your [AUR account](https://aur.archlinux.org/account). The first push creates the package.
-- **Zapstore** (`zapstore.yaml`): `ZAPSTORE_SIGN_WITH`, the `nsec` (or a `bunker://` URL) of the Nostr key that publishes it. Zapstore ties the app to its signing certificate, so set the Android keystore secrets above before the first one.
+- **Zapstore** (`zapstore.yaml`): `ZAPSTORE_OWNER_NSEC`, the `nsec` (or a `bunker://` URL) of the Nostr key that owns the listing (`ZAPSTORE_SIGN_WITH` is still accepted). The publish step (`packaging/zapstore`) signs the NIP-C1 certificate proof with the release keystore, so the Android keystore secrets above must be set before the first release: a debug-signed `.apk` cannot be published.
 - The Arch `.pkg.tar.zst` on the release is signed when `GPG_PRIVATE_KEY` (base64 of `gpg --export-secret-keys`) and `GPG_KEY_ID` are set.
 
 On macOS and Windows the packages are not code-signed or notarized. To do so, `codesign` and `notarytool` `dist/flipflop.app` in `packaging/macos/dmg.sh` before the `.dmg` is made, and sign `flipflop.exe` and the `.msi` with `signtool` in `packaging/windows/msi.ps1`.
