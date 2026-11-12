@@ -111,8 +111,8 @@ public class FlipflopActivity extends android.app.NativeActivity {
     private static native void nativeFilePicked(String kind, String path, String name, String group);
     /** Another app shared `text` and/or `files` files; the UI asks where they go, then calls {@link #deliverShared}. */
     private static native void nativeShared(String text, int files);
-    /** Room taken by the system bars and the keyboard, in logical pixels. */
-    private static native void nativeInsets(float left, float top, float right, float bottom);
+    /** Room taken by the system bars and the keyboard, in logical pixels, and whether the keyboard is up. */
+    private static native void nativeInsets(float left, float top, float right, float bottom, boolean keyboard);
     private static native void nativeBlePeer(String address, String json);
     private static native void nativeBleLost(String address);
     private static native void nativeBleStatus(String text);
@@ -185,7 +185,7 @@ public class FlipflopActivity extends android.app.NativeActivity {
                     WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
             int ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
             nativeInsets(bars.left / density, bars.top / density, bars.right / density,
-                    Math.max(bars.bottom, ime) / density);
+                    Math.max(bars.bottom, ime) / density, ime > 0);
             return insets;
         });
         decor.post(() -> {

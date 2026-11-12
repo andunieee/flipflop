@@ -30,7 +30,16 @@ impl Component for Shell {
         let touch = d.touch;
 
         let on_back = move |e: Event<KeyboardEventData>| {
-            if e.key == Key::Named(NamedKey::BrowserBack) && !nav.back(scanning) {
+            if e.key != Key::Named(NamedKey::BrowserBack) {
+                return;
+            }
+            // While a field is being edited, Back puts the keyboard away, as in any other app on
+            // the phone; only the next one navigates.
+            #[cfg(target_os = "android")]
+            if crate::stop_editing() {
+                return;
+            }
+            if !nav.back(scanning) {
                 #[cfg(target_os = "android")]
                 flipflop::platform::move_to_back();
             }

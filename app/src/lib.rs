@@ -15,6 +15,8 @@ mod widgets;
 
 use flipflop::core::Event;
 use freya::{prelude::*, radio::*};
+#[cfg(target_os = "android")]
+use freya::android::AndroidExt;
 
 pub use crate::backend::Backend;
 use crate::{
@@ -76,6 +78,36 @@ pub fn app() -> impl IntoElement {
     shell::Shell
 }
 
+/// Whether a text field is being edited, which on Android means the soft keyboard is up for it.
+#[cfg(target_os = "android")]
+fn editing() -> bool {
+    use freya_winit::integration::is_ime_role;
+    is_ime_role(Platform::get().current_window().focused_accessibility_node.peek().role())
+}
+
+/// Stop editing a text field; returns whether there was one. On Android the keyboard belongs to the
+/// focused field: hiding it while the field keeps the focus does not last, because the framework
+/// shows it again on the next accessibility update (and hiding it causes one: the layout grows as
+/// the keyboard goes). So move the focus away as well.
+#[cfg(target_os = "android")]
+pub(crate) fn stop_editing() -> bool {
+    if !editing() {
+        return false;
+    }
+    // The root node (`ACCESSIBILITY_ROOT_ID` in freya-core) is not a text input, so the keyboard
+    // stays down.
+    let platform = Platform::get();
+    platform.current_window().send(UserEvent::FocusAccessibilityNode(
+        AccessibilityFocusStrategy::Node(AccessibilityId(0)),
+    ));
+    // Hide it now rather than wait for the focus update: the framework only hides keyboards it
+    // considers implicit, and this one was shown explicitly.
+    if let Err(err) = platform.hide_keyboard() {
+        tracing::warn!("keyboard: {err:?}");
+    }
+    true
+}
+
 /// What the node (or the Activity) said, into the model.
 fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav) {
     match msg {
@@ -89,7 +121,20 @@ fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav) {
         Msg::ShowPeers => nav.go(Page::Peers),
         Msg::Scanning(on) => station.write_channel(Channel::Me).scanning = on,
         Msg::Shared { text, files } => nav.ui.write().share = Some(Share::Shared { text, files }),
-        Msg::Insets(insets) => station.write_channel(Channel::Me).insets = insets,
+        Msg::Insets { insets, keyboard } => {
+            let mut m = station.write_channel(Channel::Me);
+            m.insets = insets;
+            let was_open = std::mem::replace(&mut m.keyboard_open, keyboard);
+            drop(m);
+            // The user put the keyboard away while a field still had the focus: stop editing, or
+            // the next accessibility update brings the keyboard back.
+            #[cfg(target_os = "android")]
+            if was_open && !keyboard {
+                let _ = stop_editing();
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = was_open;
+        }
         Msg::Core(event) => match event {
             Event::Name(name) => station.write_channel(Channel::Me).name = name,
             Event::Ticket(ticket) => station.write_channel(Channel::Me).ticket = ticket,

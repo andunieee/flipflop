@@ -29,8 +29,8 @@ pub enum Msg {
     Scanning(bool),
     /// Another app shared a text and/or files (Android).
     Shared { text: String, files: u32 },
-    /// Room taken by the system bars and the keyboard (Android).
-    Insets([f32; 4]),
+    /// Room taken by the system bars and the keyboard, and whether the keyboard is up (Android).
+    Insets { insets: [f32; 4], keyboard: bool },
 }
 
 /// A webcam preview frame: width, height, RGBA.
@@ -195,8 +195,8 @@ impl Backend {
         let mut held = self.0.held.lock().unwrap();
         match msg {
             Msg::Shared { .. } => held.push(msg),
-            Msg::Insets(_) => {
-                held.retain(|m| !matches!(m, Msg::Insets(_)));
+            Msg::Insets { .. } => {
+                held.retain(|m| !matches!(m, Msg::Insets { .. }));
                 held.push(msg);
             }
             _ => {}
@@ -433,7 +433,11 @@ impl Backend {
                 top,
                 right,
                 bottom,
-            } => self.send(Msg::Insets([left, top, right, bottom])),
+                keyboard,
+            } => self.send(Msg::Insets {
+                insets: [left, top, right, bottom],
+                keyboard,
+            }),
             // A picked file goes to the group it was picked for, a shared one to the group chosen for it.
             ActivityEvent::FilePicked {
                 kind,

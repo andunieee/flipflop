@@ -222,12 +222,14 @@ mod android {
         /// [`deliver_shared`] stages the files.
         Shared { text: String, files: u32 },
         QrScanned(String),
-        /// Room taken by the system bars and the keyboard, in logical pixels.
+        /// Room taken by the system bars and the keyboard, in logical pixels, and whether the
+        /// keyboard is up.
         Insets {
             left: f32,
             top: f32,
             right: f32,
             bottom: f32,
+            keyboard: bool,
         },
     }
 
@@ -299,12 +301,14 @@ mod android {
         top: jni::sys::jfloat,
         right: jni::sys::jfloat,
         bottom: jni::sys::jfloat,
+        keyboard: jni::sys::jboolean,
     ) {
         report(ActivityEvent::Insets {
             left,
             top,
             right,
             bottom,
+            keyboard: keyboard != 0,
         });
     }
 

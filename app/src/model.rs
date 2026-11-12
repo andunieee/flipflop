@@ -22,6 +22,8 @@ pub struct Model {
     pub scanning: bool,
     /// Room taken by the system bars and the keyboard: left, top, right, bottom (Android).
     pub insets: [f32; 4],
+    /// The soft keyboard is up (Android).
+    pub keyboard_open: bool,
 
     pub peers: Vec<Peer>,
     pub groups: GroupsView,
