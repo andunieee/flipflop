@@ -2,8 +2,10 @@
 //! Everything the core reports reaches the UI as a [`Msg`] on the channel [`Backend::attach`] returns.
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
 
 use flipflop::{
@@ -53,6 +55,9 @@ struct Inner {
     held: Mutex<Vec<Msg>>,
     core: OnceLock<Core>,
     ble_status: Mutex<String>,
+    /// Counts the keystrokes in each text field (by name, id), so only the last one typed is saved
+    /// (see [`Backend::typed`]).
+    typing: Mutex<HashMap<String, u64>>,
     /// The group a system file picker was opened for (Android reports picks without one).
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     picking: Mutex<Option<String>>,
@@ -80,6 +85,7 @@ impl Backend {
             held: Mutex::default(),
             core: OnceLock::new(),
             ble_status: Mutex::default(),
+            typing: Mutex::default(),
             picking: Mutex::default(),
             frames: watch::channel(None).0,
             #[cfg(not(target_os = "android"))]
@@ -241,6 +247,46 @@ impl Backend {
                 Err(err) => this.notice(format!("{err:#}")),
             }
         });
+    }
+
+    /// Run `save` once typing in `field` pauses. Every keystroke calls this; only the last value of
+    /// a burst is saved, so typing does not hit the disk (and the peers) once per character.
+    fn typed(&self, field: String, save: impl FnOnce(&Core) + Send + 'static) {
+        let edit = {
+            let mut typing = self.0.typing.lock().unwrap();
+            let edit = typing.entry(field.clone()).or_default();
+            *edit += 1;
+            *edit
+        };
+        let Some(core) = self.core() else { return };
+        let inner = self.0.clone();
+        self.0.rt.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let latest = inner.typing.lock().unwrap().get(&field).copied() == Some(edit);
+            if latest {
+                save(&core);
+            }
+        });
+    }
+
+    /// Rename this device as its name is typed. An empty name keeps the current one (the field is
+    /// being cleared, not renamed to nothing).
+    pub fn set_name(&self, name: String) {
+        self.typed("name".into(), move |core| {
+            if !flipflop::settings::clean_name(&name).is_empty() {
+                core.set_name(&name);
+            }
+        });
+    }
+
+    /// Give a peer a local name as it is typed. An empty name restores the name they go by.
+    pub fn rename_contact(&self, id: EndpointId, name: String) {
+        self.typed(format!("peer:{id}"), move |core| core.rename_contact(id, &name));
+    }
+
+    /// Give a group a local name as it is typed. An empty name restores the name it goes by.
+    pub fn rename_group(&self, group: String, name: String) {
+        self.typed(format!("group:{group}"), move |core| core.rename_group(&group, &name));
     }
 
     /// Catch the groups up, off the UI thread.

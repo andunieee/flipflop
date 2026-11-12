@@ -615,23 +615,23 @@ impl Component for EditDialog {
             return rect();
         };
         let backend = nav.backend();
-        let save = {
-            let (backend, edit) = (backend.clone(), edit.clone());
-            move || {
-                let edit = ui.peek().edit.clone().unwrap_or(edit.clone());
-                backend.run(|core| {
-                    match edit.kind {
-                        EditKind::Peer => {
-                            if let Ok(id) = edit.id.parse() {
-                                core.rename_contact(id, &edit.text)
-                            }
-                        }
-                        EditKind::Group => core.rename_group(&edit.id, &edit.text),
+        // The rename applies as it is typed: there is nothing to save, only to close.
+        let apply = {
+            let (backend, kind, id) = (backend.clone(), edit.kind, edit.id.clone());
+            move |text: String| match kind {
+                EditKind::Peer => {
+                    if let Ok(id) = id.parse() {
+                        backend.rename_contact(id, text);
                     }
-                    Ok(())
-                });
-                nav.edit(None);
+                }
+                EditKind::Group => backend.rename_group(id.clone(), text),
             }
+        };
+        let on_change = move |text: String| {
+            if let Some(edit) = &mut ui.write().edit {
+                edit.text = text.clone();
+            }
+            apply(text);
         };
         let remove = {
             let edit = edit.clone();
@@ -654,8 +654,6 @@ impl Component for EditDialog {
                 nav.edit(None);
             }
         };
-        let on_submit = save.clone();
-        let on_save = save;
         scrim(
             move |_| nav.edit(None),
             sheet()
@@ -675,20 +673,15 @@ impl Component for EditDialog {
                 ))
                 .child(txt(edit.original.clone(), d.font_sm(), c.text_muted, 400))
                 .child(
-                    field(edit.text.clone(), "Local name (empty restores the original)", move |text| {
-                        if let Some(edit) = &mut ui.write().edit {
-                            edit.text = text;
-                        }
-                    })
-                    .auto_focus(true)
-                    .on_submit(move |_| on_submit()),
+                    field(edit.text.clone(), "Local name (empty restores the original)", on_change)
+                        .auto_focus(true)
+                        .on_submit(move |_| nav.edit(None)),
                 )
                 .child(
                     rect()
                         .horizontal()
                         .spacing(Dim::SPACE2)
-                        .child(Btn::primary("Save").on_press(move |_| on_save()))
-                        .child(Btn::secondary("Cancel").on_press(move |_| nav.edit(None)))
+                        .child(Btn::primary("Done").on_press(move |_| nav.edit(None)))
                         .child(
                             Btn::danger(if edit.kind == EditKind::Peer { "Remove" } else { "Leave" })
                                 .on_press(remove),

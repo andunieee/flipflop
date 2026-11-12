@@ -561,7 +561,8 @@ impl Component for ScanView {
 
 // ---- Settings --------------------------------------------------------------------------------
 
-/// This device's name, to edit. Starts over when the name changes elsewhere (the command line).
+/// This device's name, to edit. Saved as you type; a name changed elsewhere (the command line)
+/// shows up here too, unless the field has something unsaved in it.
 #[derive(PartialEq)]
 struct NameCard {
     name: String,
@@ -571,28 +572,37 @@ impl Component for NameCard {
     fn render(&self) -> impl IntoElement {
         let (c, d) = look();
         let nav = use_consume::<Nav>();
-        let name = use_state(|| self.name.clone());
-        let save = move || {
-            let text = name.peek().clone();
-            nav.backend().run(|core| Ok(core.set_name(&text)));
-        };
-        let on_save = save.clone();
+        let mut name = use_state(|| self.name.clone());
+        // The name the device goes by, as far as this field knows: what core reported last, or what
+        // it will report once what is being typed is saved. Anything else is a change made elsewhere.
+        let mut known = use_state(|| self.name.clone());
+        let reported = self.name.clone();
+        let changed = *known.peek() != reported;
+        if changed {
+            let typing = flipflop::settings::clean_name(&name.peek()) != *known.peek();
+            known.set(reported.clone());
+            if !typing {
+                name.set(reported);
+            }
+        }
+        let backend = nav.backend();
         card().child(
             card_body(Dim::SPACE2)
                 .child(txt("This device's name", d.font_md(), c.text_strong, 650))
                 .child(hint("Shown to other members next to the texts you send."))
                 .child(
-                    Input::new(name)
-                        .placeholder("Device name")
-                        .width(Size::fill())
-                        .on_submit(move |_| save()),
-                )
-                .child(Btn::primary("Save").on_press(move |_| on_save())),
+                    Input::new(WritableSetter::new(name, move |text: String| {
+                        let cleaned = flipflop::settings::clean_name(&text);
+                        if !cleaned.is_empty() {
+                            known.set(cleaned);
+                        }
+                        backend.set_name(text.clone());
+                        name.set(text);
+                    }))
+                    .placeholder("Device name")
+                    .width(Size::fill()),
+                ),
         )
-    }
-
-    fn render_key(&self) -> DiffKey {
-        DiffKey::from(&self.name)
     }
 }
 
