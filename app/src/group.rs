@@ -1,10 +1,25 @@
 //! One open group (or paired peer's page): its header, tabs, and the tab showing.
 
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
 use flipflop::{
     core::{FileView, GroupInfo, GroupView, Peer, TabView, TextView},
     format,
 };
-use freya::{prelude::*, radio::use_radio};
+use freya::{
+    elements::image::ImageHandle,
+    engine::prelude::{
+        AlphaType, ColorType, FilterMode, ImageInfo, MipmapMode, Paint, SamplingOptions, SkData, SkImage, SkRect,
+        raster_n32_premul,
+    },
+    prelude::*,
+    radio::use_radio,
+};
 
 use crate::{
     icons::Icon,
@@ -179,12 +194,16 @@ impl Component for FileCard {
         let saved_to = f.saved_to.as_ref().map(|p| p.display().to_string());
         let can_host = !f.mine && f.have && !f.stopped && !f.hosting && saved_to.is_some();
         let hosting = f.hosting && !f.stopped;
+        let can_stop = f.mine && !f.stopped && !f.preparing;
+        // Who got it: a badge while it is offered, then part of the details.
+        let got = (f.audience > 0).then(|| format!("{}/{}", f.downloaded_by.len(), f.audience));
         // A folder's size is only known once it has been gone through.
         let size = if f.preparing && f.size == 0 { "…".to_owned() } else { format::size(f.size) };
         let meta = format!(
-            "{size} · {} · {}",
+            "{size} · {} · {}{}",
             if f.mine { "you".to_owned() } else { f.from_name.clone() },
-            format::time(f.ts)
+            format::time(f.ts),
+            got.as_ref().filter(|_| f.stopped).map(|g| format!(" · {g}")).unwrap_or_default()
         );
         let tile = match f.kind.as_str() {
             "media" => Icon::Image,
@@ -194,8 +213,8 @@ impl Component for FileCard {
         };
         let status = match () {
             _ if f.preparing => Some(("Preparing", Tone::Active)),
-            _ if f.stopped => Some(("Not shared anymore", Tone::Muted)),
-            _ if f.mine => Some(("Sharing", Tone::Active)),
+            _ if f.stopped => None,
+            _ if f.mine => Some(("Offering", Tone::Active)),
             _ if hosting => Some(("Hosting", Tone::Active)),
             _ if f.have => Some(("Downloaded", Tone::Ok)),
             _ if downloading => Some(("Downloading", Tone::Active)),
@@ -203,14 +222,22 @@ impl Component for FileCard {
             _ if !can_download => Some(("Sender offline", Tone::Warn)),
             _ => None,
         };
-        let audience = (f.audience > 0).then(|| {
+        let audience = got.filter(|_| !f.stopped).map(|g| {
             let tone = match f.downloaded_by.len() {
                 0 => Tone::Error,
                 n if n >= f.audience => Tone::Ok,
                 _ => Tone::Warn,
             };
-            (format!("{} of {} got it", f.downloaded_by.len(), f.audience), tone)
+            (g, tone)
         });
+        let has_actions = status.is_some()
+            || audience.is_some()
+            || f.can_hold
+            || can_download
+            || can_host
+            || hosting
+            || can_stop
+            || f.can_reoffer;
 
         let act = |f: fn(&flipflop::core::Core, &str, &str) -> anyhow::Result<()>| {
             let (backend, gid, id) = (backend.clone(), self.gid.clone(), self.file.id.clone());
@@ -222,6 +249,21 @@ impl Component for FileCard {
         let removable = f.can_remove;
         let remove = act(|core, gid, id| core.remove_file(gid, id));
         let menu_remove = remove.clone();
+
+        // Our copy, wherever it came from, opens from its picture and its name.
+        let open = |el: Rect| match saved_to.clone() {
+            Some(path) => el
+                .cursor(CursorIcon::Pointer)
+                .on_press(move |_| flipflop::platform::open_file(&path)),
+            None => el,
+        };
+        let (tint, ink) = if f.stopped { (c.chip_bg, c.text_faint) } else { (c.accent_soft, c.accent_text) };
+        let picture = f
+            .saved_to
+            .clone()
+            .filter(|_| f.size <= THUMBNAIL_MAX && is_picture(&f.name))
+            .map(|path| Thumbnail { path, icon: tile, size: 40., tint, ink }.into_element())
+            .unwrap_or_else(|| icon_tile(tile, 40., tint, ink).into_element());
 
         card()
             .maybe(removable && !d.touch, |el| {
@@ -247,17 +289,17 @@ impl Component for FileCard {
                             .width(Size::fill())
                             .content(Content::flex())
                             .spacing(Dim::SPACE3)
-                            .child(icon_tile(
-                                tile,
-                                40.,
-                                if f.stopped { c.chip_bg } else { c.accent_soft },
-                                if f.stopped { c.text_faint } else { c.accent_text },
-                            ))
+                            .child(open(rect().child(picture)))
                             .child(
                                 rect()
                                     .width(Size::flex(1.))
                                     .spacing(2.)
-                                    .child(txt(f.name.clone(), d.font_md(), if f.stopped { c.text_muted } else { c.text_strong }, 650))
+                                    .child(open(rect().child(txt(
+                                        f.name.clone(),
+                                        d.font_md(),
+                                        if f.stopped { c.text_muted } else { c.text_strong },
+                                        650,
+                                    ))))
                                     .child(txt(meta, d.font_sm(), c.text_muted, 400))
                                     .maybe(!f.hosts.is_empty() && !f.stopped, |el| {
                                         el.child(txt(format!("Also from {}", f.hosts.join(", ")), d.font_sm(), c.text_muted, 400))
@@ -297,72 +339,156 @@ impl Component for FileCard {
                         el.child(txt(format!("Saved to {path}"), d.font_xs(), c.text_faint, 400))
                     })
                     .map(f.shared_from.as_ref(), |el, path| {
-                        el.child(txt(format!("Shared from {}", path.display()), d.font_xs(), c.text_faint, 400))
+                        el.child(txt(format!("Offered from {}", path.display()), d.font_xs(), c.text_faint, 400))
                     })
-                    .child(
-                        rect()
-                            .horizontal()
-                            .width(Size::fill())
-                            .content(Content::flex())
-                            .spacing(Dim::SPACE2)
-                            .cross_align(Alignment::Center)
-                            .child(
-                                rect()
-                                    .horizontal()
-                                    .width(Size::flex(1.))
-                                    .spacing(Dim::SPACE2)
-                                    .map(status, |el, (s, tone)| el.child(badge(s, tone)))
-                                    .map(audience, |el, (s, tone)| el.child(badge(s, tone))),
-                            )
-                            .maybe(f.can_hold, |el| {
-                                el.child(
-                                    Btn::secondary(if downloading { "Cancel" } else { "Hold" })
-                                        .on_press(act(|core, gid, id| core.hold_file(gid, id))),
+                    .maybe(has_actions, |el| {
+                        el.child(
+                            rect()
+                                .horizontal()
+                                .width(Size::fill())
+                                .content(Content::flex())
+                                .spacing(Dim::SPACE2)
+                                .cross_align(Alignment::Center)
+                                .child(
+                                    rect()
+                                        .horizontal()
+                                        .width(Size::flex(1.))
+                                        .spacing(Dim::SPACE2)
+                                        .map(status, |el, (s, tone)| el.child(badge(s, tone)))
+                                        .map(audience, |el, (s, tone)| el.child(badge(s, tone))),
                                 )
-                            })
-                            .maybe(can_download, |el| {
-                                let (backend, gid, id) = (backend.clone(), gid.clone(), id.clone());
-                                el.child(
-                                    Btn::primary(if f.error.is_some() { "Retry" } else { "Download" })
-                                        .icon(Icon::ArrowDown)
-                                        .on_press(move |_| backend.download_file(gid.clone(), id.clone())),
-                                )
-                            })
-                            .map(saved_to, |el, path| {
-                                el.child(
-                                    Btn::secondary("Open")
-                                        .icon(Icon::Open)
-                                        .on_press(move |_| flipflop::platform::open_file(&path)),
-                                )
-                            })
-                            .maybe(can_host, |el| {
-                                el.child(
-                                    Btn::secondary("Host it too")
-                                        .icon(Icon::Share)
-                                        .on_press(act(|core, gid, id| core.host_file(gid, id))),
-                                )
-                            })
-                            .maybe(hosting, |el| {
-                                el.child(Btn::secondary("Stop hosting").on_press(act(|core, gid, id| core.unhost_file(gid, id))))
-                            })
-                            .maybe(f.mine && !f.stopped && !f.preparing, |el| {
-                                el.child(Btn::danger("Stop sharing").on_press(act(|core, gid, id| core.stop_file(gid, id))))
-                            })
-                            .maybe(f.can_reoffer, |el| {
-                                let (backend, gid, id) = (backend.clone(), gid.clone(), id.clone());
-                                el.child(
-                                    Btn::secondary("Share again")
-                                        .icon(Icon::Share)
-                                        .on_press(move |_| backend.reoffer_file(gid.clone(), id.clone())),
-                                )
-                            }),
-                    ),
+                                .maybe(f.can_hold, |el| {
+                                    el.child(
+                                        Btn::secondary(if downloading { "Cancel" } else { "Hold" })
+                                            .on_press(act(|core, gid, id| core.hold_file(gid, id))),
+                                    )
+                                })
+                                .maybe(can_download, |el| {
+                                    let (backend, gid, id) = (backend.clone(), gid.clone(), id.clone());
+                                    el.child(
+                                        Btn::primary(if f.error.is_some() { "Retry" } else { "Download" })
+                                            .icon(Icon::ArrowDown)
+                                            .on_press(move |_| backend.download_file(gid.clone(), id.clone())),
+                                    )
+                                })
+                                .maybe(can_host, |el| {
+                                    el.child(
+                                        Btn::secondary("Host it too")
+                                            .icon(Icon::Share)
+                                            .on_press(act(|core, gid, id| core.host_file(gid, id))),
+                                    )
+                                })
+                                .maybe(hosting, |el| {
+                                    el.child(
+                                        Btn::secondary("Stop hosting").on_press(act(|core, gid, id| core.unhost_file(gid, id))),
+                                    )
+                                })
+                                .maybe(can_stop, |el| {
+                                    el.child(Btn::danger("Stop offering").on_press(act(|core, gid, id| core.stop_file(gid, id))))
+                                })
+                                .maybe(f.can_reoffer, |el| {
+                                    let (backend, gid, id) = (backend.clone(), gid.clone(), id.clone());
+                                    el.child(
+                                        Btn::secondary("Offer")
+                                            .on_press(move |_| backend.reoffer_file(gid.clone(), id.clone())),
+                                    )
+                                }),
+                        )
+                    }),
             )
     }
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
     }
+}
+
+/// Pictures bigger than this keep their icon: decoding them would take too long.
+const THUMBNAIL_MAX: u64 = 40 * 1024 * 1024;
+
+/// A file Skia can show, by its name.
+fn is_picture(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp")
+}
+
+thread_local! {
+    /// Thumbnails already made, by path; `None` for a file that could not be shown.
+    static THUMBNAILS: RefCell<HashMap<PathBuf, Option<ImageHandle>>> = RefCell::default();
+}
+
+/// A picture of ours, in place of its file's icon (shown until it is ready, or if it can't be).
+#[derive(PartialEq)]
+struct Thumbnail {
+    path: PathBuf,
+    icon: Icon,
+    size: f32,
+    tint: Color,
+    ink: Color,
+}
+
+impl Component for Thumbnail {
+    fn render(&self) -> impl IntoElement {
+        let mut made = use_state(|| THUMBNAILS.with(|t| t.borrow().get(&self.path).cloned()));
+        let (path, px) = (self.path.clone(), (self.size * 3.) as i32);
+        use_hook(move || {
+            if made.peek().is_none() {
+                spawn(async move {
+                    let rgba = thread({
+                        let path = path.clone();
+                        move || thumbnail(&path, px)
+                    })
+                    .await;
+                    let handle = rgba.and_then(|rgba| ImageHandle::from_rgba(px as u32, px as u32, rgba.into(), AlphaType::Premul));
+                    THUMBNAILS.with(|t| {
+                        let mut t = t.borrow_mut();
+                        if t.len() > 200 {
+                            t.clear();
+                        }
+                        t.insert(path, handle.clone());
+                    });
+                    made.set(Some(handle));
+                });
+            }
+        });
+        match made.read().clone().flatten() {
+            Some(handle) => rect()
+                .width(Size::px(self.size))
+                .height(Size::px(self.size))
+                .corner_radius(self.size * 0.3)
+                .overflow(Overflow::Clip)
+                .child(image(handle).width(Size::fill()).height(Size::fill())),
+            None => icon_tile(self.icon, self.size, self.tint, self.ink),
+        }
+    }
+
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&self.path.display().to_string())
+    }
+}
+
+/// The middle square of the picture at `path`, `px` pixels wide, as premultiplied RGBA.
+fn thumbnail(path: &Path, px: i32) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    flipflop::core::open_source(path).ok()?.read_to_end(&mut bytes).ok()?;
+    let picture = SkImage::from_encoded(SkData::new_copy(&bytes))?;
+    drop(bytes);
+    // Mipmaps, so a big photo shrinks smoothly.
+    let picture = picture.make_raster_image(None, None)?.with_default_mipmaps()?;
+    let (w, h) = (picture.width() as f32, picture.height() as f32);
+    let scale = px as f32 / w.min(h);
+    let (dw, dh) = (w * scale, h * scale);
+    let mut surface = raster_n32_premul((px, px))?;
+    surface.canvas().draw_image_rect_with_sampling_options(
+        &picture,
+        None,
+        SkRect::from_xywh((px as f32 - dw) / 2., (px as f32 - dh) / 2., dw, dh),
+        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
+        &Paint::default(),
+    );
+    let info = ImageInfo::new((px, px), ColorType::RGBA8888, AlphaType::Premul, None);
+    let mut rgba = vec![0; (px * px * 4) as usize];
+    surface.read_pixels(&info, &mut rgba, px as usize * 4, (0, 0)).then_some(rgba)
 }
 
 // ---- texts -----------------------------------------------------------------------------------
@@ -806,7 +932,7 @@ fn device_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
                     ))
                     .child(divider())
                     .child(ToggleRow::new(
-                        "Stop sharing a file once everybody has it",
+                        "Stop offering a file once everybody has it",
                         "Applies to the files you offer. You can always stop one by hand.",
                         info.auto_stop,
                         setting(1),

@@ -87,7 +87,7 @@ pub struct FileView {
     pub audience: usize,
     /// We hold a copy (we offered it, or downloaded it).
     pub have: bool,
-    /// Where our downloaded copy is.
+    /// Where our copy is: what we downloaded, or our own file where we offer (or offered) it from.
     pub saved_to: Option<PathBuf>,
     /// Download in progress: (bytes so far, total).
     pub progress: Option<(u64, u64)>,
@@ -520,11 +520,15 @@ impl Core {
         self.0.sharing.dirty.lock().unwrap().remove(gid);
         let _ = std::fs::remove_file(self.0.sharing.doc_path(gid));
         let gone: Vec<Share> = self.with_state(|st| {
-            let (gone, keep) = std::mem::take(&mut st.shares)
+            let (mut gone, keep): (Vec<Share>, _) = std::mem::take(&mut st.shares)
                 .into_iter()
                 .partition(|s| s.group == gid);
             st.shares = keep;
-            st.stopped_shares.retain(|s| s.group != gid);
+            let (stopped, keep) = std::mem::take(&mut st.stopped_shares)
+                .into_iter()
+                .partition::<Vec<_>, _>(|s| s.group == gid);
+            st.stopped_shares = keep;
+            gone.extend(stopped);
             gone
         });
         self.release_sources(gone);
@@ -614,15 +618,16 @@ impl Core {
             .map(|(id, _)| id.to_string())
             .chain(self.guests_online(gid))
             .collect();
-        // Where we hold a copy: what we downloaded, and what we share, as long as it is still there.
+        // Where we hold a copy: what we downloaded, and what we share or shared, as long as it is still there.
         let received: HashMap<String, PathBuf> = {
             let store = self.0.store.lock().unwrap();
             let state = &store.state;
             state
                 .shares
                 .iter()
+                .chain(&state.stopped_shares)
                 .chain(&state.received)
-                .filter(|r| r.group == gid && r.path.exists())
+                .filter(|r| r.group == gid && still_there(&r.path))
                 .map(|r| (r.file.clone(), r.path.clone()))
                 .collect()
         };
@@ -634,7 +639,7 @@ impl Core {
                 .state
                 .stopped_shares
                 .iter()
-                .filter(|s| s.group == gid && s.path.exists())
+                .filter(|s| s.group == gid && still_there(&s.path))
                 .map(|s| s.file.clone())
                 .collect()
         };
@@ -646,7 +651,7 @@ impl Core {
         ) = {
             let store = self.0.store.lock().unwrap();
             let state = &store.state;
-            let here = |s: &&Share| s.group == gid && s.path.exists();
+            let here = |s: &&Share| s.group == gid && still_there(&s.path);
             (
                 state
                     .shares
@@ -1428,11 +1433,13 @@ impl Core {
                 .into_iter()
                 .partition::<Vec<_>, _>(|s| s.group == gid && s.file == file);
             st.shares = keep;
-            if mine {
-                st.stopped_shares
-                    .extend(gone.iter().filter(|s| !s.staged).cloned());
+            if !mine {
+                return gone;
             }
-            gone
+            // Our own files stay readable where they are, to be offered again; only our copies go.
+            let (staged, kept) = gone.into_iter().partition::<Vec<_>, _>(|s| s.staged);
+            st.stopped_shares.extend(kept);
+            staged
         });
         self.release_sources(gone);
         self.doc_changed(gid, false);
@@ -1498,7 +1505,7 @@ impl Core {
                     .cloned()
             })
             .context("where that file was is not known anymore")?;
-        if !share.path.exists() {
+        if !still_there(&share.path) {
             bail!("{} is not there anymore", share.path.display());
         }
         let (hash, size) = hash_source(share.path.clone(), Arc::default()).await?;
@@ -1552,16 +1559,20 @@ impl Core {
         {
             bail!("it is still downloading");
         }
-        self.with_state(|st| {
-            st.stopped_shares
-                .retain(|s| !(s.group == gid && s.file == fid));
+        let forgotten = self.with_state(|st| {
+            let (forgotten, keep) = std::mem::take(&mut st.stopped_shares)
+                .into_iter()
+                .partition::<Vec<_>, _>(|s| s.group == gid && s.file == fid);
+            st.stopped_shares = keep;
             if let Some(g) = st.groups.iter_mut().find(|g| g.id == gid) {
                 g.held_files.retain(|h| h != fid);
                 if !g.hidden_files.iter().any(|h| h == fid) {
                     g.hidden_files.push(fid.to_owned());
                 }
             }
+            forgotten
         });
+        self.release_sources(forgotten);
         Ok(())
     }
 
@@ -2713,7 +2724,8 @@ async fn listing_len(part: &Path, have: u64) -> u64 {
     if 4 + n <= have { 4 + n } else { 0 }
 }
 
-pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
+/// Open one of our files for reading: a plain path, or on Android a picked `content://` file.
+pub fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(target_os = "android")]
     if path.to_str().is_some_and(|p| p.starts_with("content://")) {
         let fd = crate::platform::open_content_fd(&path.to_string_lossy())
@@ -2723,8 +2735,15 @@ pub(super) fn open_source(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+/// Is our file at `path` still there? A picked `content://` file counts as there while we keep the
+/// permission to read it: asking its provider on every view would cost too much.
+fn still_there(path: &Path) -> bool {
+    path.to_str().is_some_and(|p| p.starts_with("content://")) || path.exists()
+}
+
 impl Core {
-    /// Shares that ended: delete our own copies, give back the permission to read picked files.
+    /// Shares that ended (or that can no longer be offered again): delete our own copies, give
+    /// back the permission to read picked files.
     pub(super) fn release_sources(&self, gone: Vec<Share>) {
         for s in gone {
             if s.staged {
@@ -2733,15 +2752,15 @@ impl Core {
             }
             #[cfg(target_os = "android")]
             if let Some(uri) = s.path.to_str().filter(|p| p.starts_with("content://")) {
-                let still_used = self
-                    .0
-                    .store
-                    .lock()
-                    .unwrap()
-                    .state
-                    .shares
-                    .iter()
-                    .any(|o| o.path == s.path)
+                let still_used = {
+                    let store = self.0.store.lock().unwrap();
+                    let state = &store.state;
+                    state
+                        .shares
+                        .iter()
+                        .chain(&state.stopped_shares)
+                        .any(|o| o.path == s.path)
+                }
                     || self
                         .0
                         .sharing
