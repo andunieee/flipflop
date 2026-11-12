@@ -11,17 +11,32 @@ default:
 desktop *args:
     cargo run -p flipflop-app --bin flipflop-gui -- {{args}}
 
-# install the desktop app system-wide in /opt/flipflop and add its menu entry and icons for the current user (Linux)
+# install the app in /opt/flipflop, the flipflop CLI and flipflop-gui in /usr/local/bin, and the menu entry and
+# icons in /usr/share, for every user (Linux)
 desktop-install: portable
     #!/usr/bin/env bash
     set -euo pipefail
-    # Replace the installed copy, then put the app in PATH as flipflop-gui (`flipflop` is the command line client).
+    # The command line client, built and installed under its own name.
+    cargo build --release --locked -p flipflop --bin flipflop
+    target=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"])')
+    sudo install -Dm755 "$target/release/flipflop" /usr/local/bin/flipflop
+    # Replace the installed app, then put its launcher in PATH as flipflop-gui.
     sudo rm -rf /opt/flipflop
     sudo cp -a dist/stage/portable/flipflop /opt/flipflop
     sudo ln -sf /opt/flipflop/bin/flipflop-gui /usr/local/bin/flipflop-gui
-    # The menu entry and icons go to ~/.local/share/applications and ~/.local/share/icons, with Exec pointing at
-    # the app we just installed.
-    /opt/flipflop/bin/flipflop-gui --install-desktop-entry
+    # The menu entry and icons go to /usr/share (not ~/.local/share), with Exec pointing at the app we just installed.
+    sudo install -Dm644 dist/stage/root/usr/share/applications/dev.flipflop.app.desktop \
+        /usr/share/applications/dev.flipflop.app.desktop
+    sudo install -Dm644 dist/stage/root/usr/share/metainfo/dev.flipflop.app.metainfo.xml \
+        /usr/share/metainfo/dev.flipflop.app.metainfo.xml
+    for s in 16 24 32 48 64 128 256 512; do
+        sudo install -Dm644 "dist/stage/root/usr/share/icons/hicolor/${s}x${s}/apps/dev.flipflop.app.png" \
+            "/usr/share/icons/hicolor/${s}x${s}/apps/dev.flipflop.app.png"
+    done
+    # A per-user entry from an earlier `--install-desktop-entry` would shadow the system one.
+    rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/dev.flipflop.app.desktop"
+    sudo update-desktop-database -q /usr/share/applications || true
+    sudo gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
 
 # build the Rust code (debug)
 build:
