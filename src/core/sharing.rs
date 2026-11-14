@@ -613,6 +613,16 @@ impl Core {
         self.has_group(gid).then(|| self.build_view(gid, false))
     }
 
+    /// The view the UI was last sent, which every change re-sends: no need to read the document
+    /// (all its offers) again. Built when there is none yet.
+    pub(super) fn shown_view(&self, gid: &str) -> Option<GroupView> {
+        if !self.has_group(gid) {
+            return None;
+        }
+        let shown = self.0.sharing.shown.lock().unwrap().get(gid).cloned();
+        Some(shown.unwrap_or_else(|| self.build_view(gid, false)))
+    }
+
     pub(super) fn build_view(&self, gid: &str, scratch_local: bool) -> GroupView {
         let me = self.me();
         let (members, files, texts, scratch, tabs) = self.with_doc(gid, |d| {

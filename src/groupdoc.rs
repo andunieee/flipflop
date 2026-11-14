@@ -346,46 +346,65 @@ impl GroupDoc {
             .map(|obj| self.read_file(id.to_owned(), &obj))
     }
 
+    /// In one pass over the offer's fields: a group's hundreds of songs are read on every change,
+    /// and looking each field up on its own takes several times as long.
     fn read_file(&self, id: String, f: &ObjId) -> FileOffer {
-        let downloaded = match self.doc.get(f, "downloaded") {
-            Ok(Some((Value::Object(_), d))) => self
-                .doc
-                .map_range(&d, ..)
-                .filter_map(|item| Some((item.key.to_string(), item.value.into_value().as_i64()?)))
-                .collect(),
-            _ => BTreeMap::new(),
-        };
-        let hosts = match self.doc.get(f, "hosts") {
-            Ok(Some((Value::Object(_), h))) => self
-                .doc
-                .map_range(&h, ..)
-                .map(|item| item.key.to_string())
-                .collect(),
-            _ => BTreeSet::new(),
-        };
-        FileOffer {
-            hosts,
+        let mut offer = FileOffer {
             id,
-            name: self.str_of(f, "name"),
-            size: self.int_of(f, "size").max(0) as u64,
-            hash: self.str_of(f, "hash"),
-            kind: self.str_of(f, "kind"),
-            from: self.str_of(f, "from"),
-            from_name: self.str_of(f, "from_name"),
-            ts: self.int_of(f, "ts"),
-            stopped: self.bool_of(f, "stopped"),
-            stopped_at: self.int_of(f, "stopped_at"),
-            downloaded,
-            tracks: self.tracks_of(f),
+            name: String::new(),
+            size: 0,
+            hash: String::new(),
+            kind: String::new(),
+            from: String::new(),
+            from_name: String::new(),
+            ts: 0,
+            stopped: false,
+            stopped_at: 0,
+            downloaded: BTreeMap::new(),
+            hosts: BTreeSet::new(),
+            tracks: Vec::new(),
+        };
+        for item in self.doc.map_range(f, ..) {
+            let key = item.key.as_ref();
+            if let automerge::ValueRef::Object(ty) = item.value {
+                let obj = item.id();
+                match (key, ty) {
+                    ("downloaded", _) => {
+                        offer.downloaded = self
+                            .doc
+                            .map_range(&obj, ..)
+                            .filter_map(|item| Some((item.key.to_string(), item.value.into_value().as_i64()?)))
+                            .collect()
+                    }
+                    ("hosts", _) => {
+                        offer.hosts = self.doc.map_range(&obj, ..).map(|item| item.key.to_string()).collect()
+                    }
+                    ("tracks", ObjType::List) => offer.tracks = self.tracks_in(&obj),
+                    _ => {}
+                }
+                continue;
+            }
+            let value = item.value.into_value();
+            let (text, int) = (|| value.as_str().unwrap_or_default().to_owned(), || value.as_i64().unwrap_or(0));
+            match key {
+                "name" => offer.name = text(),
+                "size" => offer.size = int().max(0) as u64,
+                "hash" => offer.hash = text(),
+                "kind" => offer.kind = text(),
+                "from" => offer.from = text(),
+                "from_name" => offer.from_name = text(),
+                "ts" => offer.ts = int(),
+                "stopped" => offer.stopped = value.as_bool().unwrap_or(false),
+                "stopped_at" => offer.stopped_at = int(),
+                _ => {}
+            }
         }
+        offer
     }
 
-    fn tracks_of(&self, f: &ObjId) -> Vec<Track> {
-        let Ok(Some((Value::Object(ObjType::List), list))) = self.doc.get(f, "tracks") else {
-            return Vec::new();
-        };
-        (0..self.doc.length(&list))
-            .filter_map(|i| match self.doc.get(&list, i) {
+    fn tracks_in(&self, list: &ObjId) -> Vec<Track> {
+        (0..self.doc.length(list))
+            .filter_map(|i| match self.doc.get(list, i) {
                 Ok(Some((Value::Object(ObjType::Map), t))) => Some(Track {
                     path: self.str_of(&t, "path"),
                     size: self.int_of(&t, "size").max(0) as u64,

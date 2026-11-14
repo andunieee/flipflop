@@ -2,6 +2,8 @@
 //! live in the backend ([`crate::player`]), so playing goes on without the UI; here they are shown
 //! from the [`MusicState`] it reports.
 
+use std::collections::HashSet;
+
 use flipflop::{core::FileView, format};
 use freya::prelude::*;
 
@@ -39,47 +41,128 @@ pub struct MusicTab {
     pub music: Vec<FileView>,
 }
 
+/// What an offer's card shows of what plays: which of its songs is current, and whether it is
+/// paused. Cards get only this, so playing re-renders only the cards it concerns.
+#[derive(Clone, Copy, PartialEq)]
+struct Playing {
+    track: usize,
+    paused: bool,
+}
+
+/// What the visible rows are built from; the list rebuilds them when it changes.
+#[derive(Clone, PartialEq)]
+struct Rows {
+    gid: String,
+    music: Vec<FileView>,
+    current: Option<(String, Playing)>,
+    open: HashSet<String>,
+}
+
+/// Height of an offer's head: its icon, buttons, and two or (`status`) three lines of text.
+fn head_height(d: Dim, status: bool) -> f32 {
+    let text = (d.font_md() + d.font_sm() + if status { d.font_xs() } else { 0. }) * 1.35 + 4.;
+    text.max(d.control_height()).max(40.)
+}
+
+fn track_height(d: Dim) -> f32 {
+    d.control_height() - 8.
+}
+
+/// What an offer's row takes in the list, the gap below it included. The list only builds the rows
+/// in view (a group can offer hundreds of songs), so it must know each row's height beforehand.
+fn row_height(d: Dim, f: &FileView, open: bool) -> f32 {
+    let status = f.preparing || !(f.mine || f.source_online);
+    let mut card = head_height(d, status) + 2. * d.card_padding();
+    if open && !f.tracks.is_empty() {
+        card += Dim::SPACE2 + 1. + f.tracks.len() as f32 * (Dim::SPACE2 + track_height(d));
+    }
+    card + Dim::SPACE3
+}
+
 impl Component for MusicTab {
     fn render(&self) -> impl IntoElement {
+        let (_, d) = look();
         let nav = use_consume::<Nav>();
         let state = use_consume::<State<MusicState>>();
-        let active = {
+        let open = use_state(HashSet::<String>::new);
+        let (active, current) = {
             let now = state.read();
-            now.current.is_some() || !now.queue.is_empty()
-        };
-        let list = ScrollView::new()
-            .width(Size::fill())
-            .height(Size::flex(1.))
-            .spacing(Dim::SPACE3)
-            .child(card().child(
-                card_body(Dim::SPACE3).child(
-                    rect()
-                        .horizontal()
-                        .width(Size::fill())
-                        .content(Content::flex())
-                        .spacing(Dim::SPACE2)
-                        .child(Btn::primary("Add songs").icon(Icon::Music).expanded().on_press(move |_| nav.pick("music")))
-                        // Albums are folders, which only the desktop's picker gives.
-                        .maybe(cfg!(not(target_os = "android")), |el| {
-                            el.child(
-                                Btn::secondary("Add a folder")
-                                    .icon(Icon::Folder)
-                                    .expanded()
-                                    .on_press(move |_| nav.pick("music-folder")),
-                            )
-                        }),
-                ),
-            ))
-            .children(self.music.iter().map(|f| OfferCard { gid: self.gid.clone(), offer: f.clone() }.into_element()))
-            .maybe(self.music.is_empty(), |el| {
-                el.child(hint_center("Nothing to play yet. Offer songs: the others play them from you, nobody downloads them."))
+            let current = now.current.as_ref().filter(|s| s.gid == self.gid).map(|s| {
+                (s.fid.clone(), Playing { track: s.track, paused: now.paused })
             });
+            (now.current.is_some() || !now.queue.is_empty(), current)
+        };
+        let add = card().child(
+            card_body(Dim::SPACE3).child(
+                rect()
+                    .horizontal()
+                    .width(Size::fill())
+                    .content(Content::flex())
+                    .spacing(Dim::SPACE2)
+                    .child(Btn::primary("Add songs").icon(Icon::Music).expanded().on_press(move |_| nav.pick("music")))
+                    // Albums are folders, which only the desktop's picker gives.
+                    .maybe(cfg!(not(target_os = "android")), |el| {
+                        el.child(
+                            Btn::secondary("Add a folder")
+                                .icon(Icon::Folder)
+                                .expanded()
+                                .on_press(move |_| nav.pick("music-folder")),
+                        )
+                    }),
+            ),
+        );
+        if self.music.is_empty() {
+            return rect()
+                .expanded()
+                .spacing(Dim::SPACE3)
+                .content(Content::flex())
+                .child(add)
+                .child(hint_center("Nothing to play yet. Offer songs: the others play them from you, nobody downloads them."))
+                .maybe(active, |el| el.child(QueuePanel))
+                .into_element();
+        }
+        let rows = Rows { gid: self.gid.clone(), music: self.music.clone(), current, open: open.read().clone() };
+        // The add buttons' card first, then the offers.
+        let sizes: Vec<f32> = std::iter::once(d.control_height() + 2. * d.card_padding() + Dim::SPACE3)
+            .chain(rows.music.iter().map(|f| row_height(d, f, rows.open.contains(&f.id))))
+            .collect();
+        let length = sizes.len();
+        let list = VirtualScrollView::new_with_data(rows, move |item, rows: &Rows| {
+            let Some(f) = item.index.checked_sub(1).and_then(|i| rows.music.get(i)) else {
+                return rect().key(0).height(Size::px(item.size)).child(add.clone()).into();
+            };
+            let playing = rows.current.as_ref().filter(|(fid, _)| *fid == f.id).map(|(_, p)| *p);
+            rect()
+                .key(&f.id)
+                .height(Size::px(item.size))
+                .child(OfferCard {
+                    gid: rows.gid.clone(),
+                    offer: f.clone(),
+                    playing,
+                    open: rows.open.contains(&f.id),
+                    opened: open,
+                })
+                .into()
+        })
+        .item_size(move |i: usize| sizes[i])
+        .length(length)
+        .width(Size::fill())
+        .height(Size::flex(1.));
         rect()
             .expanded()
             .spacing(Dim::SPACE3)
             .content(Content::flex())
             .child(list)
             .maybe(active, |el| el.child(QueuePanel))
+            .into_element()
+    }
+}
+
+/// Unfold the album `id`, or fold it.
+fn toggle(mut opened: State<HashSet<String>>, id: &str) {
+    let mut set = opened.write();
+    if !set.remove(id) {
+        set.insert(id.to_owned());
     }
 }
 
@@ -88,18 +171,21 @@ impl Component for MusicTab {
 struct OfferCard {
     gid: String,
     offer: FileView,
+    playing: Option<Playing>,
+    open: bool,
+    /// The albums unfolded, kept by the tab: its rows are built only while in view.
+    opened: State<HashSet<String>>,
 }
 
 impl Component for OfferCard {
     fn render(&self) -> impl IntoElement {
         let (c, d) = look();
         let nav = use_consume::<Nav>();
-        let now = use_consume::<State<MusicState>>().read().clone();
-        let mut open = use_state(|| false);
         let (gid, f) = (&self.gid, &self.offer);
+        let (open, opened) = (self.open, self.opened);
         let album = !f.tracks.is_empty();
-        let current = now.current.as_ref().filter(|s| s.of(gid, &f.id));
-        let playing = current.is_some() && !now.paused;
+        let current = self.playing;
+        let playing = current.is_some_and(|p| !p.paused);
         let who = if f.mine { "you".to_owned() } else { f.from_name.clone() };
         let meta = if album {
             let n = f.tracks.len();
@@ -114,6 +200,7 @@ impl Component for OfferCard {
         let head = rect()
             .horizontal()
             .width(Size::fill())
+            .height(Size::px(head_height(d, f.preparing || !can_play)))
             .content(Content::flex())
             .spacing(Dim::SPACE3)
             .cross_align(Alignment::Center)
@@ -122,7 +209,10 @@ impl Component for OfferCard {
                 rect()
                     .width(Size::flex(1.))
                     .spacing(2.)
-                    .maybe(album, |el| el.cursor(CursorIcon::Pointer).on_press(move |_| open.toggle()))
+                    .maybe(album, |el| el.cursor(CursorIcon::Pointer).on_press({
+                        let id = f.id.clone();
+                        move |_| toggle(opened, &id)
+                    }))
                     .child(txt(f.name.clone(), d.font_md(), ink, 650).elide())
                     .child(txt(meta, d.font_sm(), c.text_muted, 400).elide())
                     .maybe(f.preparing, |el| el.child(txt("Preparing…", d.font_xs(), c.text_faint, 400)))
@@ -147,8 +237,9 @@ impl Component for OfferCard {
                 }))
             })
             .maybe(album, |el| {
-                el.child(IconButton::new(if *open.read() { Icon::ChevronDown } else { Icon::ChevronRight }, move |_| {
-                    open.toggle()
+                el.child(IconButton::new(if open { Icon::ChevronDown } else { Icon::ChevronRight }, {
+                    let id = f.id.clone();
+                    move |_| toggle(opened, &id)
                 }))
             })
             .maybe(f.mine && !f.preparing, |el| {
@@ -158,7 +249,7 @@ impl Component for OfferCard {
                 )
             });
         let tracks = f.tracks.iter().enumerate().map(|(i, path)| {
-            let this = now.current.as_ref().is_some_and(|s| s.is(gid, &f.id, i));
+            let this = current.filter(|p| p.track == i);
             let (press, queue) = ((gid.clone(), f.clone()), (gid.clone(), f.clone()));
             let name = path.rsplit('/').next().unwrap_or(path).to_owned();
             let row_name = name.clone();
@@ -166,18 +257,19 @@ impl Component for OfferCard {
                 .key(i)
                 .horizontal()
                 .width(Size::fill())
+                .height(Size::px(track_height(d)))
                 .content(Content::flex())
                 .spacing(Dim::SPACE2)
                 .cross_align(Alignment::Center)
                 .padding((0., 0., 0., 52.))
                 .child(
-                    txt(format!("{}. {row_name}", i + 1), d.font_sm(), if this { c.accent_text } else { c.text_strong }, 400)
+                    txt(format!("{}. {row_name}", i + 1), d.font_sm(), if this.is_some() { c.accent_text } else { c.text_strong }, 400)
                         .width(Size::flex(1.))
                         .elide(),
                 )
                 .maybe(can_play, |el| {
                     el.child(
-                        IconButton::new(if this && !now.paused { Icon::Pause } else { Icon::Play }, move |_| {
+                        IconButton::new(if this.is_some_and(|p| !p.paused) { Icon::Pause } else { Icon::Play }, move |_| {
                             with_music(nav, |m, b| m.press(b, &press.0, &press.1, i))
                         })
                         .tint(c.accent_text)
@@ -199,7 +291,7 @@ impl Component for OfferCard {
         card().child(
             card_body(Dim::SPACE2)
                 .child(head)
-                .maybe(album && *open.read(), |el| el.child(divider()).children(tracks)),
+                .maybe(album && open, |el| el.child(divider()).children(tracks)),
         )
     }
 

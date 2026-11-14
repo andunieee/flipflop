@@ -153,7 +153,7 @@ impl Core {
             .filter_map(|(gid, seen)| {
                 let info = groups.iter().find(|g| g.id == *gid)?;
                 let own_pad = self.0.sharing.own_pad.lock().unwrap().get(gid).cloned();
-                let mut n = news(&self.group_view(gid)?, seen, own_pad.as_deref());
+                let mut n = news(&self.shown_view(gid)?, seen, own_pad.as_deref());
                 n.with = info.with;
                 n.title = match info
                     .with
