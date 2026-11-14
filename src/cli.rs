@@ -102,8 +102,8 @@ pub enum GroupCmd {
     New,
     /// Members, settings and counts of one group.
     Show { group: String },
-    /// Local name for a group (empty to remove it).
-    Rename { group: String, alias: String },
+    /// Name the group, for everybody (empty to remove it).
+    Rename { group: String, name: String },
     /// Leave (delete locally) a group.
     Leave { group: String },
     /// Invite a contact.
@@ -566,9 +566,9 @@ async fn group(core: &Core, cx: &Ctx, cmd: &GroupCmd, wait: Duration) -> Result<
                 v.scratch.chars().count()
             );
         }
-        GroupCmd::Rename { group, alias } => {
+        GroupCmd::Rename { group, name } => {
             let info = find_group(core, group)?;
-            core.rename_group(&info.id, alias);
+            core.rename_group(&info.id, name);
         }
         GroupCmd::Leave { group } => {
             let info = find_group(core, group)?;
@@ -844,7 +844,7 @@ async fn settle(core: &Core, gid: &str, limit: Duration) {
 fn title(g: &GroupInfo) -> String {
     match g.with.and_then(|w| g.members.iter().find(|m| m.id == w)) {
         Some(m) => format!("{} (paired)", m.name),
-        None => g.alias.clone().unwrap_or_else(|| g.haiku.clone()),
+        None => g.name.clone().unwrap_or_else(|| g.haiku.clone()),
     }
 }
 
@@ -962,7 +962,7 @@ fn find_group(core: &Core, query: &str) -> Result<GroupInfo> {
     let q = query.to_lowercase();
     let exact: Vec<&GroupInfo> = groups
         .iter()
-        .filter(|g| g.id == query || g.alias.as_deref().is_some_and(|a| a.to_lowercase() == q))
+        .filter(|g| g.id == query || g.name.as_deref().is_some_and(|a| a.to_lowercase() == q))
         .collect();
     let hits: Vec<&GroupInfo> = if exact.len() == 1 {
         exact
@@ -981,7 +981,7 @@ fn find_group(core: &Core, query: &str) -> Result<GroupInfo> {
                     || with_peer
                     || (g.with.is_none()
                         && (g.haiku.to_lowercase().contains(&q)
-                            || g.alias
+                            || g.name
                                 .as_deref()
                                 .is_some_and(|a| a.to_lowercase().contains(&q))))
             })

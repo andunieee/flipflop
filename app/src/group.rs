@@ -96,7 +96,7 @@ impl Component for GroupPage {
                             .width(Size::flex(1.))
                             .spacing(2.)
                             .child(txt(group_title(info), d.font_xl(), c.text_strong, 700).elide())
-                            .maybe(info.alias.is_some(), |el| {
+                            .maybe(info.name.is_some(), |el| {
                                 el.child(txt(info.haiku.clone(), d.font_sm(), c.text_muted, 400).elide())
                             }),
                     )
@@ -788,7 +788,7 @@ fn rename_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
         kind: EditKind::Group,
         id: info.id.clone(),
         original: info.haiku.clone(),
-        text: info.alias.clone().unwrap_or_default(),
+        text: info.name.clone().unwrap_or_default(),
     };
     vec![
         overline("GROUP").into_element(),
@@ -800,7 +800,7 @@ fn rename_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
                             .width(Size::fill())
                             .spacing(3.)
                             .child(txt(group_title(info), d.font_lg(), c.text_strong, 650).elide())
-                            .maybe(info.alias.is_some(), |el| {
+                            .maybe(info.name.is_some(), |el| {
                                 el.child(txt(info.haiku.clone(), d.font_xs(), c.text_faint, 400).elide())
                             }),
                     )

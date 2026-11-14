@@ -38,7 +38,6 @@ pub struct Member {
 pub struct Group {
     /// 16 random bytes (hex); the haiku name derives from it.
     pub id: String,
-    pub alias: Option<String>,
     pub members: Vec<Member>,
     /// Download every file offered in the group as soon as it shows up.
     #[serde(default = "yes")]
@@ -94,7 +93,6 @@ impl Group {
     pub fn new(id: String, members: Vec<Member>) -> Group {
         Group {
             id,
-            alias: None,
             members,
             auto_download: true,
             auto_stop: false,

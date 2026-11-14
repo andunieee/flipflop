@@ -673,9 +673,18 @@ impl Component for EditDialog {
                 ))
                 .child(txt(edit.original.clone(), d.font_sm(), c.text_muted, 400))
                 .child(
-                    field(edit.text.clone(), "Local name (empty restores the original)", on_change)
-                        .auto_focus(true)
-                        .on_submit(move |_| nav.edit(None)),
+                    field(
+                        edit.text.clone(),
+                        match edit.kind {
+                            EditKind::Peer => "Local name (empty restores the original)",
+                            EditKind::Group => {
+                                "Group name, for everybody (empty restores the original)"
+                            }
+                        },
+                        on_change,
+                    )
+                    .auto_focus(true)
+                    .on_submit(move |_| nav.edit(None)),
                 )
                 .child(
                     rect()

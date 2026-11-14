@@ -70,7 +70,7 @@ pub fn pair_request(p: &Peer) -> bool {
 pub fn group_title(g: &GroupInfo) -> String {
     match g.with.and_then(|w| g.members.iter().find(|m| m.id == w)) {
         Some(m) => m.name.clone(),
-        None => g.alias.clone().unwrap_or_else(|| g.haiku.clone()),
+        None => g.name.clone().unwrap_or_else(|| g.haiku.clone()),
     }
 }
 

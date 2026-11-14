@@ -2,6 +2,7 @@
 //! snippets and scratchpad. Pure data, no networking; [`crate::core`] moves the sync messages.
 //!
 //! Layout (all under the root map):
+//! - `name`:   the group's name, as any member last set it (absent: the haiku name shows).
 //! - `members`: peer id -> device name. Every peer only writes its own entry.
 //! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, stopped_at, downloaded: { peer id -> ts }, hosts: { peer id -> ts } }
 //! - `music`:   the music tab's offers (of kind [`MUSIC_KIND`], or [`ALBUM_KIND`] for a folder, which
@@ -229,6 +230,35 @@ impl GroupDoc {
             .filter(|item| matches!(item.value, automerge::ValueRef::Object(_)))
             .map(|item| (item.key.to_string(), item.id()))
             .collect()
+    }
+
+    // ---- name -------------------------------------------------------------------------
+
+    /// The name the members gave the group, if any (else it shows its haiku name).
+    pub fn name(&self) -> Option<String> {
+        match self.doc.get(ROOT, "name") {
+            Ok(Some((Value::Scalar(s), _))) => s
+                .as_str()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned),
+            _ => None,
+        }
+    }
+
+    /// Name the group for every member; `None` (or an empty name) goes back to the haiku.
+    pub fn set_name(&mut self, name: Option<&str>) {
+        let name = name.map(str::trim).filter(|n| !n.is_empty());
+        match name {
+            Some(name) => {
+                if self.name().as_deref() != Some(name) {
+                    self.doc.put(ROOT, "name", name).expect("put group name");
+                }
+            }
+            None => {
+                let _ = self.doc.delete(ROOT, "name");
+            }
+        }
     }
 
     // ---- members ----------------------------------------------------------------------
@@ -722,6 +752,19 @@ mod tests {
         sync(&mut a, &mut b);
         assert_eq!(a.texts(), b.texts());
         assert_eq!(a.texts().len(), 2);
+    }
+
+    #[test]
+    fn the_name_is_shared() {
+        let (mut a, mut b) = (GroupDoc::new(), GroupDoc::new());
+        a.set_name(Some("weekend plans"));
+        sync(&mut a, &mut b);
+        assert_eq!(b.name().as_deref(), Some("weekend plans"));
+        // Anyone can rename it, and clearing it brings back the haiku.
+        b.set_name(Some("  "));
+        sync(&mut a, &mut b);
+        assert_eq!(a.name(), None);
+        assert_eq!(b.name(), None);
     }
 
     #[test]

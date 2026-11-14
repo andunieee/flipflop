@@ -466,10 +466,10 @@ impl Core {
         origin: &Origin,
         tx: mpsc::UnboundedSender<Out>,
     ) -> Option<GuestSession> {
-        let (title, uploads) = {
+        let uploads = {
             let store = self.0.store.lock().unwrap();
             let g = store.state.groups.iter().find(|g| g.id == gid)?;
-            (g.alias.clone(), g.guest.as_ref()?.uploads)
+            g.guest.as_ref()?.uploads
         };
         let (guest, name) = (origin.id(), origin.name());
         let key = format!(
@@ -480,9 +480,15 @@ impl Core {
             d.join(&guest, &name);
             d.reset_sync(&key);
         });
+        // The name the members gave it, else the haiku derived from the id.
+        let title = self.with_doc(gid, |d| d.name()).unwrap_or_else(|| {
+            super::parse_gid(gid)
+                .map(|g| haiku::name(&g))
+                .unwrap_or_default()
+        });
         let hello = json!({
             "t": "hello", "id": guest, "name": name, "uploads": uploads,
-            "group": title.unwrap_or_else(|| super::parse_gid(gid).map(|g| haiku::name(&g)).unwrap_or_default()),
+            "group": title,
             "host": self.name(),
         });
         let mut frame = vec![TAG_CONTROL];

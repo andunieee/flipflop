@@ -923,6 +923,9 @@ impl Core {
         self.emit_group(gid, scratch_local, true);
         self.emit_home();
         self.emit_transfers();
+        // The group's shared name is part of the groups view too (and a peer may have renamed it).
+        let (_, groups) = self.snapshot();
+        self.emit(Event::Groups(groups));
     }
 
     /// Tell the UI the queue changed. The caller does not hold the publish lock.

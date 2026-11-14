@@ -160,7 +160,7 @@ impl Core {
                     .and_then(|w| info.members.iter().find(|m| m.id == w))
                 {
                     Some(m) => m.name.clone(),
-                    None => info.alias.clone().unwrap_or_else(|| info.haiku.clone()),
+                    None => info.name.clone().unwrap_or_else(|| info.haiku.clone()),
                 };
                 (!n.is_empty()).then_some(n)
             })

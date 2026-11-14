@@ -94,7 +94,8 @@ pub struct MemberInfo {
 pub struct GroupInfo {
     pub id: String,
     pub haiku: String,
-    pub alias: Option<String>,
+    /// The name the members gave the group; without one it shows its haiku.
+    pub name: Option<String>,
     pub members: Vec<MemberInfo>,
     /// Contacts that could still be added.
     pub candidates: Vec<(EndpointId, String)>,
@@ -581,7 +582,7 @@ impl Core {
                 Some(GroupInfo {
                     id: g.id.clone(),
                     haiku,
-                    alias: g.alias.clone(),
+                    name: self.with_doc(&g.id, |d| d.name()),
                     members,
                     candidates,
                     auto_download: g.auto_download,
@@ -1078,13 +1079,15 @@ impl Core {
         self.auto_jobs(group);
     }
 
-    pub fn rename_group(&self, group: &str, alias: &str) {
-        let alias = Some(clean_name(alias)).filter(|a| !a.is_empty());
-        self.with_state(|st| {
-            if let Some(g) = st.groups.iter_mut().find(|g| g.id == group) {
-                g.alias = alias;
-            }
-        });
+    /// Rename the group for everyone: the name lives in the shared document. An empty name goes
+    /// back to the haiku.
+    pub fn rename_group(&self, group: &str, name: &str) {
+        if !self.has_group(group) {
+            return;
+        }
+        let name = Some(clean_name(name)).filter(|n| !n.is_empty());
+        self.with_doc(group, |d| d.set_name(name.as_deref()));
+        self.doc_changed(group, false);
     }
 
     pub fn delete_group(&self, group: &str) {

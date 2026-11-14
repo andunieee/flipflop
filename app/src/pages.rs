@@ -274,7 +274,7 @@ impl Component for HomePage {
 fn group_card(g: &GroupInfo, m: &Model, nav: Nav, on_home: bool) -> Element {
     let (c, d) = look();
     let gid = g.id.clone();
-    let subtitle = if g.alias.is_some() { g.haiku.clone() } else { String::new() };
+    let subtitle = if g.name.is_some() { g.haiku.clone() } else { String::new() };
     ClickCard::new(move |_| nav.open_group(&gid, None))
         .border(c.group_border, 2.)
         .key(format!("group{}", g.id))

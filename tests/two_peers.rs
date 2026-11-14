@@ -380,15 +380,24 @@ async fn group_invites_accept_offline_resend_and_rejection() {
     })
     .await;
 
-    // local aliases keep the haiku
+    // the name is shared: renaming it here renames it for everybody
     a.rename_group(&g1, "weekend plans");
-    until("alias", || {
+    until("alice sees the name", || {
         alog.lock()
             .unwrap()
             .groups
             .groups
             .iter()
-            .any(|g| g.id == g1 && g.alias.as_deref() == Some("weekend plans") && g.haiku == haiku)
+            .any(|g| g.id == g1 && g.name.as_deref() == Some("weekend plans") && g.haiku == haiku)
+    })
+    .await;
+    until("bob sees the name", || {
+        blog.lock()
+            .unwrap()
+            .groups
+            .groups
+            .iter()
+            .any(|g| g.id == g1 && g.name.as_deref() == Some("weekend plans") && g.haiku == haiku)
     })
     .await;
     a.delete_group(&g3);
