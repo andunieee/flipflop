@@ -321,6 +321,11 @@ impl Music {
         self.play(backend, first);
     }
 
+    /// Where the song plays, in ms; none before it plays.
+    pub fn position(&self) -> Option<u64> {
+        self.player.lock().unwrap().as_ref()?.as_ref().ok()?.position()
+    }
+
     /// Pause or resume; with nothing playing, start the queue.
     pub fn toggle(&self, backend: &Backend) {
         self.stop_following(backend);
@@ -426,7 +431,10 @@ impl Music {
                     Some(name) => format!("{name}: {why}"),
                     None => why,
                 });
-                self.next(backend);
+                // Listening along, the sharer's next song comes by itself; ours would end it.
+                if self.state.lock().unwrap().following.is_none() {
+                    self.next(backend);
+                }
             }
         }
     }

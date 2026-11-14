@@ -234,7 +234,8 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
         player.setOnCompletionListener(this);
         player.setOnErrorListener(this);
         try {
-            player.setDataSource(url);
+            // Not the URL: a stream it cannot measure, it cannot seek in.
+            player.setDataSource(new HttpSource(url));
             player.prepareAsync();
         } catch (Exception e) {
             release();

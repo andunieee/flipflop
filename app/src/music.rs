@@ -2,7 +2,7 @@
 //! live in the backend ([`crate::player`]), so playing goes on without the UI; here they are shown
 //! from the [`MusicState`] it reports.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use flipflop::{core::FileView, format};
 use freya::prelude::*;
@@ -17,6 +17,9 @@ use crate::{
 
 /// Queue rows shown before the queue scrolls.
 const QUEUE_ROWS: usize = 4;
+
+/// How often the playback clock reads where the song is.
+const CLOCK_TICK: Duration = Duration::from_millis(100);
 
 /// A queue row being dragged: its song's key.
 #[derive(Clone, Copy, PartialEq)]
@@ -477,6 +480,43 @@ impl Component for OfferCard {
 #[derive(PartialEq)]
 struct QueuePanel;
 
+/// Where the song plays, as m:ss.d, read every [`CLOCK_TICK`] on the backend (the player may
+/// be behind a JNI call) and shown as it comes.
+#[derive(PartialEq)]
+struct PlayClock;
+
+impl Component for PlayClock {
+    fn render(&self) -> impl IntoElement {
+        let (c, d) = look();
+        let nav = use_consume::<Nav>();
+        let mut at = use_state(|| None::<u64>);
+        use_hook(move || {
+            let backend = nav.backend();
+            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+            backend.clone().spawn_task(async move {
+                loop {
+                    tokio::time::sleep(CLOCK_TICK).await;
+                    // Gone with the clock: nobody receives.
+                    if tx.send(backend.music().position()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+            spawn(async move {
+                while let Some(ms) = rx.recv().await {
+                    if *at.peek() != ms {
+                        at.set(ms);
+                    }
+                }
+            });
+        });
+        let text = at.read().map_or_else(String::new, |ms| {
+            format!("{}:{:02}.{}", ms / 60_000, ms / 1000 % 60, ms / 100 % 10)
+        });
+        txt(text, d.font_sm(), c.text_muted, 500).max_lines(1)
+    }
+}
+
 impl Component for QueuePanel {
     fn render(&self) -> impl IntoElement {
         let (c, d) = look();
@@ -549,6 +589,8 @@ impl Component for QueuePanel {
                             .child(txt(detail, d.font_sm(), c.text_muted, 400).elide()),
                     ),
             )
+            // Down to tenths: two devices listening along can be compared at a glance.
+            .maybe(current.is_some() && !loading, |el| el.child(PlayClock))
             .child(
                 IconButton::new(
                     if current.is_some() && !paused {
