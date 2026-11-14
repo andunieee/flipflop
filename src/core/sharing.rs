@@ -613,6 +613,16 @@ impl Core {
         self.has_group(gid).then(|| self.build_view(gid, false))
     }
 
+    /// The group's raw document as JSON, for debugging.
+    pub fn group_json(&self, gid: &str) -> Option<String> {
+        self.has_group(gid).then(|| {
+            self.with_doc(gid, |d| {
+                serde_json::to_string_pretty(&automerge::AutoSerde::from(&*d.raw()))
+                    .unwrap_or_else(|e| format!("could not serialize the document: {e}"))
+            })
+        })
+    }
+
     /// The view the UI was last sent, which every change re-sends: no need to read the document
     /// (all its offers) again. Built when there is none yet.
     pub(super) fn shown_view(&self, gid: &str) -> Option<GroupView> {

@@ -687,6 +687,7 @@ impl Component for InfoTab {
         let groups = use_radio::<Model, Channel>(Channel::Groups);
         let _ = peers.read();
         let mut confirm_leave = use_state(|| false);
+        let mut doc_json = use_state(|| None::<String>);
         let m = groups.read();
         let Some(info) = m.group(&self.gid) else {
             return rect().into_element();
@@ -704,6 +705,7 @@ impl Component for InfoTab {
         }
         items.extend(tabs_section(&view, &self.gid, nav));
         items.extend(device_section(info, nav));
+        items.extend(debug_section(&self.gid, &mut doc_json, nav));
         if info.with.is_none() {
             items.extend(guest_section(info, nav));
             items.extend(leave_section(info, nav, &mut confirm_leave));
@@ -905,6 +907,81 @@ fn tabs_section(view: &GroupView, gid: &str, nav: Nav) -> Vec<Element> {
         overline("TABS").into_element(),
         card().child(card_body(Dim::SPACE2).children(rows)).into_element(),
         hint("Tabs are the same for everyone in the group, and anyone can show or hide them. An app is a WebAssembly file: every device fetches it and shares it with the others.").into_element(),
+    ]
+}
+
+/// The group's raw Automerge document, as JSON, for debugging.
+fn debug_section(gid: &str, doc: &mut State<Option<String>>, nav: Nav) -> Vec<Element> {
+    let (c, d) = look();
+    let mut doc = *doc;
+    let gid = gid.to_owned();
+    let json = doc.read().clone();
+    let mut body = card_body(Dim::SPACE2).child(
+        rect()
+            .horizontal()
+            .width(Size::fill())
+            .content(Content::flex())
+            .spacing(Dim::SPACE2)
+            .cross_align(Alignment::Center)
+            .child(
+                rect()
+                    .width(Size::flex(1.))
+                    .spacing(2.)
+                    .child(txt("Raw document", d.font_md(), c.text_strong, 650))
+                    .child(txt("The group's Automerge document as JSON.", d.font_xs(), c.text_muted, 400)),
+            )
+            .child(
+                Btn::secondary(if json.is_some() { "Hide" } else { "Show JSON" }).on_press(move |_| {
+                    if doc.peek().is_some() {
+                        doc.set(None);
+                        return;
+                    }
+                    let json = nav
+                        .backend()
+                        .core()
+                        .and_then(|core| core.group_json(&gid))
+                        .unwrap_or_else(|| "The group's document is not available.".to_owned());
+                    doc.set(Some(json));
+                }),
+            ),
+    );
+    if let Some(text) = &json {
+        let text_to_copy = text.clone();
+        body = body
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .padding(Dim::SPACE2)
+                    .corner_radius(Dim::RADIUS_SM + 2.)
+                    .background(c.inset_bg)
+                    .border(
+                        Border::new()
+                            .fill(c.border_strong)
+                            .width(1.)
+                            .alignment(BorderAlignment::Inner),
+                    )
+                    .child(
+                        ScrollView::new()
+                            .width(Size::fill())
+                            .max_height(Size::px(360.))
+                            .child(
+                                SelectableText::new()
+                                    .span(Span::new(text.clone()))
+                                    .font_size(d.font_xs())
+                                    .color(c.text_strong)
+                                    .width(Size::fill()),
+                            ),
+                    ),
+            )
+            .child(
+                Btn::secondary("Copy JSON")
+                    .icon(Icon::Copy)
+                    .on_press(move |_| copy(nav, &text_to_copy)),
+            );
+    }
+    vec![
+        overline("DEBUG").into_element(),
+        card().child(body).into_element(),
     ]
 }
 
