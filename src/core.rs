@@ -3,6 +3,7 @@
 //! subscribes through the event callback.
 
 mod guest;
+mod listen;
 mod music;
 mod sharing;
 mod tabs;
@@ -38,6 +39,7 @@ use crate::{
 
 pub use crate::state::MemberState;
 pub use guest::{GUEST_ALPN, GuestInfo, GuestPerson, is_guest};
+pub use listen::{ListenView, Listening};
 pub use music::AUDIO_EXTENSIONS;
 pub use sharing::{
     AppView, DocMember, FileView, GroupView, SendView, TabView, TextView, TransferItem,
@@ -138,10 +140,16 @@ pub enum Event {
     Home(Vec<Unseen>),
     /// What is moving on this device changed: downloads, uploads, offers being hashed.
     Transfers(TransfersNow),
+    /// Who shares what they play in a group, or who listens along with us there, changed.
+    Listening {
+        group: String,
+        sharers: Vec<ListenView>,
+        followers: Vec<String>,
+    },
     Notice(String),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum Msg {
     Hello {
@@ -161,6 +169,24 @@ enum Msg {
     /// "I paired with you" / "I no longer pair with you".
     Pair,
     Unpair,
+    /// What we play in `group`, shared, or no longer (see [`listen`]).
+    Listen {
+        group: String,
+        now: Option<Listening>,
+    },
+    /// "I listen along with what you share in `group`" / "no longer".
+    Follow {
+        group: String,
+        on: bool,
+    },
+    /// Our clock (ms) when sent; answered with [`Msg::Pong`] and theirs.
+    Ping {
+        t0: i64,
+    },
+    Pong {
+        t0: i64,
+        t1: i64,
+    },
 }
 
 /// What a BLE peripheral serves and a BLE central reads: our name and ticket.
@@ -199,6 +225,7 @@ struct Inner {
     sharing: sharing::Sharing,
     guests: guest::Guests,
     music: music::Music,
+    listen: listen::Listen,
     ticket: Mutex<String>,
     ble_payload: watch::Sender<Option<BlePayload>>,
     on_event: Box<dyn Fn(Event) + Send + Sync>,
@@ -302,6 +329,7 @@ impl Core {
             sharing: sharing::Sharing::new(data_dir),
             guests: guest::Guests::default(),
             music: music::Music::default(),
+            listen: listen::Listen::default(),
             ticket: Mutex::default(),
             ble_payload: watch::channel(None).0,
             on_event: Box::new(on_event),
@@ -776,6 +804,7 @@ impl Core {
                 },
             )
             .await;
+            this.listen_connected(id);
             this.flush(id).await;
             while let Ok(mut rx) = conn.accept_uni().await {
                 let Ok(bytes) = rx.read_to_end(MAX_SYNC_BYTES).await else {
@@ -810,6 +839,10 @@ impl Core {
                     Ok(Msg::GroupReply { group, accept }) => this.on_reply(id, group, accept),
                     Ok(Msg::Pair) => this.on_pair(id, true),
                     Ok(Msg::Unpair) => this.on_pair(id, false),
+                    Ok(Msg::Listen { group, now }) => this.on_listen(id, group, now),
+                    Ok(Msg::Follow { group, on }) => this.on_follow(id, group, on),
+                    Ok(Msg::Ping { t0 }) => this.on_ping(id, t0),
+                    Ok(Msg::Pong { t0, t1 }) => this.on_pong(id, t0, t1),
                     Err(err) => tracing::debug!("bad message: {err}"),
                 }
             }
@@ -823,6 +856,7 @@ impl Core {
                 }
             });
             if gone {
+                this.listen_gone(id);
                 this.emit(Event::Notice(format!(
                     "disconnected from {}",
                     id.fmt_short()

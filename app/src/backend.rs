@@ -200,6 +200,10 @@ impl Backend {
         if let Msg::Core(Event::Transfers(now)) = &msg {
             flipflop::platform::show_transfers(now);
         }
+        // Listening along is the player's business; the UI learns it from its state.
+        if let Msg::Core(Event::Listening { group, sharers, followers }) = msg {
+            return self.music().heard(self, group, sharers, followers);
+        }
         let msg = match &*self.0.tx.lock().unwrap() {
             Some(tx) => match tx.send(msg) {
                 Ok(()) => return,

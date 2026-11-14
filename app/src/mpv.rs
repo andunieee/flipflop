@@ -3,7 +3,8 @@
 
 use std::{
     ffi::{CStr, CString, c_char, c_double, c_int, c_void},
-    sync::{OnceLock, mpsc},
+    sync::{Arc, Mutex, OnceLock, mpsc},
+    time::Instant,
 };
 
 use crate::player::Update;
@@ -34,7 +35,9 @@ const EVENT_START_FILE: c_int = 6;
 const EVENT_END_FILE: c_int = 7;
 const EVENT_FILE_LOADED: c_int = 8;
 const EVENT_PROPERTY_CHANGE: c_int = 22;
+const FORMAT_STRING: c_int = 1;
 const FORMAT_FLAG: c_int = 3;
+const FORMAT_DOUBLE: c_int = 5;
 const END_FILE_EOF: c_int = 0;
 const END_FILE_ERROR: c_int = 4;
 
@@ -108,7 +111,9 @@ fn lib() -> Result<&'static Lib, String> {
 
 /// What wakes the player's thread.
 enum Wake {
-    Load(u64, String),
+    /// A ticket, the source, and where to start (ms).
+    Load(u64, String, u64),
+    Seek(u64),
     Pause(bool),
     Stop,
     /// mpv has events.
@@ -126,6 +131,15 @@ pub type Told = Box<dyn Fn(u64, Update) + Send>;
 #[derive(Clone)]
 pub struct Mpv {
     tx: mpsc::Sender<Wake>,
+    clock: Arc<Mutex<Clock>>,
+}
+
+/// Where the song was when mpv last said, so where it is now can be told without asking it.
+#[derive(Default)]
+struct Clock {
+    /// Seconds into the song, and when that was; none before it plays.
+    at: Option<(f64, Instant)>,
+    paused: bool,
 }
 
 impl Mpv {
@@ -134,6 +148,8 @@ impl Mpv {
         let lib = lib()?;
         let (tx, rx) = mpsc::channel();
         let wake = tx.clone();
+        let clock = Arc::new(Mutex::new(Clock::default()));
+        let told_clock = clock.clone();
         // The thread says whether mpv started.
         let (ready_tx, ready_rx) = mpsc::channel();
         std::thread::Builder::new()
@@ -141,7 +157,7 @@ impl Mpv {
             .spawn(move || {
                 // What mpv's callback gets, freed with the worker.
                 let wake = Box::into_raw(Box::new(wake));
-                let worker = match Worker::new(lib, wake, told) {
+                let worker = match Worker::new(lib, wake, told, told_clock) {
                     Ok(worker) => worker,
                     Err(err) => {
                         let _ = ready_tx.send(Err(err));
@@ -153,12 +169,25 @@ impl Mpv {
             })
             .map_err(|e| e.to_string())?;
         ready_rx.recv().map_err(|e| e.to_string())??;
-        Ok(Mpv { tx })
+        Ok(Mpv { tx, clock })
     }
 
-    /// Play `source` (a path or an address); what it does is told with `ticket`.
-    pub fn load(&self, ticket: u64, source: String) {
-        let _ = self.tx.send(Wake::Load(ticket, source));
+    /// Play `source` (a path or an address) from `start_ms` on; what it does is told with `ticket`.
+    pub fn load(&self, ticket: u64, source: String, start_ms: u64) {
+        self.clock.lock().unwrap().at = None;
+        let _ = self.tx.send(Wake::Load(ticket, source, start_ms));
+    }
+
+    pub fn seek(&self, ms: u64) {
+        let _ = self.tx.send(Wake::Seek(ms));
+    }
+
+    /// Where the song plays, in ms; none before it plays.
+    pub fn position(&self) -> Option<u64> {
+        let clock = self.clock.lock().unwrap();
+        let (secs, when) = clock.at?;
+        let ran = if clock.paused { 0. } else { when.elapsed().as_secs_f64() };
+        Some(((secs + ran) * 1000.) as u64)
     }
 
     pub fn pause(&self, paused: bool) {
@@ -176,10 +205,16 @@ struct Worker {
     /// The sender the callback uses, freed after mpv is gone.
     wake: *mut mpsc::Sender<Wake>,
     told: Told,
+    clock: Arc<Mutex<Clock>>,
 }
 
 impl Worker {
-    fn new(lib: &'static Lib, wake: *mut mpsc::Sender<Wake>, told: Told) -> Result<Worker, String> {
+    fn new(
+        lib: &'static Lib,
+        wake: *mut mpsc::Sender<Wake>,
+        told: Told,
+        clock: Arc<Mutex<Clock>>,
+    ) -> Result<Worker, String> {
         let mpv = unsafe { (lib.create)() };
         if mpv.is_null() {
             drop(unsafe { Box::from_raw(wake) });
@@ -190,6 +225,7 @@ impl Worker {
             mpv,
             wake,
             told,
+            clock,
         };
         for (name, value) in [
             ("video", "no"),
@@ -210,6 +246,7 @@ impl Worker {
         }
         unsafe {
             (lib.observe_property)(mpv, 0, c"pause".as_ptr(), FORMAT_FLAG);
+            (lib.observe_property)(mpv, 0, c"time-pos".as_ptr(), FORMAT_DOUBLE);
             (lib.set_wakeup_callback)(mpv, Some(wake_events), wake as *mut c_void);
         }
         Ok(worker)
@@ -221,12 +258,17 @@ impl Worker {
         let (mut playing, mut loading) = (0, 0);
         while let Ok(wake) = rx.recv() {
             match wake {
-                Wake::Load(ticket, source) => {
+                Wake::Load(ticket, source, start_ms) => {
                     loading = ticket;
+                    // An option for the next file only: mpv resets it when the file ends.
+                    let start = if start_ms > 0 { seconds(start_ms) } else { "none".into() };
+                    self.set_string("start", &start);
                     self.command(ticket, &["loadfile", &source, "replace"]);
                     self.set_flag("pause", false);
                 }
                 Wake::Pause(paused) => self.set_flag("pause", paused),
+                // A seek it cannot do is no reason to drop the song: no ticket to fail.
+                Wake::Seek(ms) => self.command(0, &["seek", &seconds(ms), "absolute+exact"]),
                 Wake::Stop => {
                     (loading, playing) = (0, 0);
                     self.command(0, &["stop"]);
@@ -273,7 +315,20 @@ impl Worker {
                     let name = unsafe { CStr::from_ptr(prop.name) };
                     if name == c"pause" && prop.format == FORMAT_FLAG && !prop.data.is_null() {
                         let paused = unsafe { *(prop.data as *const c_int) } != 0;
+                        let mut clock = self.clock.lock().unwrap();
+                        // Keep where it was when it paused.
+                        if let Some((secs, when)) = clock.at
+                            && !clock.paused
+                        {
+                            clock.at = Some((secs + when.elapsed().as_secs_f64(), Instant::now()));
+                        }
+                        clock.paused = paused;
+                        drop(clock);
                         (self.told)(loading, Update::Paused(paused));
+                    } else if name == c"time-pos" {
+                        let secs = (prop.format == FORMAT_DOUBLE && !prop.data.is_null())
+                            .then(|| unsafe { *(prop.data as *const c_double) });
+                        self.clock.lock().unwrap().at = secs.map(|s| (s, Instant::now()));
                     }
                 }
                 _ => {}
@@ -294,6 +349,19 @@ impl Worker {
         }
     }
 
+    fn set_string(&self, name: &str, value: &str) {
+        let (name, value) = (CString::new(name).unwrap(), CString::new(value).unwrap());
+        let mut ptr = value.as_ptr();
+        unsafe {
+            (self.lib.set_property)(
+                self.mpv,
+                name.as_ptr(),
+                FORMAT_STRING,
+                &mut ptr as *mut *const c_char as *mut c_void,
+            )
+        };
+    }
+
     fn set_flag(&self, name: &str, on: bool) {
         let name = CString::new(name).unwrap();
         let mut value: c_int = on.into();
@@ -306,6 +374,11 @@ impl Worker {
             )
         };
     }
+}
+
+/// `ms` as mpv takes times: seconds.
+fn seconds(ms: u64) -> String {
+    format!("{}.{:03}", ms / 1000, ms % 1000)
 }
 
 impl Drop for Worker {
@@ -335,7 +408,7 @@ mod tests {
             let _ = tx.send((ticket, update));
         }))
         .unwrap();
-        player.load(7, path);
+        player.load(7, path, 0);
         let mut loaded = false;
         loop {
             match rx.recv_timeout(Duration::from_secs(20)).expect("did not end") {

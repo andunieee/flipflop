@@ -334,7 +334,7 @@ mod android {
     /// Play `url` in place of whatever plays, showing `title` and `artist` in the notification (which
     /// keeps the app playing with the screen off). What happens comes back as
     /// [`ActivityEvent::MusicPlayer`] with `ticket`.
-    pub fn music_play(ticket: u64, url: &str, title: &str, artist: &str) {
+    pub fn music_play(ticket: u64, url: &str, title: &str, artist: &str, start_ms: u64) {
         with_activity(|env, a| {
             let (url, title, artist) = (
                 env.new_string(url)?,
@@ -344,12 +344,13 @@ mod android {
             env.call_method(
                 a,
                 "musicPlay",
-                "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+                "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
                 &[
                     JValue::Long(ticket as i64),
                     JValue::Object(&url),
                     JValue::Object(&title),
                     JValue::Object(&artist),
+                    JValue::Long(start_ms as i64),
                 ],
             )
             .map(|_| ())
@@ -359,6 +360,20 @@ mod android {
     pub fn music_pause(paused: bool) {
         with_activity(|env, a| {
             env.call_method(a, "musicPause", "(Z)V", &[JValue::Bool(paused.into())])
+                .map(|_| ())
+        });
+    }
+
+    /// Where the song plays, in ms; none before it can play.
+    pub fn music_position() -> Option<u64> {
+        with_activity(|env, a| env.call_method(a, "musicPosition", "()J", &[])?.j())
+            .and_then(|ms| u64::try_from(ms).ok())
+    }
+
+    /// Go to `ms` in the song.
+    pub fn music_seek(ms: u64) {
+        with_activity(|env, a| {
+            env.call_method(a, "musicSeek", "(J)V", &[JValue::Long(ms as i64)])
                 .map(|_| ())
         });
     }

@@ -630,9 +630,19 @@ public class FlipflopActivity extends android.app.NativeActivity {
 
     // ---- music ----------------------------------------------------------------------------
 
-    /** Called from Rust (under its locks, so it must not wait): play `url` in place of what plays. */
-    public void musicPlay(long ticket, String url, String title, String artist) {
-        main.post(() -> MusicService.play(this, ticket, url, title, artist));
+    /** Called from Rust (under its locks, so it must not wait): play `url` in place of what plays,
+     *  from `startAt` ms on. */
+    public void musicPlay(long ticket, String url, String title, String artist, long startAt) {
+        main.post(() -> MusicService.play(this, ticket, url, title, artist, startAt));
+    }
+
+    /** Where the song is, in ms (-1: not playing yet). Answered at once, from the calling thread. */
+    public long musicPosition() {
+        return MusicService.position();
+    }
+
+    public void musicSeek(long ms) {
+        main.post(() -> MusicService.seek(ms));
     }
 
     public void musicPause(boolean paused) {

@@ -62,6 +62,8 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
     private static String title = "";
     private static String artist = "";
     private static boolean paused = false;
+    /** Where to start the song, in ms (listening along starts it midway). */
+    private static long startAt = 0;
 
     private static MusicService running;
     private static boolean starting = false;
@@ -85,9 +87,10 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
         }
     };
 
-    /** Play `newUrl` in place of what plays. */
-    static void play(Context context, long newTicket, String newUrl, String newTitle, String newArtist) {
+    /** Play `newUrl` in place of what plays, from `newStartAt` ms on. */
+    static void play(Context context, long newTicket, String newUrl, String newTitle, String newArtist, long newStartAt) {
         wanted = true;
+        startAt = newStartAt;
         ticket = newTicket;
         url = newUrl;
         title = newTitle;
@@ -112,6 +115,27 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
     static void pause(boolean newPaused) {
         paused = newPaused;
         if (running != null) running.applyPause();
+    }
+
+    /** Where the song is, in ms; -1 before it can play. Called from any thread. */
+    static long position() {
+        MusicService service = running;
+        MediaPlayer mp = service == null ? null : service.player;
+        if (mp == null || !service.prepared) return -1;
+        try {
+            return mp.getCurrentPosition();
+        } catch (IllegalStateException e) {
+            return -1;
+        }
+    }
+
+    /** Go to `ms` in the song; before it can play, start there. */
+    static void seek(long ms) {
+        if (running == null || running.player == null || !running.prepared) {
+            startAt = ms;
+            return;
+        }
+        running.player.seekTo(ms, MediaPlayer.SEEK_CLOSEST);
     }
 
     static void stop() {
@@ -234,6 +258,8 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
     public void onPrepared(MediaPlayer mp) {
         if (mp != player) return;
         prepared = true;
+        if (startAt > 0) mp.seekTo(startAt, MediaPlayer.SEEK_CLOSEST);
+        startAt = 0;
         nativeMusicEvent(ticket, EVENT_LOADED, "");
         applyPause();
     }

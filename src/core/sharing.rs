@@ -546,7 +546,7 @@ impl Core {
 
     /// Everyone entitled to this group's documents: those who accepted our invite, and the members
     /// the document itself lists.
-    fn group_peers(&self, gid: &str) -> Vec<EndpointId> {
+    pub(super) fn group_peers(&self, gid: &str) -> Vec<EndpointId> {
         let mut ids: BTreeSet<String> = {
             let store = self.0.store.lock().unwrap();
             store

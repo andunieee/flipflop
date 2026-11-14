@@ -121,6 +121,7 @@ impl Component for MusicTab {
                 .maybe(active, |el| el.child(QueuePanel))
                 .into_element();
         }
+        let along = Listeners { gid: self.gid.clone() };
         let rows = Rows { gid: self.gid.clone(), music: self.music.clone(), current, open: open.read().clone() };
         // The add buttons' card first, then the offers.
         let sizes: Vec<f32> = std::iter::once(d.control_height() + 2. * d.card_padding() + Dim::SPACE3)
@@ -152,9 +153,70 @@ impl Component for MusicTab {
             .expanded()
             .spacing(Dim::SPACE3)
             .content(Content::flex())
+            .child(along)
             .child(list)
             .maybe(active, |el| el.child(QueuePanel))
             .into_element()
+    }
+}
+
+/// "Ann, Bob and Cy".
+fn and_list(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The others sharing what they play in the group, each with a button to listen along.
+#[derive(PartialEq)]
+struct Listeners {
+    gid: String,
+}
+
+impl Component for Listeners {
+    fn render(&self) -> impl IntoElement {
+        let (c, d) = look();
+        let nav = use_consume::<Nav>();
+        let state = use_consume::<State<MusicState>>();
+        let (sharers, following) = {
+            let now = state.read();
+            (now.sharers.get(&self.gid).cloned().unwrap_or_default(), now.following.clone())
+        };
+        rect().width(Size::fill()).spacing(Dim::SPACE2).children(sharers.into_iter().map(|v| {
+            let along = following.as_ref().is_some_and(|f| f.gid == self.gid && f.sharer == v.sharer);
+            let (gid, sharer) = (self.gid.clone(), v.sharer);
+            let what = if v.now.paused { format!("{} · paused", v.now.name) } else { v.now.name.clone() };
+            card()
+                .key(v.sharer.to_string())
+                .child(
+                    card_body(0.).child(
+                        rect()
+                            .horizontal()
+                            .width(Size::fill())
+                            .content(Content::flex())
+                            .spacing(Dim::SPACE3)
+                            .cross_align(Alignment::Center)
+                            .child(icon_tile(Icon::Headphones, 40., c.accent_soft, c.accent_text))
+                            .child(
+                                rect()
+                                    .width(Size::flex(1.))
+                                    .spacing(2.)
+                                    .child(txt(format!("{} is listening", v.name), d.font_md(), c.text_strong, 650).elide())
+                                    .child(txt(what, d.font_sm(), c.text_muted, 400).elide()),
+                            )
+                            .child(if along {
+                                Btn::secondary("Leave").icon(Icon::Close).on_press(move |_| with_music(nav, |m, b| m.stop_following(b)))
+                            } else {
+                                Btn::primary("Listen along")
+                                    .icon(Icon::Headphones)
+                                    .on_press(move |_| with_music(nav, |m, b| m.listen_along(b, &gid, sharer)))
+                            }),
+                    ),
+                )
+                .into_element()
+        }))
     }
 }
 
@@ -313,7 +375,7 @@ impl Component for QueuePanel {
         let mut over = use_state(|| None::<Option<u64>>);
         let mut open = use_state(|| false);
         let unfolded = *open.read();
-        let MusicState { queue, current, paused, loading } = state.read().clone();
+        let MusicState { queue, current, paused, loading, sharing, listeners, following, .. } = state.read().clone();
         let row_height = d.control_height() + 8.;
 
         let (title, mut detail) = match &current {
@@ -321,6 +383,15 @@ impl Component for QueuePanel {
             Some(e) => (e.name.clone(), e.from_name.clone()),
             None => ("Nothing playing".to_owned(), "Press play to start the queue".to_owned()),
         };
+        if let Some(f) = &following {
+            detail = format!("Listening along with {} · {detail}", f.name);
+        } else if sharing {
+            detail = match listeners.as_slice() {
+                [] => format!("Shared · {detail}"),
+                [one] => format!("{one} listening along · {detail}"),
+                many => format!("{} listening along · {detail}", and_list(many)),
+            };
+        }
         if !queue.is_empty() {
             detail = format!("{detail} · {} up next", queue.len());
         }
@@ -354,7 +425,20 @@ impl Component for QueuePanel {
                 })
                 .tint(c.accent_text),
             )
-            .maybe(current.is_some(), |el| el.child(IconButton::new(Icon::Skip, move |_| with_music(nav, |m, b| m.next(b)))));
+            .maybe(current.is_some(), |el| el.child(IconButton::new(Icon::Skip, move |_| with_music(nav, |m, b| m.next(b)))))
+            // Share what plays, for the others to listen along; tinted while shared.
+            .maybe(current.is_some() && following.is_none(), |el| {
+                el.child(
+                    IconButton::new(Icon::Broadcast, move |_| {
+                        with_music(nav, |m, b| m.set_sharing(b, !sharing));
+                        nav.toast(if sharing { "No longer shared" } else { "Shared with the group: they can listen along" }.to_owned());
+                    })
+                    .tint(if sharing { c.accent_text } else { c.text_faint }),
+                )
+            })
+            .maybe(following.is_some(), |el| {
+                el.child(IconButton::new(Icon::Close, move |_| with_music(nav, |m, b| m.stop_following(b))))
+            });
 
         let rows = queue.iter().map(|e| {
             let key = e.key;

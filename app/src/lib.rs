@@ -173,7 +173,7 @@ fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav, mut 
                     nav.backend().mark_seen(vec![gid]);
                 }
             }
-            Event::Message { .. } => {}
+            Event::Message { .. } | Event::Listening { .. } => {}
         },
     }
 }
