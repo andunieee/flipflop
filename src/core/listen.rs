@@ -12,6 +12,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     sync::Mutex,
+    time::{Duration, Instant},
 };
 
 use iroh::EndpointId;
@@ -24,6 +25,9 @@ use crate::groupdoc::now_ms;
 const SAMPLES: usize = 8;
 /// How old the freshest clock sample may get while listening along before we ask again.
 const RESAMPLE_MS: i64 = 60_000;
+/// How long what a sharer said holds without them saying it again (they do every couple of
+/// seconds): a sharer gone quiet is no longer listed.
+const EXPIRE: Duration = Duration::from_secs(5);
 
 /// What a sharer plays.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -72,8 +76,8 @@ struct Sample {
 pub(super) struct Listen {
     /// What we share, per group.
     mine: Mutex<HashMap<String, Listening>>,
-    /// What the others share, per group and sharer, on our clock.
-    heard: Mutex<HashMap<String, HashMap<EndpointId, Listening>>>,
+    /// What the others share, per group and sharer, on our clock, and when we heard it.
+    heard: Mutex<HashMap<String, HashMap<EndpointId, (Listening, Instant)>>>,
     /// Who listens along with us, per group.
     followers: Mutex<HashMap<String, BTreeSet<EndpointId>>>,
     /// Whom we listen along with: told again when they reconnect.
@@ -104,7 +108,11 @@ impl Core {
         let listen = &self.0.listen;
         match &now {
             Some(now) => {
-                listen.mine.lock().unwrap().insert(gid.to_owned(), now.clone());
+                listen
+                    .mine
+                    .lock()
+                    .unwrap()
+                    .insert(gid.to_owned(), now.clone());
             }
             None => {
                 let was = listen.mine.lock().unwrap().remove(gid).is_some();
@@ -148,7 +156,8 @@ impl Core {
 
     /// Who shares what they play in `gid`, and who listens along with us there.
     pub fn listening(&self, gid: &str) -> (Vec<ListenView>, Vec<String>) {
-        let names: HashMap<String, String> = self.with_doc(gid, |d| d.members()).into_iter().collect();
+        let names: HashMap<String, String> =
+            self.with_doc(gid, |d| d.members()).into_iter().collect();
         let name = |id: &EndpointId| {
             names
                 .get(&id.to_string())
@@ -163,7 +172,7 @@ impl Core {
             .get(gid)
             .into_iter()
             .flatten()
-            .map(|(id, now)| ListenView {
+            .map(|(id, (now, _))| ListenView {
                 sharer: *id,
                 name: name(id),
                 now: now.clone(),
@@ -192,7 +201,9 @@ impl Core {
     }
 
     fn send_soon(&self, peer: EndpointId, msg: Msg) {
-        let Some(conn) = self.connection(peer) else { return };
+        let Some(conn) = self.connection(peer) else {
+            return;
+        };
         tokio::spawn(async move {
             if let Err(err) = send_msg(&conn, &msg).await {
                 tracing::debug!("listen message to {} failed: {err:#}", peer.fmt_short());
@@ -210,7 +221,9 @@ impl Core {
         }
         let clock = {
             let clocks = self.0.listen.clocks.lock().unwrap();
-            clocks.get(&from).map(|s| (best_offset(s), s.iter().map(|s| s.taken).max().unwrap_or(0)))
+            clocks
+                .get(&from)
+                .map(|s| (best_offset(s), s.iter().map(|s| s.taken).max().unwrap_or(0)))
         };
         if clock.is_none_or(|(_, taken)| now_ms() - taken > RESAMPLE_MS) {
             self.ping(from);
@@ -221,7 +234,13 @@ impl Core {
             match now {
                 Some(mut now) => {
                     now.at_ms -= clock.map_or(0, |(offset, _)| offset);
-                    group.insert(from, now);
+                    group.insert(from, (now, Instant::now()));
+                    let this = self.clone();
+                    let gid = gid.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(EXPIRE).await;
+                        this.expire(&gid, from);
+                    });
                 }
                 None => {
                     group.remove(&from);
@@ -231,14 +250,40 @@ impl Core {
         self.emit_listening(&gid);
     }
 
+    /// Forget what `from` shares in `gid` if they did not say it again in time.
+    fn expire(&self, gid: &str, from: EndpointId) {
+        let gone = {
+            let mut heard = self.0.listen.heard.lock().unwrap();
+            let Some(group) = heard.get_mut(gid) else {
+                return;
+            };
+            let stale = group
+                .get(&from)
+                .is_some_and(|(_, at)| at.elapsed() >= EXPIRE);
+            if stale {
+                group.remove(&from);
+            }
+            stale
+        };
+        if gone {
+            self.emit_listening(gid);
+        }
+    }
+
     pub(super) fn on_follow(&self, from: EndpointId, gid: String, on: bool) {
-        if !self.0.listen.mine.lock().unwrap().contains_key(&gid) || !self.group_peers(&gid).contains(&from) {
+        if !self.0.listen.mine.lock().unwrap().contains_key(&gid)
+            || !self.group_peers(&gid).contains(&from)
+        {
             return;
         }
         {
             let mut followers = self.0.listen.followers.lock().unwrap();
             let set = followers.entry(gid.clone()).or_default();
-            if on { set.insert(from) } else { set.remove(&from) };
+            if on {
+                set.insert(from)
+            } else {
+                set.remove(&from)
+            };
         }
         self.emit_listening(&gid);
     }
@@ -281,14 +326,26 @@ impl Core {
                     at_ms: at,
                     ..now
                 };
-                self.send_soon(peer, Msg::Listen { group: gid, now: Some(now) });
+                self.send_soon(
+                    peer,
+                    Msg::Listen {
+                        group: gid,
+                        now: Some(now),
+                    },
+                );
             }
         }
         let following = self.0.listen.following.lock().unwrap().clone();
         if let Some((gid, sharer)) = following
             && sharer == peer
         {
-            self.send_soon(peer, Msg::Follow { group: gid, on: true });
+            self.send_soon(
+                peer,
+                Msg::Follow {
+                    group: gid,
+                    on: true,
+                },
+            );
         }
     }
 

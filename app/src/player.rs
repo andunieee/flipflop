@@ -71,8 +71,9 @@ pub struct Followed {
     pub name: String,
 }
 
-/// How often a sharer says where it is, for followers to correct their drift.
-const HEARTBEAT: Duration = Duration::from_secs(5);
+/// How often a sharer says where it is, for followers to correct their drift (and what it says
+/// expires without it).
+const HEARTBEAT: Duration = Duration::from_secs(2);
 /// How far from the sharer a follower may drift before it seeks.
 const DRIFT_MS: i64 = 150;
 
@@ -123,7 +124,9 @@ impl Player {
                 mpv.load(ticket, url, start_ms)
             }
             #[cfg(target_os = "android")]
-            Player::Android => flipflop::platform::music_play(ticket, &url, &song.name, &song.from_name, start_ms),
+            Player::Android => {
+                flipflop::platform::music_play(ticket, &url, &song.name, &song.from_name, start_ms)
+            }
         }
     }
 
@@ -211,7 +214,11 @@ impl Music {
 
     /// The songs of an offer: the one it is, or an album's, in order.
     pub fn songs(&self, gid: &str, f: &FileView) -> Vec<Song> {
-        let from = if f.mine { "you".to_owned() } else { f.from_name.clone() };
+        let from = if f.mine {
+            "you".to_owned()
+        } else {
+            f.from_name.clone()
+        };
         let song = |track: usize, name: String, from_name: String| Song {
             key: self.keys.fetch_add(1, Ordering::Relaxed) + 1,
             gid: gid.to_owned(),
@@ -240,7 +247,9 @@ impl Music {
 
     /// Play `song` now; listening along, from where `along` says it is once the song can start.
     fn play_from(&self, backend: &Backend, song: Song, along: Option<Listening>) {
-        let Some(player) = self.player(backend) else { return };
+        let Some(player) = self.player(backend) else {
+            return;
+        };
         let ticket = self.ticket.fetch_add(1, Ordering::SeqCst) + 1;
         self.change(backend, |s| {
             s.current = Some(song.clone());
@@ -256,7 +265,8 @@ impl Music {
                 Ok(url) if music.ticket.load(Ordering::SeqCst) == ticket => {
                     // Worked out now, not when asked: finding the song takes a moment.
                     let start = along.as_ref().map_or(0, |l| {
-                        l.position_at(now_ms()) + music.lead_ms.load(Ordering::Relaxed).max(0) as u64
+                        l.position_at(now_ms())
+                            + music.lead_ms.load(Ordering::Relaxed).max(0) as u64
                     });
                     player.load(ticket, url, &song, start);
                     // The sharer paused: so do we, once the song is there.
@@ -274,7 +284,13 @@ impl Music {
     /// playing, else play it now.
     pub fn press(&self, backend: &Backend, gid: &str, f: &FileView, track: usize) {
         self.stop_following(backend);
-        let current = self.state.lock().unwrap().current.as_ref().is_some_and(|c| c.is(gid, &f.id, track));
+        let current = self
+            .state
+            .lock()
+            .unwrap()
+            .current
+            .as_ref()
+            .is_some_and(|c| c.is(gid, &f.id, track));
         if current {
             return self.toggle(backend);
         }
@@ -287,7 +303,13 @@ impl Music {
     /// from its first song, the others next.
     pub fn press_album(&self, backend: &Backend, gid: &str, f: &FileView) {
         self.stop_following(backend);
-        let current = self.state.lock().unwrap().current.as_ref().is_some_and(|c| c.of(gid, &f.id));
+        let current = self
+            .state
+            .lock()
+            .unwrap()
+            .current
+            .as_ref()
+            .is_some_and(|c| c.of(gid, &f.id));
         if current {
             return self.toggle(backend);
         }
@@ -305,7 +327,9 @@ impl Music {
         if self.state.lock().unwrap().current.is_none() {
             return self.next(backend);
         }
-        let Some(player) = self.player(backend) else { return };
+        let Some(player) = self.player(backend) else {
+            return;
+        };
         let paused = self.change(backend, |s| {
             s.paused = !s.paused;
             s.paused
@@ -316,7 +340,9 @@ impl Music {
     /// Play the first in the queue, or stop if it is empty.
     pub fn next(&self, backend: &Backend) {
         self.stop_following(backend);
-        let first = self.change(backend, |s| (!s.queue.is_empty()).then(|| s.queue.remove(0)));
+        let first = self.change(backend, |s| {
+            (!s.queue.is_empty()).then(|| s.queue.remove(0))
+        });
         match first {
             Some(song) => self.play(backend, song),
             None => self.stop(backend),
@@ -356,7 +382,9 @@ impl Music {
             return;
         }
         self.change(backend, |s| {
-            let Some(from) = s.queue.iter().position(|e| e.key == key) else { return };
+            let Some(from) = s.queue.iter().position(|e| e.key == key) else {
+                return;
+            };
             let song = s.queue.remove(from);
             let to = before
                 .and_then(|b| s.queue.iter().position(|e| e.key == b))
@@ -387,7 +415,13 @@ impl Music {
             Update::Ended if self.state.lock().unwrap().following.is_some() => {}
             Update::Ended => self.next(backend),
             Update::Failed(why) => {
-                let name = self.state.lock().unwrap().current.as_ref().map(|s| s.name.clone());
+                let name = self
+                    .state
+                    .lock()
+                    .unwrap()
+                    .current
+                    .as_ref()
+                    .map(|s| s.name.clone());
                 backend.notice(match name {
                     Some(name) => format!("{name}: {why}"),
                     None => why,
@@ -418,7 +452,9 @@ impl Music {
             loop {
                 tokio::time::sleep(HEARTBEAT).await;
                 let music = backend.music();
-                if music.heartbeats.load(Ordering::SeqCst) != beat || !music.state.lock().unwrap().sharing {
+                if music.heartbeats.load(Ordering::SeqCst) != beat
+                    || !music.state.lock().unwrap().sharing
+                {
                     return;
                 }
                 music.announce(&backend, true);
@@ -428,37 +464,51 @@ impl Music {
 
     /// Tell the group what we play, if we share it and it changed (or, `again`, anyway).
     fn announce(&self, backend: &Backend, again: bool) {
-        let Some(core) = backend.core() else { return };
         let now = self.state.lock().unwrap().clone();
         let at = now_ms();
-        let told = self.shared.lock().unwrap().as_ref().and_then(|(_, l)| l.clone());
+        let told = self
+            .shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|(_, l)| l.clone());
         let mut unknown = false;
-        let playing = now.current.as_ref().filter(|_| now.sharing).map(|song| {
-            let position = if now.loading {
-                Some(0)
-            } else {
-                self.player.lock().unwrap().as_ref().and_then(|p| p.as_ref().ok()?.position()).or_else(|| {
-                    // The player cannot say (Android without its Activity): from what we last said.
-                    told.as_ref()
-                        .filter(|l| (&l.fid, l.track) == (&song.fid, song.track))
-                        .map(|l| l.position_at(at))
-                })
-            };
-            unknown = position.is_none();
-            (
-                song.gid.clone(),
-                Listening {
-                    fid: song.fid.clone(),
-                    track: song.track,
-                    name: song.name.clone(),
-                    from_name: song.from_name.clone(),
-                    position_ms: position.unwrap_or(0),
-                    at_ms: at,
-                    // Not running ahead of a song still starting.
-                    paused: now.paused || now.loading,
-                },
-            )
-        });
+        // A follower plays what someone else shares: nothing to tell.
+        let playing = now
+            .current
+            .as_ref()
+            .filter(|_| now.sharing && now.following.is_none())
+            .map(|song| {
+                let position = if now.loading {
+                    Some(0)
+                } else {
+                    self.player
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|p| p.as_ref().ok()?.position())
+                        .or_else(|| {
+                            // The player cannot say (Android without its Activity): from what we last said.
+                            told.as_ref()
+                                .filter(|l| (&l.fid, l.track) == (&song.fid, song.track))
+                                .map(|l| l.position_at(at))
+                        })
+                };
+                unknown = position.is_none();
+                (
+                    song.gid.clone(),
+                    Listening {
+                        fid: song.fid.clone(),
+                        track: song.track,
+                        name: song.name.clone(),
+                        from_name: song.from_name.clone(),
+                        position_ms: position.unwrap_or(0),
+                        at_ms: at,
+                        // Not running ahead of a song still starting.
+                        paused: now.paused || now.loading,
+                    },
+                )
+            });
         // Better nothing than a wrong position, which would send every follower back.
         if unknown {
             return;
@@ -474,9 +524,13 @@ impl Music {
                 _ => None,
             };
             let tell = playing.filter(|(_, listening)| {
-                let same = shared.as_ref().and_then(|(_, l)| l.as_ref()).is_some_and(|l| {
-                    (&l.fid, l.track, l.paused) == (&listening.fid, listening.track, listening.paused)
-                });
+                let same = shared
+                    .as_ref()
+                    .and_then(|(_, l)| l.as_ref())
+                    .is_some_and(|l| {
+                        (&l.fid, l.track, l.paused)
+                            == (&listening.fid, listening.track, listening.paused)
+                    });
                 again || !same
             });
             if let Some((gid, listening)) = &tell {
@@ -484,19 +538,43 @@ impl Music {
             }
             (gone, tell)
         };
-        if let Some(gid) = gone {
-            core.share_listen(&gid, None);
-        }
-        if let Some((gid, listening)) = tell {
-            core.share_listen(&gid, Some(listening));
-        }
+        // On the runtime: what the core sends goes out from it.
+        backend.run(|core| {
+            if let Some(gid) = gone {
+                core.share_listen(&gid, None);
+            }
+            if let Some((gid, listening)) = tell {
+                core.share_listen(&gid, Some(listening));
+            }
+            Ok(())
+        });
     }
 
     /// What the core says about who shares and who listens along in `gid`.
-    pub fn heard(&self, backend: &Backend, gid: String, sharers: Vec<ListenView>, followers: Vec<String>) {
-        let mine = self.shared.lock().unwrap().as_ref().is_some_and(|(g, _)| *g == gid);
-        let followed = self.state.lock().unwrap().following.clone().filter(|f| f.gid == gid);
-        let along = followed.as_ref().and_then(|f| sharers.iter().find(|v| v.sharer == f.sharer)).cloned();
+    pub fn heard(
+        &self,
+        backend: &Backend,
+        gid: String,
+        sharers: Vec<ListenView>,
+        followers: Vec<String>,
+    ) {
+        let mine = self
+            .shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(g, _)| *g == gid);
+        let followed = self
+            .state
+            .lock()
+            .unwrap()
+            .following
+            .clone()
+            .filter(|f| f.gid == gid);
+        let along = followed
+            .as_ref()
+            .and_then(|f| sharers.iter().find(|v| v.sharer == f.sharer))
+            .cloned();
         self.change(backend, |s| {
             if mine {
                 s.listeners = followers;
@@ -519,7 +597,6 @@ impl Music {
 
     /// Play what `sharer` plays in `gid`, from where they are, and go on doing so.
     pub fn listen_along(&self, backend: &Backend, gid: &str, sharer: EndpointId) {
-        let Some(core) = backend.core() else { return };
         let Some(view) = self
             .state
             .lock()
@@ -532,25 +609,32 @@ impl Music {
             return;
         };
         self.stop_following(backend);
-        core.follow(gid, sharer, true);
+        backend.run(|core| Ok(core.follow(gid, sharer, true)));
         self.change(backend, |s| {
-            s.following = Some(Followed { gid: gid.to_owned(), sharer, name: view.name.clone() })
+            s.following = Some(Followed {
+                gid: gid.to_owned(),
+                sharer,
+                name: view.name.clone(),
+            })
         });
         self.apply(backend, gid, view.now);
     }
 
     /// No longer listen along; what plays goes on, on its own.
     pub fn stop_following(&self, backend: &Backend) {
-        let Some(f) = self.change(backend, |s| s.following.take()) else { return };
-        if let Some(core) = backend.core() {
-            core.follow(&f.gid, f.sharer, false);
-        }
+        let Some(f) = self.change(backend, |s| s.following.take()) else {
+            return;
+        };
+        backend.run(|core| Ok(core.follow(&f.gid, f.sharer, false)));
     }
 
     /// Make what plays match what the followed sharer plays.
     fn apply(&self, backend: &Backend, gid: &str, along: Listening) {
         let now = self.state.lock().unwrap().clone();
-        let same = now.current.as_ref().is_some_and(|c| c.is(gid, &along.fid, along.track));
+        let same = now
+            .current
+            .as_ref()
+            .is_some_and(|c| c.is(gid, &along.fid, along.track));
         if !same {
             let song = Song {
                 key: self.keys.fetch_add(1, Ordering::Relaxed) + 1,
@@ -576,15 +660,21 @@ impl Music {
     }
 
     fn set_paused(&self, backend: &Backend, paused: bool) {
-        let Some(player) = self.player(backend) else { return };
+        let Some(player) = self.player(backend) else {
+            return;
+        };
         self.change(backend, |s| s.paused = paused);
         player.pause(paused);
     }
 
     /// Seek to where the sharer is, if we drifted from it.
     fn seek_to(&self, along: &Listening) {
-        let Some(Ok(player)) = self.player.lock().unwrap().clone() else { return };
-        let Some(position) = player.position() else { return };
+        let Some(Ok(player)) = self.player.lock().unwrap().clone() else {
+            return;
+        };
+        let Some(position) = player.position() else {
+            return;
+        };
         let expected = along.position_at(now_ms()) as i64;
         let drift = expected - position as i64;
         if drift.abs() <= DRIFT_MS {
@@ -601,7 +691,10 @@ impl Music {
     fn resync(&self, backend: &Backend) {
         let now = self.state.lock().unwrap().clone();
         let Some(f) = now.following else { return };
-        let along = now.sharers.get(&f.gid).and_then(|v| v.iter().find(|v| v.sharer == f.sharer));
+        let along = now
+            .sharers
+            .get(&f.gid)
+            .and_then(|v| v.iter().find(|v| v.sharer == f.sharer));
         if let Some(v) = along {
             let _ = backend;
             self.seek_to(&v.now);

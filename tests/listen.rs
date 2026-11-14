@@ -96,7 +96,11 @@ async fn listen_along() {
     assert_eq!((heard.sharer, heard.name.as_str()), (a.id(), "alice"));
     assert_eq!(heard.now.fid, "song");
     // Same machine, same clock: whatever the offset estimate, it is small.
-    assert!((heard.now.at_ms - at).abs() < 200, "{} vs {at}", heard.now.at_ms);
+    assert!(
+        (heard.now.at_ms - at).abs() < 200,
+        "{} vs {at}",
+        heard.now.at_ms
+    );
 
     b.follow(&gid, a.id(), true);
     until("alice sees bob along", || a.listening(&gid).1 == ["bob"]).await;
@@ -105,6 +109,22 @@ async fn listen_along() {
 
     a.share_listen(&gid, None);
     until("alice stopped", || b.listening(&gid).0.is_empty()).await;
+
+    // Said once and never again: it expires.
+    a.share_listen(
+        &gid,
+        Some(Listening {
+            fid: "song".into(),
+            track: 0,
+            name: "Song.opus".into(),
+            from_name: "you".into(),
+            position_ms: 0,
+            at_ms: now_ms(),
+            paused: false,
+        }),
+    );
+    until("heard once", || b.listening(&gid).0.len() == 1).await;
+    until("expired", || b.listening(&gid).0.is_empty()).await;
 
     // Shared again, then gone with the connection.
     a.share_listen(

@@ -18,15 +18,18 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
-use crate::player::{Music, MusicState};
 #[cfg(target_os = "android")]
 use crate::player::Update;
+use crate::player::{Music, MusicState};
 
 /// What the UI learns from the node (and from the Activity, on Android).
 pub enum Msg {
     Core(Event),
     /// The node is up.
-    Ready { core: Core, download_dir: String },
+    Ready {
+        core: Core,
+        download_dir: String,
+    },
     BleStatus(String),
     Notice(String),
     /// Go to the peers page (a ticket just connected).
@@ -34,9 +37,15 @@ pub enum Msg {
     /// The webcam is (or is no longer) looking for a code.
     Scanning(bool),
     /// Another app shared a text and/or files (Android).
-    Shared { text: String, files: u32 },
+    Shared {
+        text: String,
+        files: u32,
+    },
     /// Room taken by the system bars and the keyboard, and whether the keyboard is up (Android).
-    Insets { insets: [f32; 4], keyboard: bool },
+    Insets {
+        insets: [f32; 4],
+        keyboard: bool,
+    },
     /// What plays, and what plays next.
     Music(MusicState),
 }
@@ -49,7 +58,6 @@ pub type Frame = Option<(u32, u32, bytes::Bytes)>;
 const MEDIA_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "heic", "mp4", "mkv", "mov", "webm",
 ];
-
 
 struct Inner {
     rt: Handle,
@@ -146,7 +154,11 @@ impl Backend {
             let (line, this) = (line.clone(), self.clone());
             move || {
                 let (t, d) = line.lock().unwrap().clone();
-                let text = if d.is_empty() { t } else { format!("{d} · {t}") };
+                let text = if d.is_empty() {
+                    t
+                } else {
+                    format!("{d} · {t}")
+                };
                 *this.0.ble_status.lock().unwrap() = text.clone();
                 this.send(Msg::BleStatus(text));
             }
@@ -201,7 +213,12 @@ impl Backend {
             flipflop::platform::show_transfers(now);
         }
         // Listening along is the player's business; the UI learns it from its state.
-        if let Msg::Core(Event::Listening { group, sharers, followers }) = msg {
+        if let Msg::Core(Event::Listening {
+            group,
+            sharers,
+            followers,
+        }) = msg
+        {
             return self.music().heard(self, group, sharers, followers);
         }
         let msg = match &*self.0.tx.lock().unwrap() {
@@ -308,12 +325,16 @@ impl Backend {
 
     /// Give a peer a local name as it is typed. An empty name restores the name they go by.
     pub fn rename_contact(&self, id: EndpointId, name: String) {
-        self.typed(format!("peer:{id}"), move |core| core.rename_contact(id, &name));
+        self.typed(format!("peer:{id}"), move |core| {
+            core.rename_contact(id, &name)
+        });
     }
 
     /// Give a group a local name as it is typed. An empty name restores the name it goes by.
     pub fn rename_group(&self, group: String, name: String) {
-        self.typed(format!("group:{group}"), move |core| core.rename_group(&group, &name));
+        self.typed(format!("group:{group}"), move |core| {
+            core.rename_group(&group, &name)
+        });
     }
 
     /// Catch the groups up, off the UI thread.
@@ -423,7 +444,11 @@ impl Backend {
                             .add_filter("Audio", flipflop::core::AUDIO_EXTENSIONS)
                             .pick_files()
                             .await;
-                        let paths = picked.unwrap_or_default().iter().map(|f| f.path().to_owned()).collect();
+                        let paths = picked
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|f| f.path().to_owned())
+                            .collect();
                         this.offer_music(gid, paths);
                     }
                     "music-folder" => {
@@ -561,7 +586,11 @@ impl Backend {
                 let staged = !path.starts_with("content://");
                 self.offer(gid, path.into(), name, &kind, staged);
             }
-            ActivityEvent::MusicPlayer { ticket, what, detail } => {
+            ActivityEvent::MusicPlayer {
+                ticket,
+                what,
+                detail,
+            } => {
                 let update = match what {
                     flipflop::platform::MUSIC_LOADED => Update::Loaded,
                     flipflop::platform::MUSIC_PAUSED => Update::Paused(true),

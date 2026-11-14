@@ -186,7 +186,11 @@ impl Mpv {
     pub fn position(&self) -> Option<u64> {
         let clock = self.clock.lock().unwrap();
         let (secs, when) = clock.at?;
-        let ran = if clock.paused { 0. } else { when.elapsed().as_secs_f64() };
+        let ran = if clock.paused {
+            0.
+        } else {
+            when.elapsed().as_secs_f64()
+        };
         Some(((secs + ran) * 1000.) as u64)
     }
 
@@ -261,7 +265,11 @@ impl Worker {
                 Wake::Load(ticket, source, start_ms) => {
                     loading = ticket;
                     // An option for the next file only: mpv resets it when the file ends.
-                    let start = if start_ms > 0 { seconds(start_ms) } else { "none".into() };
+                    let start = if start_ms > 0 {
+                        seconds(start_ms)
+                    } else {
+                        "none".into()
+                    };
                     self.set_string("start", &start);
                     self.command(ticket, &["loadfile", &source, "replace"]);
                     self.set_flag("pause", false);
@@ -337,10 +345,7 @@ impl Worker {
     }
 
     fn command(&self, ticket: u64, args: &[&str]) {
-        let args: Vec<CString> = args
-            .iter()
-            .filter_map(|a| CString::new(*a).ok())
-            .collect();
+        let args: Vec<CString> = args.iter().filter_map(|a| CString::new(*a).ok()).collect();
         let mut ptrs: Vec<*const c_char> = args.iter().map(|a| a.as_ptr()).collect();
         ptrs.push(std::ptr::null());
         let code = unsafe { (self.lib.command)(self.mpv, ptrs.as_mut_ptr()) };
@@ -411,7 +416,10 @@ mod tests {
         player.load(7, path, 0);
         let mut loaded = false;
         loop {
-            match rx.recv_timeout(Duration::from_secs(20)).expect("did not end") {
+            match rx
+                .recv_timeout(Duration::from_secs(20))
+                .expect("did not end")
+            {
                 (7, Update::Loaded) => loaded = true,
                 (7, Update::Ended) => break,
                 (_, Update::Failed(why)) => panic!("{why}"),

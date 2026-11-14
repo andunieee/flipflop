@@ -88,7 +88,13 @@ impl Component for MusicTab {
         let (active, current) = {
             let now = state.read();
             let current = now.current.as_ref().filter(|s| s.gid == self.gid).map(|s| {
-                (s.fid.clone(), Playing { track: s.track, paused: now.paused })
+                (
+                    s.fid.clone(),
+                    Playing {
+                        track: s.track,
+                        paused: now.paused,
+                    },
+                )
             });
             (now.current.is_some() || !now.queue.is_empty(), current)
         };
@@ -99,7 +105,12 @@ impl Component for MusicTab {
                     .width(Size::fill())
                     .content(Content::flex())
                     .spacing(Dim::SPACE2)
-                    .child(Btn::primary("Add songs").icon(Icon::Music).expanded().on_press(move |_| nav.pick("music")))
+                    .child(
+                        Btn::primary("Add songs")
+                            .icon(Icon::Music)
+                            .expanded()
+                            .on_press(move |_| nav.pick("music")),
+                    )
                     // Albums are folders, which only the desktop's picker gives.
                     .maybe(cfg!(not(target_os = "android")), |el| {
                         el.child(
@@ -121,18 +132,38 @@ impl Component for MusicTab {
                 .maybe(active, |el| el.child(QueuePanel))
                 .into_element();
         }
-        let along = Listeners { gid: self.gid.clone() };
-        let rows = Rows { gid: self.gid.clone(), music: self.music.clone(), current, open: open.read().clone() };
+        let along = Listeners {
+            gid: self.gid.clone(),
+        };
+        let rows = Rows {
+            gid: self.gid.clone(),
+            music: self.music.clone(),
+            current,
+            open: open.read().clone(),
+        };
         // The add buttons' card first, then the offers.
-        let sizes: Vec<f32> = std::iter::once(d.control_height() + 2. * d.card_padding() + Dim::SPACE3)
-            .chain(rows.music.iter().map(|f| row_height(d, f, rows.open.contains(&f.id))))
-            .collect();
+        let sizes: Vec<f32> =
+            std::iter::once(d.control_height() + 2. * d.card_padding() + Dim::SPACE3)
+                .chain(
+                    rows.music
+                        .iter()
+                        .map(|f| row_height(d, f, rows.open.contains(&f.id))),
+                )
+                .collect();
         let length = sizes.len();
         let list = VirtualScrollView::new_with_data(rows, move |item, rows: &Rows| {
             let Some(f) = item.index.checked_sub(1).and_then(|i| rows.music.get(i)) else {
-                return rect().key(0).height(Size::px(item.size)).child(add.clone()).into();
+                return rect()
+                    .key(0)
+                    .height(Size::px(item.size))
+                    .child(add.clone())
+                    .into();
             };
-            let playing = rows.current.as_ref().filter(|(fid, _)| *fid == f.id).map(|(_, p)| *p);
+            let playing = rows
+                .current
+                .as_ref()
+                .filter(|(fid, _)| *fid == f.id)
+                .map(|(_, p)| *p);
             rect()
                 .key(&f.id)
                 .height(Size::px(item.size))
@@ -182,41 +213,72 @@ impl Component for Listeners {
         let state = use_consume::<State<MusicState>>();
         let (sharers, following) = {
             let now = state.read();
-            (now.sharers.get(&self.gid).cloned().unwrap_or_default(), now.following.clone())
+            (
+                now.sharers.get(&self.gid).cloned().unwrap_or_default(),
+                now.following.clone(),
+            )
         };
-        rect().width(Size::fill()).spacing(Dim::SPACE2).children(sharers.into_iter().map(|v| {
-            let along = following.as_ref().is_some_and(|f| f.gid == self.gid && f.sharer == v.sharer);
-            let (gid, sharer) = (self.gid.clone(), v.sharer);
-            let what = if v.now.paused { format!("{} · paused", v.now.name) } else { v.now.name.clone() };
-            card()
-                .key(v.sharer.to_string())
-                .child(
-                    card_body(0.).child(
-                        rect()
-                            .horizontal()
-                            .width(Size::fill())
-                            .content(Content::flex())
-                            .spacing(Dim::SPACE3)
-                            .cross_align(Alignment::Center)
-                            .child(icon_tile(Icon::Headphones, 40., c.accent_soft, c.accent_text))
-                            .child(
-                                rect()
-                                    .width(Size::flex(1.))
-                                    .spacing(2.)
-                                    .child(txt(format!("{} is listening", v.name), d.font_md(), c.text_strong, 650).elide())
-                                    .child(txt(what, d.font_sm(), c.text_muted, 400).elide()),
-                            )
-                            .child(if along {
-                                Btn::secondary("Leave").icon(Icon::Close).on_press(move |_| with_music(nav, |m, b| m.stop_following(b)))
-                            } else {
-                                Btn::primary("Listen along")
-                                    .icon(Icon::Headphones)
-                                    .on_press(move |_| with_music(nav, |m, b| m.listen_along(b, &gid, sharer)))
-                            }),
-                    ),
-                )
-                .into_element()
-        }))
+        rect()
+            .width(Size::fill())
+            .spacing(Dim::SPACE2)
+            .children(sharers.into_iter().map(|v| {
+                let along = following
+                    .as_ref()
+                    .is_some_and(|f| f.gid == self.gid && f.sharer == v.sharer);
+                let (gid, sharer) = (self.gid.clone(), v.sharer);
+                let what = if v.now.paused {
+                    format!("{} · paused", v.now.name)
+                } else {
+                    v.now.name.clone()
+                };
+                card()
+                    .key(v.sharer.to_string())
+                    .child(
+                        card_body(0.).child(
+                            rect()
+                                .horizontal()
+                                .width(Size::fill())
+                                .content(Content::flex())
+                                .spacing(Dim::SPACE3)
+                                .cross_align(Alignment::Center)
+                                .child(icon_tile(
+                                    Icon::Headphones,
+                                    40.,
+                                    c.accent_soft,
+                                    c.accent_text,
+                                ))
+                                .child(
+                                    rect()
+                                        .width(Size::flex(1.))
+                                        .spacing(2.)
+                                        .child(
+                                            txt(
+                                                format!("{} is listening", v.name),
+                                                d.font_md(),
+                                                c.text_strong,
+                                                650,
+                                            )
+                                            .elide(),
+                                        )
+                                        .child(txt(what, d.font_sm(), c.text_muted, 400).elide()),
+                                )
+                                .child(if along {
+                                    Btn::secondary("Leave")
+                                        .icon(Icon::Close)
+                                        .on_press(move |_| {
+                                            with_music(nav, |m, b| m.stop_following(b))
+                                        })
+                                } else {
+                                    Btn::primary("Listen along")
+                                        .icon(Icon::Headphones)
+                                        .on_press(move |_| {
+                                            with_music(nav, |m, b| m.listen_along(b, &gid, sharer))
+                                        })
+                                }),
+                        ),
+                    )
+                    .into_element()
+            }))
     }
 }
 
@@ -248,17 +310,30 @@ impl Component for OfferCard {
         let album = !f.tracks.is_empty();
         let current = self.playing;
         let playing = current.is_some_and(|p| !p.paused);
-        let who = if f.mine { "you".to_owned() } else { f.from_name.clone() };
+        let who = if f.mine {
+            "you".to_owned()
+        } else {
+            f.from_name.clone()
+        };
         let meta = if album {
             let n = f.tracks.len();
-            format!("{n} song{} · {} · {who} · {}", if n == 1 { "" } else { "s" }, format::size(f.size), format::time(f.ts))
+            format!(
+                "{n} song{} · {} · {who} · {}",
+                if n == 1 { "" } else { "s" },
+                format::size(f.size),
+                format::time(f.ts)
+            )
         } else {
             format!("{} · {who} · {}", format::size(f.size), format::time(f.ts))
         };
         let (press, queue) = ((gid.clone(), f.clone()), (gid.clone(), f.clone()));
         let (stop_gid, stop_id) = (gid.clone(), f.id.clone());
         let can_play = !f.preparing && (f.mine || f.source_online);
-        let ink = if current.is_some() { c.accent_text } else { c.text_strong };
+        let ink = if current.is_some() {
+            c.accent_text
+        } else {
+            c.text_strong
+        };
         let head = rect()
             .horizontal()
             .width(Size::fill())
@@ -266,19 +341,30 @@ impl Component for OfferCard {
             .content(Content::flex())
             .spacing(Dim::SPACE3)
             .cross_align(Alignment::Center)
-            .child(icon_tile(if album { Icon::Folder } else { Icon::Music }, 40., c.accent_soft, c.accent_text))
+            .child(icon_tile(
+                if album { Icon::Folder } else { Icon::Music },
+                40.,
+                c.accent_soft,
+                c.accent_text,
+            ))
             .child(
                 rect()
                     .width(Size::flex(1.))
                     .spacing(2.)
-                    .maybe(album, |el| el.cursor(CursorIcon::Pointer).on_press({
-                        let id = f.id.clone();
-                        move |_| toggle(opened, &id)
-                    }))
+                    .maybe(album, |el| {
+                        el.cursor(CursorIcon::Pointer).on_press({
+                            let id = f.id.clone();
+                            move |_| toggle(opened, &id)
+                        })
+                    })
                     .child(txt(f.name.clone(), d.font_md(), ink, 650).elide())
                     .child(txt(meta, d.font_sm(), c.text_muted, 400).elide())
-                    .maybe(f.preparing, |el| el.child(txt("Preparing…", d.font_xs(), c.text_faint, 400)))
-                    .maybe(!f.preparing && !can_play, |el| el.child(txt("Sender offline", d.font_xs(), c.warn, 400))),
+                    .maybe(f.preparing, |el| {
+                        el.child(txt("Preparing…", d.font_xs(), c.text_faint, 400))
+                    })
+                    .maybe(!f.preparing && !can_play, |el| {
+                        el.child(txt("Sender offline", d.font_xs(), c.warn, 400))
+                    }),
             )
             .maybe(can_play, |el| {
                 el.child(
@@ -299,15 +385,25 @@ impl Component for OfferCard {
                 }))
             })
             .maybe(album, |el| {
-                el.child(IconButton::new(if open { Icon::ChevronDown } else { Icon::ChevronRight }, {
-                    let id = f.id.clone();
-                    move |_| toggle(opened, &id)
-                }))
+                el.child(IconButton::new(
+                    if open {
+                        Icon::ChevronDown
+                    } else {
+                        Icon::ChevronRight
+                    },
+                    {
+                        let id = f.id.clone();
+                        move |_| toggle(opened, &id)
+                    },
+                ))
             })
             .maybe(f.mine && !f.preparing, |el| {
                 el.child(
-                    IconButton::new(Icon::Trash, move |_| nav.backend().run(|core| core.stop_file(&stop_gid, &stop_id)))
-                        .danger(),
+                    IconButton::new(Icon::Trash, move |_| {
+                        nav.backend()
+                            .run(|core| core.stop_file(&stop_gid, &stop_id))
+                    })
+                    .danger(),
                 )
             });
         let tracks = f.tracks.iter().enumerate().map(|(i, path)| {
@@ -325,15 +421,29 @@ impl Component for OfferCard {
                 .cross_align(Alignment::Center)
                 .padding((0., 0., 0., 52.))
                 .child(
-                    txt(format!("{}. {row_name}", i + 1), d.font_sm(), if this.is_some() { c.accent_text } else { c.text_strong }, 400)
-                        .width(Size::flex(1.))
-                        .elide(),
+                    txt(
+                        format!("{}. {row_name}", i + 1),
+                        d.font_sm(),
+                        if this.is_some() {
+                            c.accent_text
+                        } else {
+                            c.text_strong
+                        },
+                        400,
+                    )
+                    .width(Size::flex(1.))
+                    .elide(),
                 )
                 .maybe(can_play, |el| {
                     el.child(
-                        IconButton::new(if this.is_some_and(|p| !p.paused) { Icon::Pause } else { Icon::Play }, move |_| {
-                            with_music(nav, |m, b| m.press(b, &press.0, &press.1, i))
-                        })
+                        IconButton::new(
+                            if this.is_some_and(|p| !p.paused) {
+                                Icon::Pause
+                            } else {
+                                Icon::Play
+                            },
+                            move |_| with_music(nav, |m, b| m.press(b, &press.0, &press.1, i)),
+                        )
                         .tint(c.accent_text)
                         .size(d.control_height() - 8.),
                     )
@@ -375,13 +485,25 @@ impl Component for QueuePanel {
         let mut over = use_state(|| None::<Option<u64>>);
         let mut open = use_state(|| false);
         let unfolded = *open.read();
-        let MusicState { queue, current, paused, loading, sharing, listeners, following, .. } = state.read().clone();
+        let MusicState {
+            queue,
+            current,
+            paused,
+            loading,
+            sharing,
+            listeners,
+            following,
+            ..
+        } = state.read().clone();
         let row_height = d.control_height() + 8.;
 
         let (title, mut detail) = match &current {
             Some(e) if loading => (e.name.clone(), format!("Starting… · {}", e.from_name)),
             Some(e) => (e.name.clone(), e.from_name.clone()),
-            None => ("Nothing playing".to_owned(), "Press play to start the queue".to_owned()),
+            None => (
+                "Nothing playing".to_owned(),
+                "Press play to start the queue".to_owned(),
+            ),
         };
         if let Some(f) = &following {
             detail = format!("Listening along with {} · {detail}", f.name);
@@ -410,7 +532,15 @@ impl Component for QueuePanel {
                     .cross_align(Alignment::Center)
                     .cursor(CursorIcon::Pointer)
                     .on_press(move |_| open.toggle())
-                    .child(icon(if unfolded { Icon::ChevronDown } else { Icon::ChevronUp }, 18., c.text_faint))
+                    .child(icon(
+                        if unfolded {
+                            Icon::ChevronDown
+                        } else {
+                            Icon::ChevronUp
+                        },
+                        18.,
+                        c.text_faint,
+                    ))
                     .child(
                         rect()
                             .width(Size::flex(1.))
@@ -420,66 +550,94 @@ impl Component for QueuePanel {
                     ),
             )
             .child(
-                IconButton::new(if current.is_some() && !paused { Icon::Pause } else { Icon::Play }, move |_| {
-                    with_music(nav, |m, b| m.toggle(b))
-                })
+                IconButton::new(
+                    if current.is_some() && !paused {
+                        Icon::Pause
+                    } else {
+                        Icon::Play
+                    },
+                    move |_| with_music(nav, |m, b| m.toggle(b)),
+                )
                 .tint(c.accent_text),
             )
-            .maybe(current.is_some(), |el| el.child(IconButton::new(Icon::Skip, move |_| with_music(nav, |m, b| m.next(b)))))
+            .maybe(current.is_some(), |el| {
+                el.child(IconButton::new(Icon::Skip, move |_| {
+                    with_music(nav, |m, b| m.next(b))
+                }))
+            })
             // Share what plays, for the others to listen along; tinted while shared.
             .maybe(current.is_some() && following.is_none(), |el| {
                 el.child(
                     IconButton::new(Icon::Broadcast, move |_| {
                         with_music(nav, |m, b| m.set_sharing(b, !sharing));
-                        nav.toast(if sharing { "No longer shared" } else { "Shared with the group: they can listen along" }.to_owned());
+                        nav.toast(
+                            if sharing {
+                                "No longer shared"
+                            } else {
+                                "Shared with the group: they can listen along"
+                            }
+                            .to_owned(),
+                        );
                     })
                     .tint(if sharing { c.accent_text } else { c.text_faint }),
                 )
             })
             .maybe(following.is_some(), |el| {
-                el.child(IconButton::new(Icon::Close, move |_| with_music(nav, |m, b| m.stop_following(b))))
+                el.child(IconButton::new(Icon::Close, move |_| {
+                    with_music(nav, |m, b| m.stop_following(b))
+                }))
             });
 
-        let rows = queue.iter().map(|e| {
-            let key = e.key;
-            let highlighted = *over.read() == Some(Some(key));
-            let row = rect()
-                .horizontal()
-                .width(Size::fill())
-                .height(Size::px(row_height))
-                .content(Content::flex())
-                .spacing(Dim::SPACE2)
-                .cross_align(Alignment::Center)
-                .padding((0., Dim::SPACE2))
-                .corner_radius(8.)
-                .background(if highlighted { c.chip_bg } else { Color::TRANSPARENT })
-                .child(icon(Icon::Grip, 16., c.text_faint))
-                .child(txt(e.name.clone(), d.font_md(), c.text_strong, 400).width(Size::flex(1.)).elide())
-                .child(txt(e.from_name.clone(), d.font_sm(), c.text_muted, 400).max_lines(1))
-                .child(
-                    IconButton::new(Icon::Close, move |_| with_music(nav, |m, b| m.remove(b, key))).size(row_height - 8.),
-                );
-            DropZone::new(move |Dragged(dragged)| {
-                over.set(None);
-                with_music(nav, |m, b| m.reorder(b, dragged, Some(key)));
-            })
-            .on_drag_over(move |on: bool| over.set(on.then_some(Some(key))))
-            .key(key)
-            .width(Size::fill())
-            .child(
-                DragZone::new(Dragged(key))
+        let rows =
+            queue.iter().map(|e| {
+                let key = e.key;
+                let highlighted = *over.read() == Some(Some(key));
+                let row = rect()
+                    .horizontal()
                     .width(Size::fill())
-                    .drag_element(
-                        card().width(Size::px(260.)).child(
-                            card_body(0.)
-                                .padding((Dim::SPACE2, Dim::SPACE3))
-                                .child(txt(e.name.clone(), d.font_md(), c.text_strong, 600).elide()),
-                        ),
+                    .height(Size::px(row_height))
+                    .content(Content::flex())
+                    .spacing(Dim::SPACE2)
+                    .cross_align(Alignment::Center)
+                    .padding((0., Dim::SPACE2))
+                    .corner_radius(8.)
+                    .background(if highlighted {
+                        c.chip_bg
+                    } else {
+                        Color::TRANSPARENT
+                    })
+                    .child(icon(Icon::Grip, 16., c.text_faint))
+                    .child(
+                        txt(e.name.clone(), d.font_md(), c.text_strong, 400)
+                            .width(Size::flex(1.))
+                            .elide(),
                     )
-                    .child(row),
-            )
-            .into_element()
-        });
+                    .child(txt(e.from_name.clone(), d.font_sm(), c.text_muted, 400).max_lines(1))
+                    .child(
+                        IconButton::new(Icon::Close, move |_| {
+                            with_music(nav, |m, b| m.remove(b, key))
+                        })
+                        .size(row_height - 8.),
+                    );
+                DropZone::new(move |Dragged(dragged)| {
+                    over.set(None);
+                    with_music(nav, |m, b| m.reorder(b, dragged, Some(key)));
+                })
+                .on_drag_over(move |on: bool| over.set(on.then_some(Some(key))))
+                .key(key)
+                .width(Size::fill())
+                .child(
+                    DragZone::new(Dragged(key))
+                        .width(Size::fill())
+                        .drag_element(card().width(Size::px(260.)).child(
+                            card_body(0.).padding((Dim::SPACE2, Dim::SPACE3)).child(
+                                txt(e.name.clone(), d.font_md(), c.text_strong, 600).elide(),
+                            ),
+                        ))
+                        .child(row),
+                )
+                .into_element()
+            });
         // Dropped below the last row: to the end.
         let end = DropZone::new(move |Dragged(dragged)| {
             over.set(None);
@@ -492,35 +650,44 @@ impl Component for QueuePanel {
                 .width(Size::fill())
                 .height(Size::px(Dim::SPACE3))
                 .corner_radius(4.)
-                .background(if *over.read() == Some(None) { c.chip_bg } else { Color::TRANSPARENT }),
+                .background(if *over.read() == Some(None) {
+                    c.chip_bg
+                } else {
+                    Color::TRANSPARENT
+                }),
         );
 
         let shown = queue.len().min(QUEUE_ROWS) as f32;
-        card().child(
-            card_body(Dim::SPACE2)
-                .child(now)
-                .maybe(unfolded, |el| {
-                    el.child(divider())
+        card().child(card_body(Dim::SPACE2).child(now).maybe(unfolded, |el| {
+            el.child(divider())
+                .child(
+                    rect()
+                        .horizontal()
+                        .width(Size::fill())
+                        .content(Content::flex())
+                        .cross_align(Alignment::Center)
                         .child(
-                            rect()
-                                .horizontal()
-                                .width(Size::fill())
-                                .content(Content::flex())
-                                .cross_align(Alignment::Center)
-                                .child(
-                                    txt(format!("Up next · {}", queue.len()), d.font_xs(), c.text_faint, 600)
-                                        .width(Size::flex(1.)),
-                                )
-                                .child(Btn::ghost("Clear").icon(Icon::Trash).on_press(move |_| with_music(nav, |m, b| m.clear(b)))),
+                            txt(
+                                format!("Up next · {}", queue.len()),
+                                d.font_xs(),
+                                c.text_faint,
+                                600,
+                            )
+                            .width(Size::flex(1.)),
                         )
                         .child(
-                            ScrollView::new()
-                                .width(Size::fill())
-                                .height(Size::px(shown * row_height + Dim::SPACE3))
-                                .children(rows)
-                                .child(end),
-                        )
-                }),
-        )
+                            Btn::ghost("Clear")
+                                .icon(Icon::Trash)
+                                .on_press(move |_| with_music(nav, |m, b| m.clear(b))),
+                        ),
+                )
+                .child(
+                    ScrollView::new()
+                        .width(Size::fill())
+                        .height(Size::px(shown * row_height + Dim::SPACE3))
+                        .children(rows)
+                        .child(end),
+                )
+        }))
     }
 }

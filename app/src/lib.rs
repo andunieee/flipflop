@@ -19,9 +19,9 @@ mod theme;
 mod widgets;
 
 use flipflop::core::Event;
-use freya::{prelude::*, radio::*};
 #[cfg(target_os = "android")]
 use freya::android::AndroidExt;
+use freya::{prelude::*, radio::*};
 
 pub use crate::backend::Backend;
 use crate::{
@@ -89,7 +89,13 @@ pub fn app() -> impl IntoElement {
 #[cfg(target_os = "android")]
 fn editing() -> bool {
     use freya_winit::integration::is_ime_role;
-    is_ime_role(Platform::get().current_window().focused_accessibility_node.peek().role())
+    is_ime_role(
+        Platform::get()
+            .current_window()
+            .focused_accessibility_node
+            .peek()
+            .role(),
+    )
 }
 
 /// Stop editing a text field; returns whether there was one. On Android the keyboard belongs to the
@@ -104,9 +110,11 @@ pub(crate) fn stop_editing() -> bool {
     // The root node (`ACCESSIBILITY_ROOT_ID` in freya-core) is not a text input, so the keyboard
     // stays down.
     let platform = Platform::get();
-    platform.current_window().send(UserEvent::FocusAccessibilityNode(
-        AccessibilityFocusStrategy::Node(AccessibilityId(0)),
-    ));
+    platform
+        .current_window()
+        .send(UserEvent::FocusAccessibilityNode(
+            AccessibilityFocusStrategy::Node(AccessibilityId(0)),
+        ));
     // Hide it now rather than wait for the focus update: the framework only hides keyboards it
     // considers implicit, and this one was shown explicitly.
     if let Err(err) = platform.hide_keyboard() {
@@ -116,7 +124,12 @@ pub(crate) fn stop_editing() -> bool {
 }
 
 /// What the node (or the Activity) said, into the model.
-fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav, mut music: State<MusicState>) {
+fn apply(
+    msg: Msg,
+    mut station: RadioStation<Model, Channel>,
+    mut nav: Nav,
+    mut music: State<MusicState>,
+) {
     match msg {
         Msg::Ready { core, download_dir } => {
             let mut m = station.write_channel(Channel::Me);
@@ -167,9 +180,13 @@ fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav, mut 
             }
             Event::Group(view) => {
                 // Our own scratchpad edits are not news; they are caught up when the page is left.
-                let looking = nav.viewed().as_deref() == Some(view.id.as_str()) && !view.scratch_local;
+                let looking =
+                    nav.viewed().as_deref() == Some(view.id.as_str()) && !view.scratch_local;
                 let gid = view.id.clone();
-                station.write_channel(Channel::Groups).views.insert(gid.clone(), view);
+                station
+                    .write_channel(Channel::Groups)
+                    .views
+                    .insert(gid.clone(), view);
                 if looking {
                     nav.backend().mark_seen(vec![gid]);
                 }
@@ -180,7 +197,10 @@ fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav, mut 
 }
 
 /// Start the node in `data_dir` and show the app; returns when the window is closed (desktop).
-pub fn launch_app(backend: Backend, config: impl FnOnce(WindowConfig) -> WindowConfig) -> LaunchConfig {
+pub fn launch_app(
+    backend: Backend,
+    config: impl FnOnce(WindowConfig) -> WindowConfig,
+) -> LaunchConfig {
     LaunchConfig::new().with_window(config(WindowConfig::new(app).with_root_context(backend)))
 }
 
@@ -200,9 +220,7 @@ fn android_main(droid_app: winit::platform::android::activity::AndroidApp) {
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let dir = droid_app
-            .internal_data_path()
-            .expect("the app's data dir");
+        let dir = droid_app.internal_data_path().expect("the app's data dir");
         let backend = Backend::start(rt.handle().clone(), dir);
         (rt, backend)
     });
