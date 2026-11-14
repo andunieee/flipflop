@@ -7,6 +7,8 @@
 //! - `GET /<token>/`                 the page, with `flipflop_web.js` and `flipflop_web_bg.wasm` next to it
 //! - `GET /<token>/ws`               WebSocket: the document's sync messages (LAN)
 //! - `GET /<token>/dl/<file id>`     download an offer
+//! - `GET|HEAD /<token>/play/<file id>[/<track>]`  a song of the music tab (or an album's song), ranges
+//!   included, for the page's player
 //! - `PUT /<token>/up?name=<name>`   upload a file (only while the link allows it)
 
 use std::{
@@ -18,7 +20,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, stream::BoxStream};
 use http_body_util::BodyExt;
 use hyper::{
     Method, Request, Response, StatusCode,
@@ -38,7 +40,7 @@ use tokio_tungstenite::{
 };
 
 use super::{GuestSession, MAX_FRAME, Origin, Out, TAG_CONTROL};
-use crate::core::{Core, sharing::open_source};
+use crate::core::{Core, music::serve_music, sharing::open_source};
 
 const PAGE: &str = include_str!("page.html");
 const WASM_JS: &str = include_str!("assets/flipflop_web.js");
@@ -207,11 +209,15 @@ where
 
 // --------------------------------------------------------------- bodies
 
-/// A whole body, or one streamed from a producer task.
+/// A whole body, or one streamed from a producer task, or from a stream.
 enum Body {
     Full(Option<Bytes>),
     Stream {
         rx: mpsc::Receiver<io::Result<Bytes>>,
+        len: u64,
+    },
+    Bytes {
+        stream: BoxStream<'static, io::Result<Bytes>>,
         len: u64,
     },
 }
@@ -229,13 +235,16 @@ impl hyper::body::Body for Body {
             Body::Stream { rx, .. } => rx
                 .poll_recv(cx)
                 .map(|chunk| chunk.map(|r| r.map(Frame::data))),
+            Body::Bytes { stream, .. } => stream
+                .poll_next_unpin(cx)
+                .map(|chunk| chunk.map(|r| r.map(Frame::data))),
         }
     }
 
     fn size_hint(&self) -> SizeHint {
         match self {
             Body::Full(data) => SizeHint::with_exact(data.as_ref().map_or(0, |d| d.len() as u64)),
-            Body::Stream { len, .. } => SizeHint::with_exact(*len),
+            Body::Stream { len, .. } | Body::Bytes { len, .. } => SizeHint::with_exact(*len),
         }
     }
 }
@@ -334,6 +343,16 @@ async fn route(core: &Core, origin: &Origin, req: Request<Incoming>) -> Reply {
         (Method::GET, ["flipflop_web_bg.wasm"]) => reply(StatusCode::OK, "application/wasm", WASM),
         (Method::GET, ["ws"]) => upgrade(core, &gid, origin, req),
         (Method::GET, ["dl", fid]) => download(core, &gid, fid, origin).await,
+        (method @ (Method::GET | Method::HEAD), ["play", fid, track @ ..]) if track.len() <= 1 => {
+            let Ok(track) = track.first().map_or(Ok(0), |t| t.parse()) else {
+                return not_found();
+            };
+            let range = req
+                .headers()
+                .get(header::RANGE)
+                .and_then(|v| v.to_str().ok());
+            play(core, &gid, fid, track, method == Method::HEAD, range).await
+        }
         (Method::PUT, ["up"]) => upload(core, &gid, origin, req).await,
         _ => not_found(),
     }
@@ -438,6 +457,25 @@ async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
     if let Ok(v) = HeaderValue::from_str(&content_disposition(&name)) {
         h.insert(header::CONTENT_DISPOSITION, v);
     }
+    res
+}
+
+async fn play(
+    core: &Core,
+    gid: &str,
+    fid: &str,
+    track: usize,
+    head: bool,
+    range: Option<&str>,
+) -> Reply {
+    let served = serve_music(core, gid, fid, track, head, range).await;
+    let mut res = match (served.body, served.error) {
+        (Some((stream, len)), _) => Response::new(Body::Bytes { stream, len }),
+        (None, Some(why)) => error(served.status, &why),
+        (None, None) => Response::new(Body::Full(None)),
+    };
+    *res.status_mut() = served.status;
+    res.headers_mut().extend(served.headers);
     res
 }
 

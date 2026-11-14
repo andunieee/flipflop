@@ -361,8 +361,13 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
     assert!(a.set_tab(&gid, "nope", false).is_err());
     until("bob sees texts hidden", || {
         tabs(&b)
-            == [("Files", true), ("Texts", false), ("Scratchpad", true)]
-                .map(|(t, on)| (t.to_owned(), on))
+            == [
+                ("Files", true),
+                ("Texts", false),
+                ("Scratchpad", true),
+                ("Music", false),
+            ]
+            .map(|(t, on)| (t.to_owned(), on))
     })
     .await;
 
@@ -399,6 +404,144 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
         tabs(&a).last() == Some(&("chess".to_owned(), false))
     })
     .await;
+
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+/// A plain HTTP/1.1 GET (with an optional Range): the response head and the body.
+async fn http_get(url: &str, range: Option<&str>) -> (String, Vec<u8>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let rest = url.strip_prefix("http://").unwrap();
+    let (host, path) = rest.split_at(rest.find('/').unwrap());
+    let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+    let range = range.map(|r| format!("Range: {r}\r\n")).unwrap_or_default();
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{range}Connection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply).await.unwrap();
+    let split = reply.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    (
+        String::from_utf8_lossy(&reply[..split]).to_lowercase(),
+        reply[split + 4..].to_vec(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn music_is_streamed_not_downloaded() {
+    let (a, da) = node("alice").await;
+    let (b, db) = node("bob").await;
+    let gid = group_of(&a, &b).await;
+    let tabs = |c: &Core| -> Vec<(String, bool)> {
+        let v = c.group_view(&gid).unwrap();
+        v.tabs.iter().map(|t| (t.id.clone(), t.on)).collect()
+    };
+    // The music tab is there, hidden, until someone shows it.
+    assert!(tabs(&b).contains(&("music".to_owned(), false)));
+    a.set_tab(&gid, "music", true).unwrap();
+    until("bob sees the music tab", || {
+        tabs(&b).contains(&("music".to_owned(), true))
+    })
+    .await;
+
+    let song: Vec<u8> = (0..300_000u32).flat_map(|i| i.to_le_bytes()).collect();
+    let src = da.path().join("song.ogg");
+    std::fs::write(&src, &song).unwrap();
+    // Only songs.
+    let video = da.path().join("clip.mp4");
+    std::fs::write(&video, b"not a song").unwrap();
+    assert!(a.offer_music(&gid, video, None, false).await.is_err());
+    let fid = a.offer_music(&gid, src.clone(), None, false).await.unwrap();
+    until("bob sees the song", || {
+        b.group_view(&gid)
+            .unwrap()
+            .music
+            .iter()
+            .any(|f| f.id == fid)
+    })
+    .await;
+    // Not a file: it is not listed with them, and nothing downloads it (auto-download is on).
+    assert!(a.group_view(&gid).unwrap().files.is_empty());
+    assert!(b.group_view(&gid).unwrap().files.is_empty());
+    assert!(b.download_file(&gid, &fid).await.is_err());
+
+    // Ours plays from where it is, theirs from them: the same way, over HTTP with ranges.
+    for (who, core) in [("alice", &a), ("bob", &b)] {
+        let url = core.music_source(&gid, &fid, 0).await.unwrap();
+        assert!(
+            url.starts_with("http://127.0.0.1:") && url.ends_with("/song.ogg"),
+            "{who}: {url}"
+        );
+        let (head, body) = http_get(&url, None).await;
+        assert!(head.starts_with("http/1.1 200"), "{who}: {head}");
+        assert!(head.contains("content-type: audio/ogg"), "{who}: {head}");
+        assert!(body == song, "{who}");
+        let (head, body) = http_get(&url, Some("bytes=1000-1999")).await;
+        assert!(head.starts_with("http/1.1 206"), "{who}: {head}");
+        assert!(
+            head.contains("content-range: bytes 1000-1999/1200000"),
+            "{who}: {head}"
+        );
+        assert_eq!(body, song[1000..2000], "{who}");
+        let (head, body) = http_get(&url, Some("bytes=1100000-")).await;
+        assert!(head.starts_with("http/1.1 206"), "{who}: {head}");
+        assert_eq!(body, song[1_100_000..], "{who}");
+        let (head, _) = http_get(&url, Some("bytes=5000000-")).await;
+        assert!(head.starts_with("http/1.1 416"), "{who}: {head}");
+        // Only with the token.
+        let mut parts: Vec<&str> = url.split('/').collect();
+        parts[3] = "nope";
+        let (head, _) = http_get(&parts.join("/"), None).await;
+        assert!(head.starts_with("http/1.1 404"), "{who}: {head}");
+    }
+    assert!(!db.path().join("downloads").join("song.ogg").exists());
+
+    a.stop_file(&gid, &fid).unwrap();
+    until("bob sees it gone", || {
+        b.group_view(&gid).unwrap().music.is_empty()
+    })
+    .await;
+    assert!(b.music_source(&gid, &fid, 0).await.is_err());
+
+    // A folder is one album: its songs play one by one, as ranges of the folder's stream.
+    let album = da.path().join("Album");
+    std::fs::create_dir_all(album.join("cd2")).unwrap();
+    let one: Vec<u8> = (0..50_000u32).flat_map(|i| (i * 3).to_le_bytes()).collect();
+    let two: Vec<u8> = (0..70_000u32).flat_map(|i| (i * 7).to_le_bytes()).collect();
+    std::fs::write(album.join("01 one.mp3"), &one).unwrap();
+    std::fs::write(album.join("cover.jpg"), b"not a song").unwrap();
+    std::fs::write(album.join("cd2").join("02 two.flac"), &two).unwrap();
+    let empty = da.path().join("Empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::fs::write(empty.join("notes.txt"), b"no songs").unwrap();
+    assert!(a.offer_music(&gid, empty, None, false).await.is_err());
+    let aid = a.offer_music(&gid, album, None, false).await.unwrap();
+    until("bob sees the album", || {
+        b.group_view(&gid)
+            .unwrap()
+            .music
+            .iter()
+            .any(|f| f.id == aid && f.tracks == ["01 one.mp3", "cd2/02 two.flac"])
+    })
+    .await;
+    assert!(b.download_file(&gid, &aid).await.is_err());
+    for (who, core) in [("alice", &a), ("bob", &b)] {
+        for (track, bytes) in [(0, &one), (1, &two)] {
+            let url = core.music_source(&gid, &aid, track).await.unwrap();
+            let (head, body) = http_get(&url, None).await;
+            assert!(head.starts_with("http/1.1 200"), "{who} {track}: {head}");
+            assert!(body == *bytes, "{who} {track}");
+            let (head, body) = http_get(&url, Some("bytes=5000-9999")).await;
+            assert!(head.starts_with("http/1.1 206"), "{who} {track}: {head}");
+            assert_eq!(body, bytes[5000..10000], "{who} {track}");
+        }
+        assert!(core.music_source(&gid, &aid, 2).await.is_err());
+    }
+    let url = b.music_source(&gid, &aid, 1).await.unwrap();
+    assert!(url.ends_with("/1/02%20two.flac"), "{url}");
+    let (head, _) = http_get(&url, None).await;
+    assert!(head.contains("content-type: audio/flac"), "{head}");
 
     a.shutdown().await;
     b.shutdown().await;

@@ -303,7 +303,7 @@ public class FlipflopActivity extends android.app.NativeActivity {
 
     // ---- file pickers, clipboard, links, apps, downloads ----------------------------------
 
-    /** Called from Rust: "file" picks anything, "media" photos and videos. */
+    /** Called from Rust: "file" picks anything, "media" photos and videos, "music" songs (to play). */
     public void pickFiles(String kind) {
         runOnUiThread(() -> {
             pickKind = kind;
@@ -313,6 +313,8 @@ public class FlipflopActivity extends android.app.NativeActivity {
             intent.setType("*/*");
             if ("media".equals(kind)) {
                 intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
+            } else if ("music".equals(kind)) {
+                intent.setType("audio/*");
             }
             startActivityForResult(intent, REQ_PICK);
         });
@@ -624,6 +626,21 @@ public class FlipflopActivity extends android.app.NativeActivity {
         File[] children = file.listFiles();
         if (children != null) for (File child : children) deleteTree(child);
         file.delete();
+    }
+
+    // ---- music ----------------------------------------------------------------------------
+
+    /** Called from Rust (under its locks, so it must not wait): play `url` in place of what plays. */
+    public void musicPlay(long ticket, String url, String title, String artist) {
+        main.post(() -> MusicService.play(this, ticket, url, title, artist));
+    }
+
+    public void musicPause(boolean paused) {
+        main.post(() -> MusicService.pause(paused));
+    }
+
+    public void musicStop() {
+        main.post(MusicService::stop);
     }
 
     // ---- transfers ------------------------------------------------------------------------

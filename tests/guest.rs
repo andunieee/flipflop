@@ -305,6 +305,47 @@ async fn a_guest_syncs_downloads_and_uploads_over_the_lan() {
         404
     );
 
+    // A song of the music tab plays in the page's player, and is never downloaded.
+    let song_path = dir.path().join("song.mp3");
+    std::fs::write(&song_path, b"not really mp3").unwrap();
+    let song = host
+        .offer_music(&gid, song_path, None, false)
+        .await
+        .unwrap();
+    page.listen(500).await;
+    assert!(page.doc.music().iter().any(|f| f.id == song));
+    assert!(!page.doc.files().iter().any(|f| f.id == song));
+    let (status, body) = http(port, "GET", &format!("/{token}/play/{song}"), b"").await;
+    assert_eq!((status, body.as_slice()), (200, &b"not really mp3"[..]));
+    assert_eq!(
+        http(port, "GET", &format!("/{token}/dl/{song}"), b"")
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        http(port, "GET", &format!("/{token}/play/{fid}"), b"")
+            .await
+            .0,
+        404
+    );
+    // An album's songs, by their number.
+    let album = dir.path().join("Album");
+    std::fs::create_dir_all(&album).unwrap();
+    std::fs::write(album.join("1.mp3"), b"first").unwrap();
+    std::fs::write(album.join("2.ogg"), b"second").unwrap();
+    let aid = host.offer_music(&gid, album, None, false).await.unwrap();
+    for (track, bytes) in [("0", &b"first"[..]), ("1", &b"second"[..])] {
+        let (status, body) = http(port, "GET", &format!("/{token}/play/{aid}/{track}"), b"").await;
+        assert_eq!((status, body.as_slice()), (200, bytes));
+    }
+    assert_eq!(
+        http(port, "GET", &format!("/{token}/play/{aid}/2"), b"")
+            .await
+            .0,
+        404
+    );
+
     // Uploads can be turned off, and the page is told.
     host.set_guest_uploads(&gid, false);
     page.listen(500).await;

@@ -168,7 +168,7 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// `%XX`-encode everything but unreserved characters.
-fn encode(s: &str) -> String {
+pub(super) fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| {
             if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
@@ -201,6 +201,7 @@ impl Core {
             self.with_doc(gid, |d| {
                 d.members().iter().all(|(id, _)| *id == me)
                     && d.files().is_empty()
+                    && d.music().is_empty()
                     && d.texts().is_empty()
                     && d.scratch().is_empty()
             })
@@ -584,6 +585,9 @@ impl Core {
         }
         if offer.kind == super::sharing::FOLDER_KIND {
             bail!("folders cannot be downloaded from the browser");
+        }
+        if crate::groupdoc::is_music(&offer.kind) {
+            bail!("music is played, not downloaded");
         }
         let store = self.0.store.lock().unwrap();
         let path = store

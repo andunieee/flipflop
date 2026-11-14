@@ -78,7 +78,21 @@ impl Doc {
             .into_iter()
             .map(|t| serde_json::json!({ "id": t.id, "from": t.from, "name": t.name, "text": t.text, "ts": t.ts }))
             .collect();
-        serde_json::json!({ "members": members, "files": files, "texts": texts, "scratch": self.doc.scratch() }).to_string()
+        // The music tab's songs, played (never downloaded) through the app.
+        let music: Vec<_> = self
+            .doc
+            .music()
+            .into_iter()
+            .filter(|f| !f.stopped)
+            .map(|f| {
+                // An album's songs, by their path in it; none for a song on its own.
+                let tracks: Vec<_> = f.tracks.iter().map(|t| t.path.as_str()).collect();
+                serde_json::json!({ "id": f.id, "name": f.name, "size": f.size, "from": f.from, "from_name": f.from_name, "ts": f.ts, "tracks": tracks })
+            })
+            .collect();
+        let music_on = self.doc.tabs().iter().any(|t| t.id == "music" && t.on);
+        serde_json::json!({ "members": members, "files": files, "texts": texts, "scratch": self.doc.scratch(), "music": music, "music_on": music_on })
+            .to_string()
     }
 
     pub fn add_text(&mut self, me: &str, name: &str, text: &str) {

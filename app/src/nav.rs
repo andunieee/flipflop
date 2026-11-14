@@ -86,7 +86,7 @@ impl Share {
 #[derive(Clone, PartialEq)]
 pub struct Ui {
     pub page: Page,
-    /// "files" | "texts" | "pad" | an app's id | "info"
+    /// "files" | "texts" | "pad" | "music" | an app's id | "info"
     pub group_tab: String,
     /// The group whose page is showing: it counts as looked at.
     viewed: Option<String>,
@@ -231,12 +231,14 @@ impl Nav {
         let serial = self.ui.peek().toast.as_ref().map_or(0, |t| t.0 + 1);
         self.ui.write().toast = Some((serial, text));
         let mut ui = self.ui;
-        spawn(async move {
+        // At the root: a task belongs to the component it was started from, and dies with it (a
+        // card's button that is gone before the message is), which would leave the message up.
+        spawn_in_scope(async move {
             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             if ui.peek().toast.as_ref().is_some_and(|t| t.0 == serial) {
                 ui.write().toast = None;
             }
-        });
+        }, ScopeId::ROOT);
     }
 
     /// Send what was shared with us to this group (or paired peer's page), and show it there.
@@ -272,6 +274,8 @@ impl Nav {
         }
         let open = self.ui.peek().open_group().map(str::to_owned);
         match open {
+            // On the music tab, to play; anywhere else, as files.
+            Some(gid) if self.ui.peek().group_tab == "music" => self.backend().offer_music(gid, paths),
             Some(gid) => {
                 self.set_tab("files");
                 self.backend().offer_paths(gid, paths);
@@ -305,8 +309,8 @@ impl Nav {
         true
     }
 
-    /// Offer files to the open group: "file" | "media" | "folder" | "wasm" pick from the system; "app"
-    /// lists the installed apps (Android).
+    /// Offer files to the open group: "file" | "media" | "folder" | "music" (to play) | "wasm" pick
+    /// from the system; "app" lists the installed apps (Android).
     pub fn pick(mut self, kind: &str) {
         if kind == "app" {
             self.ui.write().apps = Some(crate::backend::list_apps());

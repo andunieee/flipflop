@@ -3,6 +3,7 @@
 //! subscribes through the event callback.
 
 mod guest;
+mod music;
 mod sharing;
 mod tabs;
 mod unseen;
@@ -37,6 +38,7 @@ use crate::{
 
 pub use crate::state::MemberState;
 pub use guest::{GUEST_ALPN, GuestInfo, GuestPerson, is_guest};
+pub use music::AUDIO_EXTENSIONS;
 pub use sharing::{
     AppView, DocMember, FileView, GroupView, SendView, TabView, TextView, TransferItem,
     TransfersNow, open_source,
@@ -196,6 +198,7 @@ struct Inner {
     peers: Mutex<BTreeMap<EndpointId, PeerEntry>>,
     sharing: sharing::Sharing,
     guests: guest::Guests,
+    music: music::Music,
     ticket: Mutex<String>,
     ble_payload: watch::Sender<Option<BlePayload>>,
     on_event: Box<dyn Fn(Event) + Send + Sync>,
@@ -298,6 +301,7 @@ impl Core {
             peers: Mutex::default(),
             sharing: sharing::Sharing::new(data_dir),
             guests: guest::Guests::default(),
+            music: music::Music::default(),
             ticket: Mutex::default(),
             ble_payload: watch::channel(None).0,
             on_event: Box::new(on_event),

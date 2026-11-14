@@ -18,6 +18,10 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
+use crate::player::{Music, MusicState};
+#[cfg(target_os = "android")]
+use crate::player::Update;
+
 /// What the UI learns from the node (and from the Activity, on Android).
 pub enum Msg {
     Core(Event),
@@ -33,6 +37,8 @@ pub enum Msg {
     Shared { text: String, files: u32 },
     /// Room taken by the system bars and the keyboard, and whether the keyboard is up (Android).
     Insets { insets: [f32; 4], keyboard: bool },
+    /// What plays, and what plays next.
+    Music(MusicState),
 }
 
 /// A webcam preview frame: width, height, RGBA.
@@ -43,6 +49,7 @@ pub type Frame = Option<(u32, u32, bytes::Bytes)>;
 const MEDIA_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "heic", "mp4", "mkv", "mov", "webm",
 ];
+
 
 struct Inner {
     rt: Handle,
@@ -64,6 +71,7 @@ struct Inner {
     frames: watch::Sender<Frame>,
     #[cfg(not(target_os = "android"))]
     scanner: Mutex<Option<crate::scan::Scanner>>,
+    music: Music,
 }
 
 #[derive(Clone)]
@@ -90,6 +98,7 @@ impl Backend {
             frames: watch::channel(None).0,
             #[cfg(not(target_os = "android"))]
             scanner: Mutex::default(),
+            music: Music::default(),
         }));
         // On Android the Bluetooth stack delivers its callbacks through the Java main thread, which
         // must stay free to run them, so nothing here waits on it.
@@ -179,6 +188,7 @@ impl Backend {
             }
             let _ = tx.send(Msg::BleStatus(ble));
         }
+        let _ = tx.send(Msg::Music(self.0.music.state()));
         for msg in std::mem::take(&mut *self.0.held.lock().unwrap()) {
             let _ = tx.send(msg);
         }
@@ -207,6 +217,19 @@ impl Backend {
             }
             _ => {}
         }
+    }
+
+    /// What plays: the queue and the player, which outlive the UI.
+    pub fn music(&self) -> &Music {
+        &self.0.music
+    }
+
+    pub(crate) fn send_music(&self, state: MusicState) {
+        self.send(Msg::Music(state));
+    }
+
+    pub(crate) fn spawn_task(&self, task: impl Future<Output = ()> + Send + 'static) {
+        self.0.rt.spawn(task);
     }
 
     pub fn notice(&self, text: impl Into<String>) {
@@ -324,6 +347,11 @@ impl Backend {
 
     /// Offer a file to a group and report how it went.
     fn offer(&self, gid: String, path: PathBuf, name: Option<String>, kind: &str, staged: bool) {
+        if kind == "music" {
+            return self.spawn(Some("Offered to play"), move |core| async move {
+                core.offer_music(&gid, path, name, staged).await
+            });
+        }
         let kind = kind.to_owned();
         self.spawn(Some("Offered to the group"), move |core| async move {
             core.offer_file(&gid, path, name, &kind, staged).await
@@ -348,13 +376,21 @@ impl Backend {
         });
     }
 
+    /// Offer songs to a group's music tab, to be played.
+    pub fn offer_music(&self, gid: String, paths: Vec<PathBuf>) {
+        for path in paths {
+            self.offer(gid.clone(), path, None, "music", false);
+        }
+    }
+
     /// Offer an installed app (one of `platform::list_apps`) to a group.
     pub fn share_app(&self, gid: String, path: String, name: String) {
         self.offer(gid, path.into(), Some(format!("{name}.apk")), "apk", false);
     }
 
-    /// Pick files to offer to `gid` ("file" | "media" | "folder", the latter desktop only), or an app
-    /// for its tabs ("wasm").
+    /// Pick files to offer to `gid` ("file" | "media" | "folder", the latter desktop only), songs to
+    /// play in its music tab ("music", or "music-folder" for an album, desktop only), or an app for
+    /// its tabs ("wasm").
     pub fn pick(&self, gid: String, kind: &str) {
         #[cfg(target_os = "android")]
         {
@@ -375,6 +411,24 @@ impl Backend {
                             .await;
                         if let Some(file) = picked {
                             this.add_app(gid, file.path().to_owned(), None);
+                        }
+                    }
+                    "music" => {
+                        let picked = dialog
+                            .set_title("Offer songs to play in the group")
+                            .add_filter("Audio", flipflop::core::AUDIO_EXTENSIONS)
+                            .pick_files()
+                            .await;
+                        let paths = picked.unwrap_or_default().iter().map(|f| f.path().to_owned()).collect();
+                        this.offer_music(gid, paths);
+                    }
+                    "music-folder" => {
+                        let picked = dialog
+                            .set_title("Offer a folder to play in the group, as an album")
+                            .pick_folder()
+                            .await;
+                        if let Some(folder) = picked {
+                            this.offer_music(gid, vec![folder.path().to_owned()]);
                         }
                     }
                     "folder" => {
@@ -503,6 +557,23 @@ impl Backend {
                 let staged = !path.starts_with("content://");
                 self.offer(gid, path.into(), name, &kind, staged);
             }
+            ActivityEvent::MusicPlayer { ticket, what, detail } => {
+                let update = match what {
+                    flipflop::platform::MUSIC_LOADED => Update::Loaded,
+                    flipflop::platform::MUSIC_PAUSED => Update::Paused(true),
+                    flipflop::platform::MUSIC_PLAYING => Update::Paused(false),
+                    flipflop::platform::MUSIC_ENDED => Update::Ended,
+                    _ => Update::Failed(detail),
+                };
+                self.music().update(self, ticket, update);
+            }
+            // The notification's buttons, the lock screen's, a headset's.
+            ActivityEvent::MusicControl(action) => match action.as_str() {
+                "toggle" => self.music().toggle(self),
+                "next" => self.music().next(self),
+                "stop" => self.music().clear(self),
+                _ => {}
+            },
         }
     }
 }

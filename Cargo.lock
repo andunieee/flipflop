@@ -2348,6 +2348,7 @@ dependencies = [
  "freya-winit",
  "iroh",
  "jni 0.21.1",
+ "libloading",
  "log",
  "nokhwa",
  "rfd 0.15.4",

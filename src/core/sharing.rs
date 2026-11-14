@@ -42,6 +42,7 @@ use tokio::{
 };
 
 use super::{Core, Event, parse_gid, tabs::APP_KIND};
+use crate::groupdoc::{ALBUM_KIND, is_music};
 use crate::{
     groupdoc::GroupDoc,
     state::{MemberState, Share},
@@ -53,6 +54,11 @@ pub(super) const SYNC_TAG: u8 = 1;
 const CHUNK: usize = 1024 * 1024;
 /// An offer that is a whole folder.
 pub const FOLDER_KIND: &str = "folder";
+
+/// Sent as a folder: its listing, then its files' bytes.
+pub(super) fn is_folder(kind: &str) -> bool {
+    kind == FOLDER_KIND || kind == ALBUM_KIND
+}
 const MAX_LISTING_BYTES: usize = 64 << 20;
 const MAX_TEXT_BYTES: usize = 256 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(15);
@@ -109,6 +115,8 @@ pub struct FileView {
     /// We are still hashing it, so it is not on offer yet and `id` is only this card's; `progress`
     /// is how far along that is.
     pub preparing: bool,
+    /// An album's songs (their paths within it), in the order they play.
+    pub tracks: Vec<String>,
     /// We called its download off: it is not fetched again until asked for.
     pub on_hold: bool,
     /// It can be put on hold: it is downloading, or would be automatically.
@@ -229,7 +237,7 @@ pub struct TextView {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabView {
-    /// "files", "texts", "pad", or an app's id.
+    /// "files", "texts", "pad", "music", or an app's id.
     pub id: String,
     pub title: String,
     /// The group shows it.
@@ -257,6 +265,8 @@ pub struct GroupView {
     pub members: Vec<DocMember>,
     /// Newest first.
     pub files: Vec<FileView>,
+    /// The music tab's offers, still offered, newest first.
+    pub music: Vec<FileView>,
     /// Newest first.
     pub texts: Vec<TextView>,
     pub scratch: String,
@@ -390,15 +400,15 @@ impl Sharing {
 }
 
 #[derive(Serialize, Deserialize)]
-struct DownloadRequest {
-    group: String,
-    file: String,
+pub(super) struct DownloadRequest {
+    pub(super) group: String,
+    pub(super) file: String,
     /// Start sending from this byte of the transfer's uncompressed stream.
     #[serde(default)]
-    from: u64,
+    pub(super) from: u64,
     /// The downloader understands the reply header with the start offset (see [`Core::serve`]).
     #[serde(default)]
-    resume: bool,
+    pub(super) resume: bool,
 }
 
 impl Core {
@@ -415,7 +425,7 @@ impl Core {
         *self.0.sharing.download_dir.lock().unwrap() = dir;
     }
 
-    fn has_group(&self, gid: &str) -> bool {
+    pub(super) fn has_group(&self, gid: &str) -> bool {
         self.0
             .store
             .lock()
@@ -606,7 +616,9 @@ impl Core {
     pub(super) fn build_view(&self, gid: &str, scratch_local: bool) -> GroupView {
         let me = self.me();
         let (members, files, texts, scratch, tabs) = self.with_doc(gid, |d| {
-            (d.members(), d.files(), d.texts(), d.scratch(), d.tabs())
+            let mut offers = d.files();
+            offers.extend(d.music());
+            (d.members(), offers, d.texts(), d.scratch(), d.tabs())
         });
         let online: HashSet<String> = self
             .0
@@ -751,6 +763,7 @@ impl Core {
                         .map(|id| name_of(id))
                         .collect(),
                     hosting: f.hosts.contains(&me),
+                    tracks: f.tracks.iter().map(|t| t.path.clone()).collect(),
                     can_reoffer: f.stopped
                         && if mine {
                             reofferable.contains(&f.id)
@@ -783,6 +796,11 @@ impl Core {
             })
             .collect();
         file_views.reverse();
+        // The music tab's, which are only listed while they can be played.
+        let (music_views, mut file_views): (Vec<FileView>, Vec<FileView>) =
+            file_views.into_iter().partition(|f| is_music(&f.kind));
+        let mut music_views: Vec<FileView> =
+            music_views.into_iter().filter(|f| !f.stopped).collect();
         // Not in the document yet, and the newest of all.
         let preparing: Vec<FileView> = self
             .0
@@ -811,7 +829,10 @@ impl Core {
                 }
             })
             .collect();
+        let (preparing_music, preparing): (Vec<FileView>, Vec<FileView>) =
+            preparing.into_iter().partition(|f| is_music(&f.kind));
         file_views.splice(0..0, preparing);
+        music_views.splice(0..0, preparing_music);
         let tab_views = tabs
             .into_iter()
             .map(|tab| {
@@ -819,6 +840,7 @@ impl Core {
                     let title = match tab.id.as_str() {
                         "files" => "Files",
                         "texts" => "Texts",
+                        "music" => "Music",
                         _ => "Scratchpad",
                     };
                     return TabView {
@@ -878,6 +900,7 @@ impl Core {
                 })
                 .collect(),
             files: file_views,
+            music: music_views,
             texts: text_views,
             scratch,
             scratch_local,
@@ -1245,7 +1268,19 @@ impl Core {
         kind: &str,
         staged: bool,
     ) -> Result<String> {
-        let kind = if path.is_dir() { FOLDER_KIND } else { kind };
+        let kind = if path.is_dir() && kind != ALBUM_KIND {
+            FOLDER_KIND
+        } else {
+            kind
+        };
+        // An album's songs, where they are in its stream; said with the offer, so nobody sees it
+        // without them.
+        let tracks = if kind == ALBUM_KIND {
+            let path = path.to_owned();
+            tokio::task::spawn_blocking(move || super::music::album_tracks(&path)).await??
+        } else {
+            Vec::new()
+        };
         // An app is not listed with the files, and adding it twice makes two tabs.
         let app = kind == APP_KIND;
         let meter = Arc::new(Meter::default());
@@ -1267,7 +1302,7 @@ impl Core {
             .collect();
         let added = self.with_doc(gid, |d| {
             // Someone else's offer only counts if it can be downloaded now.
-            let holder = d.files().into_iter().find(|f| {
+            let holder = d.offers_like(kind).into_iter().find(|f| {
                 !app && f.kind != APP_KIND
                     && !f.stopped
                     && f.name == name
@@ -1281,7 +1316,13 @@ impl Core {
             match holder {
                 Some(f) if f.from == me => Err("you already share".to_owned()),
                 Some(f) => Err(format!("{} already shares", f.from_name)),
-                None => Ok(d.offer_file(&me, &my_name, name, size, &hash, kind)),
+                None => {
+                    let fid = d.offer_file(&me, &my_name, name, size, &hash, kind);
+                    if !tracks.is_empty() {
+                        d.set_tracks(&fid, &tracks);
+                    }
+                    Ok(fid)
+                }
             }
         });
         let fid = added.map_err(|who| anyhow!("{who} {name}"))?;
@@ -1476,7 +1517,7 @@ impl Core {
         }
         if offer.from != me {
             if self
-                .with_doc(gid, |d| d.files())
+                .with_doc(gid, |d| d.offers_like(&offer.kind))
                 .iter()
                 .any(|f| f.from == me && !f.stopped && f.hash == offer.hash)
             {
@@ -1521,7 +1562,7 @@ impl Core {
             return Ok(new);
         }
         if self
-            .with_doc(gid, |d| d.files())
+            .with_doc(gid, |d| d.offers_like(&offer.kind))
             .iter()
             .any(|f| f.from == me && !f.stopped && f.hash == offer.hash && f.name == offer.name)
         {
@@ -1729,6 +1770,9 @@ impl Core {
         if offer.stopped {
             bail!("the sender stopped sharing it");
         }
+        if is_music(&offer.kind) {
+            bail!("{} is offered to be played, not downloaded", offer.name);
+        }
         if offer.downloaded.contains_key(&me)
             && self
                 .0
@@ -1934,9 +1978,9 @@ impl Core {
                 Some(u64::from_be_bytes(more[8..].try_into().unwrap())),
             )
         } else {
-            (0, (offer.kind != FOLDER_KIND).then_some(len))
+            (0, (!is_folder(&offer.kind)).then_some(len))
         };
-        let folder = offer.kind == FOLDER_KIND;
+        let folder = is_folder(&offer.kind);
         if len != offer.size {
             let _ = tokio::fs::remove_file(&part).await;
             bail!("the file changed on the sender's side");
@@ -2211,7 +2255,7 @@ impl Core {
                 super::route(&conn)
             );
         }
-        let folder = offer.kind == FOLDER_KIND;
+        let folder = is_folder(&offer.kind);
         // What travels, in order: a folder's listing, then its files' bytes.
         let (listing, listing_len, stream_len) = if folder {
             let walk = {
@@ -2370,7 +2414,7 @@ impl Core {
         }
         let me = self.me();
         let (members, files) = self.with_doc(gid, |d| (d.members(), d.files()));
-        // Apps' files come and go with their tabs (see `app_jobs`).
+        // Apps' files come and go with their tabs (see `app_jobs`). Music is not in `files`.
         for f in files.iter().filter(|f| !f.stopped && f.kind != APP_KIND) {
             if f.from == me {
                 let audience: Vec<&String> = members
@@ -2579,14 +2623,14 @@ impl<R: AsyncRead + Unpin> AsyncRead for Counted<R> {
 /// along too) and its files, as `/`-separated paths relative to the folder. Symlinks and special
 /// files are left out.
 #[derive(Serialize, Deserialize, Default)]
-struct Listing {
-    dirs: Vec<String>,
-    files: Vec<(String, u64)>,
+pub(super) struct Listing {
+    pub dirs: Vec<String>,
+    pub files: Vec<(String, u64)>,
 }
 
 impl Listing {
     /// The `[length u32 BE][JSON]` a folder's bytes start with.
-    fn encode(&self) -> Vec<u8> {
+    pub(super) fn encode(&self) -> Vec<u8> {
         let json = serde_json::to_vec(self).expect("listing serializes");
         let mut out = (json.len() as u32).to_be_bytes().to_vec();
         out.extend(json);
@@ -2595,7 +2639,7 @@ impl Listing {
 }
 
 /// Lists the folder at `root`, sorted; also returns where each listed file is.
-fn walk_folder(root: &Path) -> Result<(Listing, Vec<PathBuf>)> {
+pub(super) fn walk_folder(root: &Path) -> Result<(Listing, Vec<PathBuf>)> {
     let (mut dirs, mut files) = (Vec::new(), Vec::new());
     let mut todo = vec![(root.to_owned(), String::new())];
     while let Some((dir, rel)) = todo.pop() {
@@ -2760,15 +2804,14 @@ impl Core {
                         .iter()
                         .chain(&state.stopped_shares)
                         .any(|o| o.path == s.path)
-                }
-                    || self
-                        .0
-                        .sharing
-                        .preparing
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .any(|p| p.path == s.path);
+                } || self
+                    .0
+                    .sharing
+                    .preparing
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p.path == s.path);
                 if !still_used {
                     crate::platform::release_content_uri(uri);
                 }

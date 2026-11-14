@@ -23,6 +23,7 @@ use freya::{
 
 use crate::{
     icons::Icon,
+    music::MusicTab,
     model::{Channel, Model, Tone, group_title, peer_subtitle, peer_title},
     nav::{Edit, EditKind, Nav},
     pad::PadEditor,
@@ -66,6 +67,7 @@ impl Component for GroupPage {
                 .child(PadEditor { gid: self.id.clone(), text: view.scratch.clone(), local: view.scratch_local })
                 .child(pad_actions(view.scratch.clone(), nav, self.id.clone()))
                 .into_element(),
+            "music" => MusicTab { gid: self.id.clone(), music: view.music.clone() }.into_element(),
             "info" => InfoTab { gid: self.id.clone() }.into_element(),
             app => shown
                 .iter()
@@ -886,6 +888,7 @@ fn tabs_section(view: &GroupView, gid: &str, nav: Nav) -> Vec<Element> {
             "files" => "Files offered to the group.".to_owned(),
             "texts" => "Links, codes and snippets sent to the group.".to_owned(),
             "pad" => "A text everyone edits together.".to_owned(),
+            "music" => "Songs to play from whoever offers them, without downloading them.".to_owned(),
             _ => app_detail(t),
         };
         let (gid, tab) = (gid.to_owned(), t.id.clone());

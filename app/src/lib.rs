@@ -4,9 +4,13 @@ mod backend;
 mod group;
 mod icons;
 mod model;
+#[cfg(not(target_os = "android"))]
+mod mpv;
+mod music;
 mod nav;
 mod pad;
 mod pages;
+mod player;
 #[cfg(not(target_os = "android"))]
 mod scan;
 mod shell;
@@ -23,6 +27,7 @@ use crate::{
     backend::Msg,
     model::{Channel, Model},
     nav::{Nav, Page, Share, Ui},
+    player::MusicState,
     theme::{Dim, Look, Palette},
 };
 
@@ -32,6 +37,7 @@ pub fn app() -> impl IntoElement {
     let backend_state = use_state(|| backend.clone());
     let ui = use_state(|| Ui::load(&backend));
     let nav = use_provide_context(|| Nav::new(ui, backend_state));
+    let music = music::use_init_music();
     let station = use_init_radio_station::<Model, Channel>(Model::default);
 
     let window = Platform::get().current_window();
@@ -70,7 +76,7 @@ pub fn app() -> impl IntoElement {
         let mut rx = backend.attach();
         spawn(async move {
             while let Some(msg) = rx.recv().await {
-                apply(msg, station, nav);
+                apply(msg, station, nav, music);
             }
         });
     });
@@ -109,7 +115,7 @@ pub(crate) fn stop_editing() -> bool {
 }
 
 /// What the node (or the Activity) said, into the model.
-fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav) {
+fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav, mut music: State<MusicState>) {
     match msg {
         Msg::Ready { core, download_dir } => {
             let mut m = station.write_channel(Channel::Me);
@@ -121,6 +127,7 @@ fn apply(msg: Msg, mut station: RadioStation<Model, Channel>, mut nav: Nav) {
         Msg::ShowPeers => nav.go(Page::Peers),
         Msg::Scanning(on) => station.write_channel(Channel::Me).scanning = on,
         Msg::Shared { text, files } => nav.ui.write().share = Some(Share::Shared { text, files }),
+        Msg::Music(state) => music.set_if_modified(state),
         Msg::Insets { insets, keyboard } => {
             let mut m = station.write_channel(Channel::Me);
             m.insets = insets;

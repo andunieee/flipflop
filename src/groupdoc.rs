@@ -4,11 +4,15 @@
 //! Layout (all under the root map):
 //! - `members`: peer id -> device name. Every peer only writes its own entry.
 //! - `files`:   `<millis>-<rand>` -> { name, size, hash, kind, from, from_name, ts, stopped, stopped_at, downloaded: { peer id -> ts }, hosts: { peer id -> ts } }
+//! - `music`:   the music tab's offers (of kind [`MUSIC_KIND`], or [`ALBUM_KIND`] for a folder, which
+//!   also holds its `tracks`: [{ path, size, offset }]), shaped as in `files`. Apart from `files`
+//!   so that peers from before the music tab neither list nor download them.
 //! - `texts`:   `<millis>-<rand>` -> { from, name, text, ts }
 //! - `scratch`: a text object everyone edits.
 //! - `tabs`:    tab id -> { on }: which tabs the group shows, as any member set them. The ids are
 //!   [`BUILTIN_TABS`] and apps' ids; an app's tab also holds { kind: "app", name, file, hash, size,
-//!   from, ts }, `file` being the offer of its wasm in `files`.
+//!   from, ts }, `file` being the offer of its wasm in `files`. A built-in tab nobody touched shows
+//!   unless it is one of [`OPTIONAL_TABS`].
 //! - `apps`:    app id -> the app's own section, which only the app writes (see [`crate::apps`]).
 //!
 //! Entry keys start with the creation time, so key order is chronological.
@@ -30,7 +34,8 @@ pub struct FileOffer {
     pub size: u64,
     /// blake3, hex.
     pub hash: String,
-    /// "file", "media" or "apk".
+    /// "file", "media", "apk", "folder", "wasm" (an app), or the music tab's [`MUSIC_KIND`] or
+    /// [`ALBUM_KIND`].
     pub kind: String,
     /// Peer id of the offerer, who serves the bytes.
     pub from: String,
@@ -43,10 +48,33 @@ pub struct FileOffer {
     pub downloaded: BTreeMap<String, i64>,
     /// Peers (other than the offerer) that also serve the bytes. Each only writes its own entry.
     pub hosts: BTreeSet<String>,
+    /// An album's songs, in the order they play; none for anything else.
+    pub tracks: Vec<Track>,
+}
+
+/// A song in an album: a file of its folder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Track {
+    /// Within the folder, `/`-separated.
+    pub path: String,
+    pub size: u64,
+    /// Where its bytes start in the folder's stream (its listing, then its files' bytes).
+    pub offset: u64,
 }
 
 /// The tabs every group has, in the order they show; the apps' tabs follow, oldest first.
-pub const BUILTIN_TABS: [&str; 3] = ["files", "texts", "pad"];
+pub const BUILTIN_TABS: [&str; 4] = ["files", "texts", "pad", "music"];
+/// The kind of the music tab's offers, which live in `music` instead of `files`.
+pub const MUSIC_KIND: &str = "music";
+/// The kind of a folder offered to the music tab: its songs play one by one.
+pub const ALBUM_KIND: &str = "album";
+
+/// An offer of the music tab, played and never downloaded.
+pub fn is_music(kind: &str) -> bool {
+    kind == MUSIC_KIND || kind == ALBUM_KIND
+}
+/// Built-in tabs that stay hidden until someone shows them.
+pub const OPTIONAL_TABS: [&str; 1] = ["music"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
@@ -134,6 +162,10 @@ fn genesis() -> AutoCommit {
     doc.put_object(ROOT, "tabs", ObjType::Map).expect("genesis");
     doc.put_object(ROOT, "apps", ObjType::Map).expect("genesis");
     doc.commit_with(CommitOptions::default().with_time(0));
+    // Likewise for documents made before the music tab.
+    doc.put_object(ROOT, "music", ObjType::Map)
+        .expect("genesis");
+    doc.commit_with(CommitOptions::default().with_time(0));
     doc
 }
 
@@ -149,7 +181,7 @@ impl GroupDoc {
 
     pub fn load(bytes: &[u8]) -> Result<GroupDoc, AutomergeError> {
         let mut doc = AutoCommit::load(bytes)?;
-        if doc.get(ROOT, "apps")?.is_none() {
+        if doc.get(ROOT, "music")?.is_none() {
             doc.merge(&mut genesis())?;
         }
         doc.set_actor(ActorId::random());
@@ -242,7 +274,7 @@ impl GroupDoc {
         hash: &str,
         kind: &str,
     ) -> String {
-        let files = self.obj("files");
+        let files = self.obj(if is_music(kind) { "music" } else { "files" });
         let id = entry_key();
         let f = self
             .doc
@@ -261,11 +293,14 @@ impl GroupDoc {
         id
     }
 
+    /// An offer in `files` or `music`.
     fn file_obj(&self, id: &str) -> Option<ObjId> {
-        match self.doc.get(self.obj("files"), id) {
-            Ok(Some((Value::Object(_), obj))) => Some(obj),
-            _ => None,
-        }
+        ["files", "music"]
+            .into_iter()
+            .find_map(|map| match self.doc.get(self.obj(map), id) {
+                Ok(Some((Value::Object(_), obj))) => Some(obj),
+                _ => None,
+            })
     }
 
     /// Stop offering a file. The entry stays (so concurrent "downloaded" marks still merge).
@@ -341,12 +376,59 @@ impl GroupDoc {
             stopped: self.bool_of(f, "stopped"),
             stopped_at: self.int_of(f, "stopped_at"),
             downloaded,
+            tracks: self.tracks_of(f),
         }
     }
 
-    /// Oldest first.
+    fn tracks_of(&self, f: &ObjId) -> Vec<Track> {
+        let Ok(Some((Value::Object(ObjType::List), list))) = self.doc.get(f, "tracks") else {
+            return Vec::new();
+        };
+        (0..self.doc.length(&list))
+            .filter_map(|i| match self.doc.get(&list, i) {
+                Ok(Some((Value::Object(ObjType::Map), t))) => Some(Track {
+                    path: self.str_of(&t, "path"),
+                    size: self.int_of(&t, "size").max(0) as u64,
+                    offset: self.int_of(&t, "offset").max(0) as u64,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Give an album its songs.
+    pub fn set_tracks(&mut self, id: &str, tracks: &[Track]) {
+        let Some(f) = self.file_obj(id) else { return };
+        let list = self.doc.put_object(&f, "tracks", ObjType::List).unwrap();
+        for (i, track) in tracks.iter().enumerate() {
+            let t = self.doc.insert_object(&list, i, ObjType::Map).unwrap();
+            self.doc.put(&t, "path", track.path.as_str()).unwrap();
+            self.doc.put(&t, "size", track.size as i64).unwrap();
+            self.doc.put(&t, "offset", track.offset as i64).unwrap();
+        }
+    }
+
+    /// The files tab's offers (and apps'), oldest first.
     pub fn files(&self) -> Vec<FileOffer> {
-        self.entries(&self.obj("files"))
+        self.offers("files")
+    }
+
+    /// The music tab's offers, oldest first.
+    pub fn music(&self) -> Vec<FileOffer> {
+        self.offers("music")
+    }
+
+    /// The offers of `kind`'s tab: [`Self::music`] or [`Self::files`].
+    pub fn offers_like(&self, kind: &str) -> Vec<FileOffer> {
+        if is_music(kind) {
+            self.music()
+        } else {
+            self.files()
+        }
+    }
+
+    fn offers(&self, map: &str) -> Vec<FileOffer> {
+        self.entries(&self.obj(map))
             .into_iter()
             .map(|(id, obj)| self.read_file(id, &obj))
             .collect()
@@ -421,7 +503,9 @@ impl GroupDoc {
     pub fn tabs(&self) -> Vec<Tab> {
         let builtin = BUILTIN_TABS.iter().map(|id| Tab {
             id: id.to_string(),
-            on: self.tab_obj(id).is_none_or(|t| self.bool_of(&t, "on")),
+            on: self
+                .tab_obj(id)
+                .map_or(!OPTIONAL_TABS.contains(id), |t| self.bool_of(&t, "on")),
             app: None,
         });
         let apps = self
@@ -676,6 +760,71 @@ mod tests {
     }
 
     #[test]
+    fn music_is_apart_from_files() {
+        let (mut a, mut b) = (GroupDoc::new(), GroupDoc::new());
+        let file = a.offer_file("alice", "A", "a.txt", 12, "abcd", "file");
+        let song = a.offer_file("alice", "A", "a.mp3", 34, "ef01", MUSIC_KIND);
+        sync(&mut a, &mut b);
+        let ids = |offers: Vec<FileOffer>| offers.into_iter().map(|f| f.id).collect::<Vec<_>>();
+        assert_eq!(ids(b.files()), [file]);
+        assert_eq!(ids(b.music()), [song.clone()]);
+        b.set_hosting(&song, "bob", true);
+        a.stop_file(&song);
+        sync(&mut a, &mut b);
+        let f = a.file(&song).unwrap();
+        assert!(f.stopped && f.hosts.contains("bob"));
+        // What a peer from before the music tab reads.
+        assert!(!a.doc.keys(a.obj("files")).any(|k| k == song));
+    }
+
+    #[test]
+    fn albums_hold_their_tracks() {
+        let (mut a, mut b) = (GroupDoc::new(), GroupDoc::new());
+        let id = a.offer_file("alice", "A", "Album", 30, "ef01", ALBUM_KIND);
+        let tracks = [
+            Track {
+                path: "1 one.mp3".into(),
+                size: 10,
+                offset: 40,
+            },
+            Track {
+                path: "cd2/2 two.flac".into(),
+                size: 20,
+                offset: 50,
+            },
+        ];
+        a.set_tracks(&id, &tracks);
+        sync(&mut a, &mut b);
+        let album = b.music().pop().unwrap();
+        assert_eq!(
+            (album.kind.as_str(), album.tracks.as_slice()),
+            (ALBUM_KIND, &tracks[..])
+        );
+        assert!(b.files().is_empty());
+        assert!(b.file(&id).unwrap().tracks.len() == 2);
+    }
+
+    #[test]
+    fn old_documents_get_music() {
+        // A document from before the music tab: the first two genesis changes only.
+        let mut old = genesis();
+        let changes: Vec<Vec<u8>> = old
+            .get_changes(&[])
+            .iter()
+            .map(|c| c.raw_bytes().to_vec())
+            .collect();
+        let mut old = AutoCommit::new();
+        old.load_incremental(&changes[..2].concat()).unwrap();
+        assert!(old.get(ROOT, "music").unwrap().is_none());
+        let (mut a, mut b) = (GroupDoc::load(&old.save()).unwrap(), GroupDoc::new());
+        let id = a.offer_file("alice", "A", "a.mp3", 34, "ef01", MUSIC_KIND);
+        sync(&mut a, &mut b);
+        assert_eq!(b.music().len(), 1);
+        assert_eq!(b.file(&id).unwrap().name, "a.mp3");
+        assert_eq!(a.heads(), b.heads());
+    }
+
+    #[test]
     fn old_documents_get_apps() {
         // A document from before `apps`: the first genesis change only.
         let mut old = genesis();
@@ -698,7 +847,11 @@ mod tests {
                 .map(|t| (t.id.clone(), t.on))
                 .collect::<Vec<_>>()
         };
-        assert!(a.tabs().iter().all(|t| t.on && t.app.is_none()));
+        assert!(
+            a.tabs()
+                .iter()
+                .all(|t| t.on != (t.id == "music") && t.app.is_none())
+        );
         assert!(a.set_tab("texts", false));
         assert!(!a.set_tab("nope", false));
         let id = b.add_app_tab("bob", "chess.wasm", "f1", "abcd", 10);
@@ -710,16 +863,18 @@ mod tests {
                 ("files", true),
                 ("texts", false),
                 ("pad", true),
+                ("music", false),
                 (id.as_str(), true)
             ]
             .map(|(id, on)| (id.to_owned(), on))
         );
         a.set_tab(&id, false);
         b.set_tab("texts", true);
+        b.set_tab("music", true);
         sync(&mut a, &mut b);
         assert_eq!(on(&b)[1..], on(&a)[1..]);
-        assert!(!b.tabs()[3].on && b.tabs()[1].on);
-        assert_eq!(b.tabs()[3].app.as_ref().unwrap().file, "f1");
+        assert!(!b.tabs()[4].on && b.tabs()[1].on && b.tabs()[3].on);
+        assert_eq!(b.tabs()[4].app.as_ref().unwrap().file, "f1");
     }
 
     #[test]

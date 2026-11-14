@@ -24,6 +24,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 anyhow = "1"
 tracing = "0.1"
 bytes = "1"
+# The media tab plays with libmpv, loaded at run time: the app works (and builds) without it.
+libloading = "0.8"
 
 [dev-dependencies]
 freya-testing = { git = "https://github.com/marc2332/freya", rev = "e506b09328e52cc0ab10d0adbef7dbd3ce0f063e" }

@@ -46,6 +46,16 @@ button.more { display: block; margin: 0 auto; }
 progress { width: 100%; height: .5rem; }
 .banner { background: var(--card); border: 1px solid var(--bad); color: var(--bad); border-radius: 10px; padding: 12px; margin: 12px 0; }
 a { color: var(--accent); }
+.playing .name { color: var(--accent); }
+#player { position: sticky; bottom: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 12px; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
+#player audio { display: block; width: 100%; margin-top: 8px; }
+#now { cursor: pointer; }
+#queue { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+#queue-list { max-height: 35vh; overflow-y: auto; }
+.qrow { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 6px; }
+.qrow.over { background: var(--line); }
+.grip { cursor: grab; color: var(--dim); padding: 4px 6px; touch-action: none; user-select: none; }
+button.icon { background: none; border: 0; color: var(--accent); font: inherit; font-size: 1.05rem; line-height: 1; padding: 6px 8px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -58,6 +68,7 @@ a { color: var(--accent); }
   <button role="tab" data-tab="files" aria-selected="true">Files<span class="count" id="n-files"></span></button>
   <button role="tab" data-tab="texts" aria-selected="false">Texts<span class="count" id="n-texts"></span></button>
   <button role="tab" data-tab="pad" aria-selected="false">Scratchpad</button>
+  <button role="tab" data-tab="music" aria-selected="false" hidden>Music<span class="count" id="n-music"></span></button>
 </nav>
 
 <section id="files">
@@ -78,6 +89,25 @@ a { color: var(--accent); }
 
 <section id="pad" hidden>
   <textarea id="pad-in" spellcheck="false" placeholder="A notepad everyone here can edit."></textarea>
+</section>
+
+<section id="music" hidden>
+  <div id="music-list"></div>
+  <div id="player" hidden>
+    <div class="row">
+      <div class="grow" id="now" title="Show the queue">
+        <div class="name" id="now-title"></div>
+        <div class="meta" id="now-meta"></div>
+      </div>
+      <button class="icon" id="next" title="Next">⏭</button>
+      <button class="icon" id="fold" title="Show the queue">▴</button>
+    </div>
+    <audio id="audio" controls preload="auto"></audio>
+    <div id="queue" hidden>
+      <div class="row"><div class="grow meta" id="queue-title"></div><button class="act quiet" id="queue-clear">Clear</button></div>
+      <div id="queue-list"></div>
+    </div>
+  </div>
 </section>
 
 <script type="module">
@@ -204,22 +234,31 @@ function control(msg) {
 
 function refresh() {
   state.snap = JSON.parse(doc.snapshot());
+  renderTabs();
   renderFiles();
   renderTexts();
   renderPad();
+  renderMusic();
 }
 
 function edited() { pump(); refresh(); }
 
 // ---- tabs -------------------------------------------------------------------------------------------------
 
-for (const b of document.querySelectorAll("nav button")) {
-  b.onclick = () => {
-    for (const o of document.querySelectorAll("nav button")) {
-      o.setAttribute("aria-selected", String(o === b));
-      $(o.dataset.tab).hidden = o !== b;
-    }
-  };
+function showTab(b) {
+  for (const o of document.querySelectorAll("nav button")) {
+    o.setAttribute("aria-selected", String(o === b));
+    $(o.dataset.tab).hidden = o !== b;
+  }
+}
+
+for (const b of document.querySelectorAll("nav button")) b.onclick = () => showTab(b);
+
+// The music tab shows while the group has it on.
+function renderTabs() {
+  const b = document.querySelector('nav button[data-tab="music"]');
+  b.hidden = !state.snap.music_on;
+  if (b.hidden && b.getAttribute("aria-selected") === "true") showTab(document.querySelector("nav button"));
 }
 
 // ---- files ------------------------------------------------------------------------------------------------
@@ -275,7 +314,7 @@ function serviceWorker() {
 
 async function request(method, path, opts = {}) {
   if (!tunnel || tunnel.closed()) tunnel = await mod.Tunnel.connect(link.get("e"), link.get("r"), secret());
-  const headers = [];
+  const headers = [...(opts.headers || [])];
   if (opts.type) headers.push("Content-Type", opts.type);
   const res = await tunnel.request(method, base + path, headers, opts.body, opts.progress, opts.signal);
   return {
@@ -459,6 +498,239 @@ function renderPad() {
   if (document.activeElement === pad) {
     pad.setSelectionRange(units(next, mod.map_cursor(old, next, chars(old, a))), units(next, mod.map_cursor(old, next, chars(old, b))));
   }
+}
+
+// ---- music ------------------------------------------------------------------------------------------------
+// Songs are played, never downloaded: the app streams them from whoever offers them, a range at a time, and
+// the browser's own player plays them. On the LAN it asks the app's server; from anywhere, the service worker
+// answers the player's requests by asking this page to make them over iroh.
+
+const audio = $("audio");
+const music = { queue: [], current: null, open: false, keys: 0, error: "" };
+
+// The songs of an offer: the one it is, or an album's, in order.
+function songsOf(f) {
+  const from = state.me && f.from === state.me.id ? "you" : f.from_name;
+  if (!f.tracks.length) return [{ key: ++music.keys, id: f.id, track: 0, name: f.name, from }];
+  return f.tracks.map((path, track) => ({ key: ++music.keys, id: f.id, track, name: path.split("/").pop(), from: f.name + " · " + from }));
+}
+const isSong = (s, id, track) => s && s.id === id && s.track === track;
+// Albums shown unfolded, by id.
+const unfolded = new Set();
+
+function renderMusic() {
+  const songs = [...state.snap.music].reverse();
+  $("n-music").textContent = songs.length || "";
+  const list = $("music-list");
+  list.replaceChildren();
+  if (!songs.length) list.append(el("div", { class: "empty" }, "Nothing to play yet."));
+  const pauseOrResume = () => (audio.paused ? audio.play().catch(() => {}) : audio.pause());
+  for (const f of songs) {
+    const album = f.tracks.length > 0;
+    const current = music.current && music.current.id === f.id;
+    const play = el("button", { class: "act" }, current && !audio.paused ? "Pause" : "Play");
+    play.onclick = () => {
+      if (current) return pauseOrResume();
+      // An album plays from its first song, the others next.
+      const [first, ...rest] = songsOf(f);
+      music.queue.unshift(...rest);
+      playSong(first);
+    };
+    const add = el("button", { class: "act quiet", title: "Add to the queue" }, "+ Queue");
+    add.onclick = () => { music.queue.push(...songsOf(f)); renderPlayer(); };
+    const from = state.me && f.from === state.me.id ? "you" : f.from_name;
+    const meta = (album ? f.tracks.length + (f.tracks.length === 1 ? " song · " : " songs · ") : "") + size(f.size) + " · " + from;
+    const info = el("div", { class: "grow" }, el("div", { class: "name" }, f.name), el("div", { class: "meta" }, meta));
+    const card = el("div", { class: "card" + (current ? " playing" : "") }, el("div", { class: "row" }, info, add, play));
+    if (album) {
+      const open = unfolded.has(f.id);
+      const fold = el("button", { class: "icon", title: open ? "Hide the songs" : "Show the songs" }, open ? "▾" : "▸");
+      fold.onclick = info.onclick = () => { open ? unfolded.delete(f.id) : unfolded.add(f.id); renderMusic(); };
+      info.style.cursor = "pointer";
+      card.firstChild.append(fold);
+      if (open) {
+        songsOf(f).forEach((song) => {
+          const here = isSong(music.current, f.id, song.track);
+          const p = el("button", { class: "icon", title: "Play" }, here && !audio.paused ? "⏸" : "▶");
+          p.onclick = () => (here ? pauseOrResume() : playSong(song));
+          const q = el("button", { class: "icon", title: "Add to the queue" }, "+");
+          q.onclick = () => { music.queue.push(song); renderPlayer(); };
+          card.append(el("div", { class: "qrow" + (here ? " playing" : "") },
+            el("div", { class: "grow name meta" }, (song.track + 1) + ". " + song.name), q, p));
+        });
+      }
+    }
+    list.append(card);
+  }
+  renderPlayer();
+}
+
+function renderPlayer() {
+  const { current, queue } = music;
+  $("player").hidden = !current && !queue.length;
+  $("now-title").textContent = current ? current.name : "Nothing playing";
+  const detail = music.error || (current ? current.from : "Press ⏭ to start the queue");
+  $("now-meta").textContent = detail + (queue.length ? " · " + queue.length + " up next" : "");
+  $("next").hidden = !current && !queue.length;
+  $("fold").textContent = music.open ? "▾" : "▴";
+  $("queue").hidden = !music.open;
+  $("queue-title").textContent = "Up next · " + queue.length;
+  const list = $("queue-list");
+  list.replaceChildren();
+  for (const song of queue) {
+    const grip = el("span", { class: "grip", title: "Drag to reorder" }, "⠿");
+    const remove = el("button", { class: "icon", title: "Take out" }, "✕");
+    remove.onclick = () => { music.queue = music.queue.filter((s) => s !== song); renderPlayer(); };
+    const row = el("div", { class: "qrow" }, grip, el("div", { class: "grow name" }, song.name), el("span", { class: "meta" }, song.from), remove);
+    row.song = song;
+    grip.onpointerdown = (e) => drag(e, song);
+    list.append(row);
+  }
+  mediaSession();
+}
+
+// Reordering by dragging a row's grip, with a mouse or a finger.
+function drag(e, song) {
+  e.preventDefault();
+  let over = null;
+  const target = (ev) => {
+    const row = document.elementFromPoint(ev.clientX, ev.clientY);
+    return row && row.closest(".qrow");
+  };
+  const move = (ev) => {
+    const row = target(ev);
+    if (over) over.classList.remove("over");
+    over = row;
+    if (over) over.classList.add("over");
+  };
+  const up = (ev) => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    if (over) over.classList.remove("over");
+    const row = target(ev);
+    if (row && row.song && row.song !== song) {
+      const q = music.queue.filter((s) => s !== song);
+      q.splice(q.indexOf(row.song), 0, song);
+      music.queue = q;
+    }
+    renderPlayer();
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+}
+
+async function playSong(song) {
+  music.current = song;
+  music.error = "";
+  renderMusic();
+  try {
+    audio.src = await songUrl(song);
+    await audio.play();
+  } catch (e) {
+    // Replaced by another song meanwhile, or the browser wants a tap first.
+    if (e && (e.name === "AbortError" || e.name === "NotAllowedError")) return;
+    failed(e);
+  }
+}
+
+function next() {
+  const song = music.queue.shift();
+  if (song) return playSong(song);
+  music.current = null;
+  audio.removeAttribute("src");
+  audio.load();
+  renderMusic();
+}
+
+function failed(e) {
+  if (!music.current) return;
+  const name = music.current.name;
+  next();
+  music.error = "Could not play " + name;
+  renderPlayer();
+  console.warn(e);
+}
+
+audio.onended = () => next();
+audio.onerror = () => failed(audio.error);
+audio.onplay = audio.onpause = () => renderMusic();
+$("next").onclick = () => next();
+$("now").onclick = $("fold").onclick = () => { music.open = !music.open; renderPlayer(); };
+$("queue-clear").onclick = () => { music.queue = []; next(); };
+
+// The lock screen's and a headset's controls.
+function mediaSession() {
+  if (!("mediaSession" in navigator)) return;
+  const s = music.current;
+  navigator.mediaSession.metadata = s ? new MediaMetadata({ title: s.name, artist: s.from, album: state.snap && $("title").textContent }) : null;
+}
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.setActionHandler("play", () => audio.play().catch(() => {}));
+  navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+  navigator.mediaSession.setActionHandler("nexttrack", () => next());
+  try { navigator.mediaSession.setActionHandler("stop", () => { music.queue = []; next(); }); } catch (_) {}
+}
+
+// What the player opens for a song.
+async function songUrl(song) {
+  const path = "play/" + encodeURIComponent(song.id) + "/" + song.track;
+  if (!remote) return base + path;
+  const sw = await serviceWorker();
+  if (sw && await controlled()) return path;
+  // No service worker (a private window): the whole song first.
+  const res = await request("GET", path);
+  if (res.status !== 200) throw new Error(await res.text());
+  const parts = [];
+  for (let c; (c = await res.chunk()); ) parts.push(c);
+  res.free();
+  return URL.createObjectURL(new Blob(parts, { type: res.header("content-type") || "audio/mpeg" }));
+}
+
+// The service worker only sees this page's requests once it controls it.
+async function controlled() {
+  if (navigator.serviceWorker.controller) return true;
+  await Promise.race([
+    new Promise((r) => navigator.serviceWorker.addEventListener("controllerchange", r, { once: true })),
+    new Promise((r) => setTimeout(r, 3000)),
+  ]);
+  return !!navigator.serviceWorker.controller;
+}
+
+// The service worker asks for a song's bytes (a range of them): fetch them over iroh and hand them over,
+// one chunk per "pull".
+if (remote && "serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", async (e) => {
+    const job = e.data && e.data.stream;
+    const port = e.ports[0];
+    if (!job || !port) return;
+    let res;
+    try {
+      res = await request("GET", job.path, { headers: job.range ? ["Range", job.range] : [] });
+    } catch (err) {
+      port.postMessage({ error: String(err && err.message || err) });
+      return;
+    }
+    const headers = {};
+    for (const h of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+      const v = res.header(h);
+      if (v) headers[h] = v;
+    }
+    if (res.status !== 200 && res.status !== 206) {
+      port.postMessage({ head: { status: res.status, headers } });
+      res.free();
+      return;
+    }
+    port.onmessage = async ({ data }) => {
+      if (data === "cancel") { await res.cancel(); res.free(); return; }
+      try {
+        const c = await res.chunk();
+        if (c) port.postMessage({ chunk: c }, [c.buffer]);
+        else { port.postMessage({ done: true }); res.free(); }
+      } catch (err) { port.postMessage({ error: String(err) }); res.free(); }
+    };
+    port.postMessage({ head: { status: res.status, headers } });
+  });
+  navigator.serviceWorker.startMessages();
 }
 
 refresh();

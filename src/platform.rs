@@ -189,7 +189,7 @@ mod android {
         call_string("openFile", path);
     }
 
-    /// Ask the Activity to show a system picker; `kind` is "file" or "media". The chosen files arrive
+    /// Ask the Activity to show a system picker; `kind` is "file", "media" or "music". The chosen files arrive
     /// as [`ActivityEvent::FilePicked`].
     pub fn pick_files(kind: &str) {
         call_string("pickFiles", kind);
@@ -231,6 +231,16 @@ mod android {
             bottom: f32,
             keyboard: bool,
         },
+        /// The player said something about the song it was given with `ticket`: one of the `MUSIC_*`
+        /// codes, and why for [`MUSIC_FAILED`].
+        MusicPlayer {
+            ticket: u64,
+            what: i32,
+            detail: String,
+        },
+        /// A button of the player's notification, the lock screen or a headset: "toggle" | "next" |
+        /// "stop".
+        MusicControl(String),
     }
 
     type Handler = std::sync::Arc<dyn Fn(ActivityEvent) + Send + Sync>;
@@ -310,6 +320,76 @@ mod android {
             bottom,
             keyboard: keyboard != 0,
         });
+    }
+
+    // ---- music (MusicService) ----------------------------------------------------------
+
+    /// What `MusicService` says about a song (its `EVENT_*`).
+    pub const MUSIC_LOADED: i32 = 0;
+    pub const MUSIC_PAUSED: i32 = 1;
+    pub const MUSIC_PLAYING: i32 = 2;
+    pub const MUSIC_ENDED: i32 = 3;
+    pub const MUSIC_FAILED: i32 = 4;
+
+    /// Play `url` in place of whatever plays, showing `title` and `artist` in the notification (which
+    /// keeps the app playing with the screen off). What happens comes back as
+    /// [`ActivityEvent::MusicPlayer`] with `ticket`.
+    pub fn music_play(ticket: u64, url: &str, title: &str, artist: &str) {
+        with_activity(|env, a| {
+            let (url, title, artist) = (
+                env.new_string(url)?,
+                env.new_string(title)?,
+                env.new_string(artist)?,
+            );
+            env.call_method(
+                a,
+                "musicPlay",
+                "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+                &[
+                    JValue::Long(ticket as i64),
+                    JValue::Object(&url),
+                    JValue::Object(&title),
+                    JValue::Object(&artist),
+                ],
+            )
+            .map(|_| ())
+        });
+    }
+
+    pub fn music_pause(paused: bool) {
+        with_activity(|env, a| {
+            env.call_method(a, "musicPause", "(Z)V", &[JValue::Bool(paused.into())])
+                .map(|_| ())
+        });
+    }
+
+    /// Stop playing, and let the notification go.
+    pub fn music_stop() {
+        call_void("musicStop");
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_MusicService_nativeMusicEvent(
+        mut env: JNIEnv,
+        _: JClass,
+        ticket: jni::sys::jlong,
+        what: jni::sys::jint,
+        detail: JString,
+    ) {
+        report(ActivityEvent::MusicPlayer {
+            ticket: ticket as u64,
+            what,
+            detail: jstr(&mut env, &detail),
+        });
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_MusicService_nativeMusicControl(
+        mut env: JNIEnv,
+        _: JClass,
+        action: JString,
+    ) {
+        report(ActivityEvent::MusicControl(jstr(&mut env, &action)));
     }
 
     /// Stage the files of the last share for `group`; each arrives as [`ActivityEvent::FilePicked`].
