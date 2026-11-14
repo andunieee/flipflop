@@ -5,6 +5,8 @@ android/**/build/
 android/app/src/main/jniLibs/
 android/app/blew-kt/
 /dist/
+/examples/miniapps/dist/
+/examples/miniapps/target/
 android/local.properties
 android/keystore.properties
 *.jks

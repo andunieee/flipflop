@@ -46,6 +46,18 @@ build:
 test:
     cargo test
 
+# build the experimental wasm miniapps into examples/miniapps/dist
+miniapps:
+    examples/miniapps/build.sh
+
+# run one miniapp over a throwaway document: just miniapp checklist actions.json
+miniapp app *actions:
+    cargo run --example miniapp -- examples/miniapps/dist/{{app}}.wasm {{actions}}
+
+# run one miniapp on two peers and check they converge: just miniapp-sync checklist a.json b.json
+miniapp-sync app a b:
+    cargo run --example miniapp_sync -- examples/miniapps/dist/{{app}}.wasm {{a}} {{b}}
+
 # command line client
 cli *cargs:
     cargo run --bin flipflop -- {{cargs}}

@@ -1,0 +1,32 @@
+# Experimental wasm apps for flipflop's app runtime (src/apps.rs). Not part of the app's build: each
+# app is the same crate built with one feature, so `build.sh` makes one .wasm per app.
+[package]
+name = "flipflop-miniapps"
+version = "0.0.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# Its own workspace, so the app's workspace does not try to build this for the desktop.
+[workspace]
+
+[dependencies]
+ciborium = "0.2"
+hypereffect = "=0.6.1"
+
+[features]
+default = ["checklist"]
+checklist = []
+expenses = []
+poll = []
+availability = []
+calendar = []
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

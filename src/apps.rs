@@ -12,7 +12,11 @@
 //!   free);
 //! - imports `flipflop.call(ptr: i32, len: i32) -> i32` to make a request: it returns the length of
 //!   the response, which the app fetches with
-//! - `flipflop.take(ptr: i32)`, copying it to `ptr`, where the app made room for it.
+//! - `flipflop.take(ptr: i32)`, copying it to `ptr`, where the app made room for it;
+//! - imports `flipflop.emit(ptr: i32, len: i32)` to send hypereffect lines to the local renderer:
+//!   UTF-8 `signal …\n`, `element …\n`, `remove …\n`, `metadata …\n` messages, exactly as the
+//!   protocol frames them. The host collects them with [`App::take_ui`]. They are per session and
+//!   never go in the document.
 //!
 //! The app runs only while it handles an event, with [`FUEL`] to spend and [`MEMORY`] at most.
 //! An app that traps or runs out is stopped.
@@ -22,6 +26,10 @@
 //! - `{"type": "start", "app": <id>, "me": <our peer id>}`: first, once.
 //! - `{"type": "change", "patches": [<patch>…]}`: the document changed in the app's section or in
 //!   a part it watches, whoever changed it (its own writes come back too: the document is the truth).
+//! - `{"type": "action", "name": <str>, "payload": <value>, "signals": <map>, "me": <peer id>,
+//!   "ts": <ms>, "seq": <n>}`: the local hypereffect renderer sent an action. The app validates it,
+//!   writes the document, and lets the following `change` update the interface. `ts` and `seq` let
+//!   it name new things without a clock or randomness of its own.
 //!
 //! A patch is `{"root": "app" | "group", "path": […], "action": …}`, with `path` relative to the
 //! app's section (root `app`) or the document's root (root `group`), and the action one of
@@ -65,7 +73,7 @@ mod codec;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
-use automerge::{ChangeHash, Prop, ROOT, ReadDoc, transaction::Transactable};
+use automerge::{ChangeHash, ObjType, Prop, ROOT, ReadDoc, Value, transaction::Transactable};
 use ciborium::Value as Cbor;
 use wasmi::{
     Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
@@ -91,6 +99,25 @@ fn with_doc<R>(host: &dyn DocHost, f: impl FnOnce(&mut GroupDoc) -> R) -> R {
     let (mut f, mut out) = (Some(f), None);
     host.with_doc(&mut |d| out = f.take().map(|f| f(d)));
     out.expect("with_doc runs its closure")
+}
+
+/// Queue a command for `app`, in the queue of the peer whose UI wrote it. The app applies it, and
+/// takes it out of the queue, the next time the host notifies it.
+pub fn enqueue(doc: &mut GroupDoc, app: &str, by: &str, command: Cbor) -> Result<()> {
+    let section = doc
+        .app_section(app)
+        .ok_or_else(|| anyhow!("the app's section is gone"))?;
+    // One flat key per peer's queue: a list its UI made, and only its UI appends to. Every app
+    // deletes what it applied. Making a map here would race another device's map and lose a queue.
+    let queue_key = format!("inbox\u{1f}{by}");
+    let raw = doc.raw();
+    let queue = match raw.get(&section, queue_key.as_str())? {
+        Some((Value::Object(_), id)) => id,
+        _ => raw.put_object(&section, queue_key.as_str(), ObjType::List)?,
+    };
+    let next = raw.length(&queue);
+    codec::insert(raw, &queue, next, command)?;
+    Ok(())
 }
 
 /// Compiles and starts apps. One is enough for all of them.
@@ -121,6 +148,7 @@ impl Runtime {
             response: Vec::new(),
             watches: Vec::new(),
             wrote: false,
+            out: Vec::new(),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
@@ -128,6 +156,7 @@ impl Runtime {
         let mut linker = Linker::<State>::new(&self.engine);
         linker.func_wrap("flipflop", "call", host_call)?;
         linker.func_wrap("flipflop", "take", host_take)?;
+        linker.func_wrap("flipflop", "emit", host_emit)?;
         let instance = linker.instantiate_and_start(&mut store, &module)?;
         Ok(App {
             memory: instance
@@ -137,6 +166,7 @@ impl Runtime {
             event: instance.get_typed_func(&store, "ff_event")?,
             store,
             seen: Vec::new(),
+            seq: 0,
             stopped: false,
         })
     }
@@ -150,13 +180,16 @@ pub struct App {
     event: TypedFunc<(i32, i32), ()>,
     /// The heads the app was told about.
     seen: Vec<ChangeHash>,
+    /// The number of actions given to the app, for event ids.
+    seq: u64,
     /// It failed; it gets no more events.
     stopped: bool,
 }
 
 impl App {
     /// Make the app's section if needed and send the start event. Returns whether the document
-    /// changed (so it needs saving and syncing).
+    /// changed (so it needs saving and syncing). The app's initial hypereffect messages are waiting
+    /// in [`App::take_ui`].
     pub fn start(&mut self) -> Result<bool> {
         let state = self.store.data();
         let (host, app) = (state.host.clone(), state.app.clone());
@@ -176,7 +209,8 @@ impl App {
     }
 
     /// The document changed: tell the app what changed of what it sees, if anything. Returns
-    /// whether the app changed the document in turn.
+    /// whether the app changed the document in turn. Any hypereffect messages it emitted are in
+    /// [`App::take_ui`].
     pub fn notify(&mut self) -> Result<bool> {
         if self.stopped {
             bail!("the app was stopped");
@@ -232,6 +266,34 @@ impl App {
         Ok(std::mem::take(&mut self.store.data_mut().wrote))
     }
 
+    /// The hypereffect messages the app emitted since this was last called, in order, as the UTF-8
+    /// lines of the protocol (feed them to `hypereffect::client::Client::receive`).
+    pub fn take_ui(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.store.data_mut().out)
+    }
+
+    /// Give the app one action from the local hypereffect renderer. `signals` are the non-local
+    /// signals at the time of the action. Returns whether the app changed the document; if it did,
+    /// call [`App::notify`] to let it (and every other device) render the result. Any messages the
+    /// action itself emitted are in [`App::take_ui`].
+    pub fn action(&mut self, name: &str, payload: Cbor, signals: Cbor) -> Result<bool> {
+        if self.stopped {
+            bail!("the app was stopped");
+        }
+        self.seq += 1;
+        let me = self.store.data().me.clone();
+        let event = map([
+            ("type", text("action")),
+            ("name", text(name)),
+            ("payload", payload),
+            ("signals", signals),
+            ("me", text(me)),
+            ("ts", Cbor::Integer(crate::groupdoc::now_ms().into())),
+            ("seq", Cbor::Integer(self.seq.into())),
+        ]);
+        self.send(&event)
+    }
+
     fn deliver(&mut self, bytes: &[u8]) -> Result<()> {
         let len = i32::try_from(bytes.len())?;
         self.store.set_fuel(FUEL)?;
@@ -255,6 +317,8 @@ struct State {
     watches: Vec<Vec<Prop>>,
     /// The app wrote to the document since it was last asked.
     wrote: bool,
+    /// Hypereffect messages emitted since the host last took them, as protocol lines.
+    out: Vec<u8>,
 }
 
 fn memory(caller: &Caller<'_, State>) -> Result<Memory, wasmi::Error> {
@@ -290,6 +354,20 @@ fn host_take(mut caller: Caller<'_, State>, ptr: i32) -> Result<(), wasmi::Error
     memory
         .write(&mut caller, ptr as u32 as usize, &response)
         .map_err(|_| wasmi::Error::new("take: room outside memory"))
+}
+
+/// Hypereffect lines: UTF-8 `signal …\n`, `element …\n`, … sent by the app. They are queued for
+/// [`App::take_ui`], not written to the document.
+fn host_emit(mut caller: Caller<'_, State>, ptr: i32, len: i32) -> Result<(), wasmi::Error> {
+    let memory = memory(&caller)?;
+    let bytes = memory
+        .data(&caller)
+        .get(ptr as u32 as usize..)
+        .and_then(|m| m.get(..len as u32 as usize))
+        .ok_or_else(|| wasmi::Error::new("emit: messages outside memory"))?
+        .to_vec();
+    caller.data_mut().out.extend_from_slice(&bytes);
+    Ok(())
 }
 
 /// A request's fields.

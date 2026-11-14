@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::{
+    groupdoc::GroupDoc,
     settings::{Settings, clean_name},
     state::{Contact, Group, Invite, Member, Reply, State, Store},
 };
@@ -369,6 +370,28 @@ impl Core {
 
     pub fn name(&self) -> String {
         self.0.settings.lock().unwrap().name.clone()
+    }
+
+    /// Run `f` on a group's document, if the group is known.
+    pub fn with_group_doc<R>(&self, gid: &str, f: impl FnOnce(&mut GroupDoc) -> R) -> Option<R> {
+        self.has_group(gid).then(|| self.with_doc(gid, f))
+    }
+
+    /// The wasm of an app we hold, by its blake3 hash.
+    pub fn app_wasm(&self, hash: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.0.sharing.apps_dir.join(format!("{hash}.wasm"))).ok()
+    }
+
+    /// An app changed the group's document: save it, publish it and sync it.
+    pub fn app_wrote(&self, gid: &str) {
+        if self.has_group(gid) {
+            self.doc_changed(gid, false);
+        }
+    }
+
+    /// Our peer id, as it appears in the document.
+    pub fn me_id(&self) -> String {
+        self.me()
     }
 
     pub fn ticket(&self) -> String {

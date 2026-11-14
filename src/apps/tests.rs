@@ -242,6 +242,70 @@ fn an_app_writes_reads_and_hears_of_changes() {
     assert_eq!(self::log(&app).len(), before);
 }
 
+/// An app that emits `line` on its first event and logs every event it gets.
+fn emitter(line: &str) -> Vec<u8> {
+    let bytes = line.as_bytes();
+    let data: String = bytes.iter().map(|b| format!("\\{b:02x}")).collect();
+    wat::parse_str(format!(
+        r#"(module
+  (import "flipflop" "emit" (func $emit (param i32 i32)))
+  (memory (export "memory") 4)
+  (data (i32.const 0) "{data}")
+  (global $log (mut i32) (i32.const 0x10004))
+  (global $heap (mut i32) (i32.const 0x30000))
+  (global $ran (mut i32) (i32.const 0))
+  (func $alloc (export "ff_alloc") (param $len i32) (result i32)
+    (local $p i32)
+    (local.set $p (global.get $heap))
+    (global.set $heap (i32.add (global.get $heap) (local.get $len)))
+    (local.get $p))
+  (func $log (param $ptr i32) (param $len i32)
+    (i32.store (global.get $log) (local.get $len))
+    (memory.copy (i32.add (global.get $log) (i32.const 4)) (local.get $ptr) (local.get $len))
+    (global.set $log (i32.add (global.get $log) (i32.add (i32.const 4) (local.get $len))))
+    (i32.store (i32.const 0x10000) (i32.sub (global.get $log) (i32.const 0x10004))))
+  (func (export "ff_event") (param $ptr i32) (param $len i32)
+    (call $log (local.get $ptr) (local.get $len))
+    (if (global.get $ran) (then (return)))
+    (global.set $ran (i32.const 1))
+    (call $emit (i32.const 0) (i32.const {len})))
+)"#,
+        data = data,
+        len = bytes.len()
+    ))
+    .unwrap()
+}
+
+#[test]
+fn an_app_emits_frames_and_gets_actions() {
+    let line = "signal {\"x\":1}\n";
+    let host = shared();
+    let mut app = Runtime::default()
+        .load(&emitter(line), "emitter", "me", host)
+        .unwrap();
+    app.start().unwrap();
+
+    // The start event produced one line, and taking it empties the buffer.
+    assert_eq!(app.take_ui(), line.as_bytes());
+    assert!(app.take_ui().is_empty());
+
+    // An action reaches the app with its name, payload, signals and sequence number.
+    let payload = map([("id", text("thing"))]);
+    let signals = map([("form", Cbor::Map(vec![(text("x"), text("hi"))]))]);
+    assert!(
+        !app.action("do_it", payload.clone(), signals.clone())
+            .unwrap()
+    );
+    let event = log(&app).pop().unwrap();
+    assert_eq!(field(&event, "type"), &text("action"));
+    assert_eq!(field(&event, "name"), &text("do_it"));
+    assert_eq!(field(&event, "payload"), &payload);
+    assert_eq!(field(&event, "signals"), &signals);
+    assert_eq!(field(&event, "seq"), &Cbor::Integer(1.into()));
+    assert_eq!(field(&event, "me"), &text("me"));
+    assert!(app.take_ui().is_empty());
+}
+
 #[test]
 fn an_app_that_runs_forever_is_stopped() {
     let wasm = wat::parse_str(

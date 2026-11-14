@@ -2,6 +2,7 @@
 
 mod backend;
 mod group;
+mod hyper;
 mod icons;
 mod model;
 #[cfg(not(target_os = "android"))]

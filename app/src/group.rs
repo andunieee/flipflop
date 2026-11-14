@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     io::Read,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use flipflop::{
@@ -22,6 +23,7 @@ use freya::{
 };
 
 use crate::{
+    hyper::{HyperView, Session},
     icons::Icon,
     music::MusicTab,
     model::{Channel, Model, Tone, group_title, peer_subtitle, peer_title},
@@ -72,7 +74,19 @@ impl Component for GroupPage {
             app => shown
                 .iter()
                 .find(|t| t.id == app)
-                .map(|t| app_tab(t).into_element())
+                .map(|t| match &t.app {
+                    Some(a) if a.ready => rect()
+                        .key(&format!("{}:{}:{}", self.id, t.id, a.hash))
+                        .child(
+                            AppTab {
+                                gid: self.id.clone(),
+                                tab: (*t).clone(),
+                            }
+                            .into_element(),
+                        )
+                        .into_element(),
+                    _ => app_tab(t).into_element(),
+                })
                 .unwrap_or_else(|| rect().into_element()),
         };
 
@@ -630,7 +644,48 @@ fn pad_actions(text: String, nav: Nav, gid: String) -> Rect {
 
 // ---- apps ------------------------------------------------------------------------------------
 
-/// An app's tab. Running apps and showing their interface comes next; for now, where its file is.
+/// A running app: its wasm, its document and its hypereffect interface.
+#[derive(PartialEq)]
+struct AppTab {
+    gid: String,
+    tab: TabView,
+}
+
+impl Component for AppTab {
+    fn render(&self) -> impl IntoElement {
+        let nav = use_consume::<Nav>();
+        let rev = use_state(|| 0u64);
+        let session = use_hook(|| {
+            let Some(app) = &self.tab.app else {
+                return Err("This tab is not an app.".to_owned());
+            };
+            Session::open(
+                nav.backend().clone(),
+                self.gid.clone(),
+                self.tab.id.clone(),
+                app.hash.clone(),
+            )
+            .map(|session| Rc::new(RefCell::new(session)))
+        });
+        match &session {
+            Ok(session) => HyperView { session: session.clone(), rev }.into_element(),
+            Err(err) => error_card(err),
+        }
+    }
+}
+
+fn error_card(message: &str) -> Element {
+    let (c, d) = look();
+    card()
+        .child(
+            card_body(Dim::SPACE3)
+                .child(txt("This app could not run", d.font_lg(), c.text_strong, 700))
+                .child(txt(message, d.font_sm(), c.error, 400)),
+        )
+        .into_element()
+}
+
+/// An app's tab while its wasm is still being fetched.
 fn app_tab(t: &TabView) -> Rect {
     let (c, d) = look();
     let Some(app) = &t.app else { return rect() };
@@ -654,7 +709,7 @@ fn app_tab(t: &TabView) -> Rect {
             .map(status, |el, (s, tone)| el.child(badge(s, tone)))
             .child(
                 txt(
-                    "Every device in the group fetches this app and shares it with the others. Running it here, with its hypereffect.dev interface, is coming.",
+                    "Every device in the group fetches this app and shares it with the others. It will run here as soon as its WebAssembly is on this device.",
                     d.font_md(),
                     c.text_muted,
                     400,

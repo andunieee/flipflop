@@ -250,6 +250,8 @@ pub struct AppView {
     /// Who added it.
     pub from_name: String,
     pub size: u64,
+    /// The blake3 of its wasm, its name in the apps folder.
+    pub hash: String,
     /// We hold its wasm.
     pub ready: bool,
     /// Fetching it: (bytes so far, total).
@@ -883,6 +885,7 @@ impl Core {
                     app: Some(AppView {
                         from_name: name_of(&app.from),
                         size: app.size,
+                        hash: app.hash.clone(),
                         ready: self.app_path(&app.hash).exists(),
                         progress: t.filter(|t| t.active).map(|t| (t.done, t.total)),
                         error: t.and_then(|t| t.error.clone()),
