@@ -65,9 +65,11 @@ impl Doc {
             .doc
             .files()
             .into_iter()
+            // Apps are not files: their tab is the only way to them, as in the app.
+            .filter(|f| f.kind != "wasm")
             .map(|f| {
                 serde_json::json!({
-                    "id": f.id, "name": f.name, "size": f.size, "from": f.from, "from_name": f.from_name, "ts": f.ts,
+                    "id": f.id, "name": f.name, "size": f.size, "kind": f.kind, "from": f.from, "from_name": f.from_name, "ts": f.ts,
                     "stopped": f.stopped, "downloaded": f.downloaded.keys().collect::<Vec<_>>(),
                 })
             })
@@ -90,8 +92,26 @@ impl Doc {
                 serde_json::json!({ "id": f.id, "name": f.name, "size": f.size, "from": f.from, "from_name": f.from_name, "ts": f.ts, "tracks": tracks })
             })
             .collect();
-        let music_on = self.doc.tabs().iter().any(|t| t.id == "music" && t.on);
-        serde_json::json!({ "members": members, "files": files, "texts": texts, "scratch": self.doc.scratch(), "music": music, "music_on": music_on })
+        // The group's tabs, as anyone set them, so the page shows just the ones that are on.
+        let tabs: Vec<_> = self
+            .doc
+            .tabs()
+            .into_iter()
+            .map(|t| {
+                let title = match &t.app {
+                    Some(app) => app.name.strip_suffix(".wasm").unwrap_or(&app.name).to_owned(),
+                    None => match t.id.as_str() {
+                        "files" => "Files",
+                        "texts" => "Texts",
+                        "music" => "Music",
+                        _ => "Scratchpad",
+                    }
+                    .to_owned(),
+                };
+                serde_json::json!({ "id": t.id, "title": title, "on": t.on, "app": t.app.is_some() })
+            })
+            .collect();
+        serde_json::json!({ "members": members, "files": files, "texts": texts, "scratch": self.doc.scratch(), "music": music, "tabs": tabs })
             .to_string()
     }
 

@@ -127,7 +127,7 @@ const token = remote ? link.get("t") : location.pathname.split("/").filter(Boole
 // Where HTTP requests go: the app's server, or (over iroh) the same paths on a stream.
 const base = "/" + token + "/";
 
-const state = { me: null, uploads: false, snap: { members: [], files: [], texts: [], scratch: "" }, closed: false };
+const state = { me: null, uploads: false, snap: { members: [], files: [], texts: [], scratch: "", music: [], tabs: [] }, closed: false };
 
 const mod = await import("./flipflop_web.js");
 await mod.default();
@@ -247,18 +247,35 @@ function edited() { pump(); refresh(); }
 
 function showTab(b) {
   for (const o of document.querySelectorAll("nav button")) {
-    o.setAttribute("aria-selected", String(o === b));
-    $(o.dataset.tab).hidden = o !== b;
+    const here = o === b;
+    o.setAttribute("aria-selected", String(here));
+    const section = $(o.dataset.tab);
+    if (section) section.hidden = !here;
   }
 }
 
 for (const b of document.querySelectorAll("nav button")) b.onclick = () => showTab(b);
 
-// The music tab shows while the group has it on.
+// The tabs the group has on, as anyone set them. Apps have no page here (they run in the app), so
+// their tab says so instead of running it.
 function renderTabs() {
-  const b = document.querySelector('nav button[data-tab="music"]');
-  b.hidden = !state.snap.music_on;
-  if (b.hidden && b.getAttribute("aria-selected") === "true") showTab(document.querySelector("nav button"));
+  const tabs = state.snap.tabs || [];
+  for (const t of tabs) {
+    if (!t.app || document.querySelector('nav button[data-tab="' + t.id + '"]')) continue;
+    const b = el("button", { role: "tab", "data-tab": t.id, "aria-selected": "false" }, t.title);
+    b.onclick = () => showTab(b);
+    document.querySelector("nav").append(b);
+    document.body.append(el("section", { id: t.id, hidden: "" },
+      el("div", { class: "card" }, el("div", { class: "name" }, t.title),
+        el("div", { class: "meta" }, "This app runs in the FlipFlop app, not in a browser."))));
+  }
+  const on = new Set(tabs.filter((t) => t.on).map((t) => t.id));
+  const buttons = [...document.querySelectorAll("nav button")];
+  for (const b of buttons) b.hidden = !on.has(b.dataset.tab);
+  // Whoever hid the tab we were on: show the first one there is, if any.
+  let selected = buttons.find((b) => !b.hidden && b.getAttribute("aria-selected") === "true");
+  if (!selected) selected = buttons.find((b) => !b.hidden);
+  showTab(selected || null);
 }
 
 // ---- files ------------------------------------------------------------------------------------------------
