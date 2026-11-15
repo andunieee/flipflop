@@ -56,6 +56,15 @@ a { color: var(--accent); }
 .qrow.over { background: var(--line); }
 .grip { cursor: grab; color: var(--dim); padding: 4px 6px; touch-action: none; user-select: none; }
 button.icon { background: none; border: 0; color: var(--accent); font: inherit; font-size: 1.05rem; line-height: 1; padding: 6px 8px; cursor: pointer; }
+/* Wide screens: no tab switcher; every tab the group shows sits beside the others. */
+@media (min-width: 900px) {
+  body { max-width: 1600px; }
+  nav { display: none; }
+  #panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; align-items: start; }
+  #panels > section[hidden] { display: block; }
+  #panels > section.off { display: none; }
+  #panels > section::before { content: attr(data-title); display: block; font-size: 1.05rem; font-weight: 600; margin: 2px 0 10px; }
+}
 </style>
 </head>
 <body>
@@ -71,6 +80,7 @@ button.icon { background: none; border: 0; color: var(--accent); font: inherit; 
   <button role="tab" data-tab="music" aria-selected="false" hidden>Music<span class="count" id="n-music"></span></button>
 </nav>
 
+<main id="panels">
 <section id="files">
   <div id="upload" hidden>
     <div class="drop" id="drop">Drop files here or <label class="act" style="margin-left:.4rem">Choose files<input id="pick" type="file" multiple hidden></label></div>
@@ -109,6 +119,7 @@ button.icon { background: none; border: 0; color: var(--accent); font: inherit; 
     </div>
   </div>
 </section>
+</main>
 
 <script type="module">
 const $ = (id) => document.getElementById(id);
@@ -260,18 +271,30 @@ for (const b of document.querySelectorAll("nav button")) b.onclick = () => showT
 // their tab says so instead of running it.
 function renderTabs() {
   const tabs = state.snap.tabs || [];
+  const byId = new Map(tabs.map((t) => [t.id, t]));
   for (const t of tabs) {
     if (!t.app || document.querySelector('nav button[data-tab="' + t.id + '"]')) continue;
     const b = el("button", { role: "tab", "data-tab": t.id, "aria-selected": "false" }, t.title);
     b.onclick = () => showTab(b);
     document.querySelector("nav").append(b);
-    document.body.append(el("section", { id: t.id, hidden: "" },
+    $("panels").append(el("section", { id: t.id, "data-title": t.title, "aria-label": t.title, hidden: "" },
       el("div", { class: "card" }, el("div", { class: "name" }, t.title),
         el("div", { class: "meta" }, "This app runs in the FlipFlop app, not in a browser."))));
   }
   const on = new Set(tabs.filter((t) => t.on).map((t) => t.id));
   const buttons = [...document.querySelectorAll("nav button")];
-  for (const b of buttons) b.hidden = !on.has(b.dataset.tab);
+  for (const b of buttons) {
+    const t = byId.get(b.dataset.tab);
+    const section = $(b.dataset.tab);
+    b.hidden = !on.has(b.dataset.tab);
+    if (section) {
+      section.classList.toggle("off", b.hidden);
+      if (t) {
+        section.dataset.title = t.title;
+        section.setAttribute("aria-label", t.title);
+      }
+    }
+  }
   // Whoever hid the tab we were on: show the first one there is, if any.
   let selected = buttons.find((b) => !b.hidden && b.getAttribute("aria-selected") === "true");
   if (!selected) selected = buttons.find((b) => !b.hidden);
