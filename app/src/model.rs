@@ -32,6 +32,27 @@ pub struct Model {
     pub home: Vec<Unseen>,
     /// What is moving, in every group (Home).
     pub transfers: Vec<TransferItem>,
+    /// What the Android IME sent to the scratchpad, waiting to be applied.
+    pub ime: Vec<Ime>,
+}
+
+/// Something the Android IME sent to the focused canvas field. It goes through a native field (see
+/// `startImeBridge`), which is why it does not arrive as ordinary key events.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ime {
+    /// Text to insert at the cursor (typed, corrected or pasted).
+    Text(String),
+    /// Composing text to show without committing; empty clears it.
+    Composing(String),
+    Backspace,
+    Enter,
+    Left,
+    Right,
+    Up,
+    Down,
+    SelectAll,
+    Copy,
+    Cut,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
@@ -43,6 +64,8 @@ pub enum Channel {
     Groups,
     /// News and transfers.
     Home,
+    /// What the Android IME sent to the focused field.
+    Ime,
 }
 
 impl RadioChannel<Model> for Channel {}

@@ -48,6 +48,8 @@ pub enum Msg {
     },
     /// What plays, and what plays next.
     Music(MusicState),
+    /// Something the Android IME sent to the focused field (the scratchpad).
+    Ime(crate::model::Ime),
 }
 
 /// A webcam preview frame: width, height, RGBA.
@@ -625,6 +627,26 @@ impl Backend {
                 "stop" => self.music().clear(self),
                 _ => {}
             },
+            ActivityEvent::ImeText(text) => self.send(Msg::Ime(crate::model::Ime::Text(text))),
+            ActivityEvent::ImeComposing(text) => {
+                self.send(Msg::Ime(crate::model::Ime::Composing(text)))
+            }
+            ActivityEvent::ImeKey(key) => {
+                use crate::model::Ime;
+                let key = match key.as_str() {
+                    "backspace" => Ime::Backspace,
+                    "enter" => Ime::Enter,
+                    "left" => Ime::Left,
+                    "right" => Ime::Right,
+                    "up" => Ime::Up,
+                    "down" => Ime::Down,
+                    "selectall" => Ime::SelectAll,
+                    "copy" => Ime::Copy,
+                    "cut" => Ime::Cut,
+                    _ => return,
+                };
+                self.send(Msg::Ime(key));
+            }
         }
     }
 }

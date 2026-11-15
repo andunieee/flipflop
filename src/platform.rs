@@ -184,6 +184,17 @@ mod android {
         call_string("openUrl", url);
     }
 
+    /// Let the Android IME edit through its native `InputConnection`: besides key events, that is what
+    /// brings its clipboard (paste), autocorrect and composing text. Done while a canvas text field
+    /// (the scratchpad) has the focus.
+    pub fn start_ime_bridge() {
+        call_void("startImeBridge");
+    }
+
+    pub fn stop_ime_bridge() {
+        call_void("stopImeBridge");
+    }
+
     /// Open a downloaded file (in the public Downloads folder) with an app that can show it.
     pub fn open_file(path: &str) {
         call_string("openFile", path);
@@ -241,6 +252,13 @@ mod android {
         /// A button of the player's notification, the lock screen or a headset: "toggle" | "next" |
         /// "stop".
         MusicControl(String),
+        /// Text the IME committed to the field being edited: typed, corrected or pasted.
+        ImeText(String),
+        /// The IME's not-yet-committed text; empty clears it.
+        ImeComposing(String),
+        /// A command the IME sent instead of text: "backspace" | "enter" | "left" | "right" | "up" |
+        /// "down" | "selectall" | "copy" | "cut".
+        ImeKey(String),
     }
 
     type Handler = std::sync::Arc<dyn Fn(ActivityEvent) + Send + Sync>;
@@ -503,6 +521,33 @@ mod android {
     ) {
         let text = jstr(&mut env, &text);
         crate::ble::android::on_status(text);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeImeText(
+        mut env: JNIEnv,
+        _: JClass,
+        text: JString,
+    ) {
+        report(ActivityEvent::ImeText(jstr(&mut env, &text)));
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeImeComposing(
+        mut env: JNIEnv,
+        _: JClass,
+        text: JString,
+    ) {
+        report(ActivityEvent::ImeComposing(jstr(&mut env, &text)));
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_flipflop_app_FlipflopActivity_nativeImeKey(
+        mut env: JNIEnv,
+        _: JClass,
+        key: JString,
+    ) {
+        report(ActivityEvent::ImeKey(jstr(&mut env, &key)));
     }
 }
 

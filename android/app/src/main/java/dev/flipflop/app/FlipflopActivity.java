@@ -42,13 +42,23 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.ParcelUuid;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
 import android.system.Os;
 import android.system.OsConstants;
 import android.system.StructStat;
 import android.util.Log;
+import android.widget.EditText;
+import android.widget.FrameLayout;
 
 import androidx.core.content.FileProvider;
 import androidx.core.view.ViewCompat;
@@ -117,9 +127,17 @@ public class FlipflopActivity extends android.app.NativeActivity {
     private static native void nativeBlePeer(String address, String json);
     private static native void nativeBleLost(String address);
     private static native void nativeBleStatus(String text);
+    /** Text the IME committed to the scratchpad: typed, corrected or pasted. */
+    private static native void nativeImeText(String text);
+    /** The IME's composing (not yet committed) text; empty clears it. */
+    private static native void nativeImeComposing(String text);
+    /** A key the IME sent instead of text: "backspace", "enter", "left", "right", "up" or "down". */
+    private static native void nativeImeKey(String key);
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private WifiManager.MulticastLock multicastLock;
+    /** Gives the IME an InputConnection while the scratchpad is focused; it keeps no text. */
+    private BridgeText imeBridge;
 
     private String pickKind = "file";
     /** The files of the last share, until the user picks where they go. */
@@ -150,9 +168,215 @@ public class FlipflopActivity extends android.app.NativeActivity {
         }
         super.onCreate(savedInstanceState);
         edgeToEdge();
+        addImeBridge();
         // Reopened from Recents, Android hands us the share we already took care of.
         if (savedInstanceState == null && (getIntent().getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) {
             takeShare(getIntent());
+        }
+    }
+
+    // ---- the IME bridge -------------------------------------------------------------------
+
+    /**
+     * The canvas text fields have no InputConnection, so the IME can only send them key events: its
+     * clipboard, autocorrect and composing text never arrive. A 1x1 field out of sight gives the IME a
+     * connection while the scratchpad is focused; what it commits comes back to Rust, which puts it in
+     * the field. While the bridge is not focused nothing changes: typing is still key events.
+     */
+    private void addImeBridge() {
+        BridgeText bridge = new BridgeText(this);
+        bridge.setBackground(null);
+        bridge.setAlpha(0f);
+        bridge.setCursorVisible(false);
+        bridge.setFocusable(false);
+        bridge.setFocusableInTouchMode(true);
+        bridge.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        bridge.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.leftMargin = -8;
+        lp.topMargin = -8;
+        ((ViewGroup) getWindow().getDecorView()).addView(bridge, lp);
+        imeBridge = bridge;
+    }
+
+    /** Called from Rust: the scratchpad has the focus, so let the IME edit through the bridge. */
+    public void startImeBridge() {
+        runOnUiThread(() -> {
+            if (imeBridge == null) addImeBridge();
+            if (imeBridge == null) return;
+            imeBridge.setFocusable(true);
+            imeBridge.requestFocus();
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(imeBridge, 0);
+        });
+    }
+
+    /** Called from Rust: the scratchpad lost the focus. */
+    public void stopImeBridge() {
+        runOnUiThread(() -> {
+            BridgeText bridge = imeBridge;
+            if (bridge == null) return;
+            imeBridge = null;
+            // The IME keeps the bridge as its served view until it goes away, which would leave the
+            // keyboard gone for the next field (the canvas has no native view of its own). Detach it.
+            ViewParent parent = bridge.getParent();
+            if (parent instanceof ViewGroup group) group.removeView(bridge);
+            // Hand the window's focus back to its root: the IME is in key-event mode there, and it
+            // otherwise stays attached to the bridge that is now gone.
+            View decor = getWindow().getDecorView();
+            decor.setFocusable(true);
+            decor.setFocusableInTouchMode(true);
+            decor.requestFocus();
+        });
+    }
+
+    /** The hidden field behind the bridge: it never keeps what is typed, it only relays it. */
+    private static class BridgeText extends EditText {
+        BridgeText(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean onKeyDown(int keyCode, KeyEvent event) {
+            return relayKey(getContext(), keyCode, event) || super.onKeyDown(keyCode, event);
+        }
+
+        @Override
+        public InputConnection onCreateInputConnection(EditorInfo out) {
+            out.inputType = getInputType();
+            out.imeOptions = EditorInfo.IME_ACTION_NONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                    | EditorInfo.IME_FLAG_NO_FULLSCREEN;
+            return new BaseInputConnection(this, false) {
+                @Override
+                public boolean commitText(CharSequence text, int newCursorPosition) {
+                    nativeImeText(text.toString());
+                    return true;
+                }
+
+                @Override
+                public boolean setComposingText(CharSequence text, int newCursorPosition) {
+                    nativeImeComposing(text.toString());
+                    return true;
+                }
+
+                @Override
+                public boolean finishComposingText() {
+                    nativeImeComposing("");
+                    return true;
+                }
+
+                @Override
+                public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+                    for (int i = 0; i < beforeLength; i++) nativeImeKey("backspace");
+                    return true;
+                }
+
+                @Override
+                public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+                    return deleteSurroundingText(beforeLength, afterLength);
+                }
+
+                @Override
+                public boolean sendKeyEvent(KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                        relayKey(BridgeText.this.getContext(), event.getKeyCode(), event);
+                    }
+                    return true;
+                }
+
+                @Override
+                public boolean performEditorAction(int actionCode) {
+                    nativeImeKey("enter");
+                    return true;
+                }
+
+                @Override
+                public boolean performContextMenuAction(int id) {
+                    // Keyboards that use the editing menu rather than the shortcuts.
+                    if (id == android.R.id.paste) {
+                        pasteFromClipboard(BridgeText.this.getContext());
+                        return true;
+                    }
+                    if (id == android.R.id.copy) {
+                        nativeImeKey("copy");
+                        return true;
+                    }
+                    if (id == android.R.id.cut) {
+                        nativeImeKey("cut");
+                        return true;
+                    }
+                    if (id == android.R.id.selectAll) {
+                        nativeImeKey("selectall");
+                        return true;
+                    }
+                    return super.performContextMenuAction(id);
+                }
+            };
+        }
+    }
+
+    /** The primary clip as text, sent to the field being edited; the clipboard menu and Ctrl+V use it. */
+    private static void pasteFromClipboard(Context context) {
+        ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null || !cm.hasPrimaryClip() || cm.getPrimaryClip().getItemCount() == 0) return;
+        CharSequence text = cm.getPrimaryClip().getItemAt(0).coerceToText(context);
+        if (text != null) nativeImeText(text.toString());
+    }
+
+    /** Send a key the IME used to Rust; false for the keys left to Android (back, volume, ...). */
+    private static boolean relayKey(Context context, int code, KeyEvent event) {
+        // The keyboard's clipboard and selection actions are these shortcuts (see the FUTO docs).
+        if (code == KeyEvent.KEYCODE_PASTE) {
+            pasteFromClipboard(context);
+            return true;
+        }
+        if (event.isCtrlPressed()) {
+            switch (code) {
+                case KeyEvent.KEYCODE_V:
+                    pasteFromClipboard(context);
+                    return true;
+                case KeyEvent.KEYCODE_A:
+                    nativeImeKey("selectall");
+                    return true;
+                case KeyEvent.KEYCODE_C:
+                    nativeImeKey("copy");
+                    return true;
+                case KeyEvent.KEYCODE_X:
+                    nativeImeKey("cut");
+                    return true;
+                default:
+                    break;
+            }
+        }
+        switch (code) {
+            case KeyEvent.KEYCODE_DEL:
+                nativeImeKey("backspace");
+                return true;
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                nativeImeKey("enter");
+                return true;
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                nativeImeKey("left");
+                return true;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                nativeImeKey("right");
+                return true;
+            case KeyEvent.KEYCODE_DPAD_UP:
+                nativeImeKey("up");
+                return true;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                nativeImeKey("down");
+                return true;
+            default:
+                int c = event.getUnicodeChar();
+                if (c != 0) {
+                    nativeImeText(new String(Character.toChars(c)));
+                    return true;
+                }
+                return false;
         }
     }
 

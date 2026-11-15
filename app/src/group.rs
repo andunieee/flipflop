@@ -63,12 +63,7 @@ impl Component for GroupPage {
         let content = match tab.as_str() {
             "files" => FilesTab { gid: self.id.clone(), files: view.files.clone() }.into_element(),
             "texts" => TextsTab { gid: self.id.clone(), texts: view.texts.clone() }.into_element(),
-            "pad" => rect()
-                .expanded()
-                .spacing(Dim::SPACE2)
-                .content(Content::flex())
-                .child(PadEditor { gid: self.id.clone(), text: view.scratch.clone(), local: view.scratch_local })
-                .child(pad_actions(view.scratch.clone(), nav, self.id.clone()))
+            "pad" => PadEditor { gid: self.id.clone(), text: view.scratch.clone(), local: view.scratch_local }
                 .into_element(),
             "music" => MusicTab { gid: self.id.clone(), music: view.music.clone() }.into_element(),
             "info" => InfoTab { gid: self.id.clone() }.into_element(),
@@ -698,27 +693,6 @@ mod tests {
         assert_eq!(load_draft(&dir, "bb"), "for another group");
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-// ---- scratchpad ------------------------------------------------------------------------------
-
-fn pad_actions(text: String, nav: Nav, gid: String) -> Rect {
-    actions()
-        .child(Btn::secondary("Copy all").icon(Icon::Copy).on_press(move |_| copy(nav, &text)))
-        .child(Btn::secondary("Paste").icon(Icon::Clipboard).on_press(move |_| {
-            // Appended: the editor keeps its own cursor, and a paste there goes through the keyboard.
-            let pasted = flipflop::platform::paste_text();
-            if pasted.is_empty() {
-                return;
-            }
-            let gid = gid.clone();
-            nav.backend().run(move |core| {
-                let mut text = core.scratch(&gid).unwrap_or_default();
-                text.push_str(&pasted);
-                core.set_scratch(&gid, &text);
-                Ok(())
-            });
-        }))
 }
 
 // ---- apps ------------------------------------------------------------------------------------
