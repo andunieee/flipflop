@@ -313,6 +313,9 @@ function size(n) {
 // Files no longer offered that the list shows before "Show more".
 const PAST_FILES = 10;
 
+// What a download is saved as: a folder comes from the app as a zip.
+const saveAs = (f) => (f.kind === "folder" ? f.name + ".zip" : f.name);
+
 function renderFiles() {
   const files = [...state.snap.files].reverse();
   $("n-files").textContent = files.length || "";
@@ -330,7 +333,7 @@ function renderFiles() {
     list.append(el("div", { class: "card row" },
       el("div", { class: "grow" },
         el("div", { class: "name" }, f.name),
-        el("div", { class: "meta" }, size(f.size) + " · " + (mine ? "you" : f.from_name) + (state.me && f.downloaded.includes(state.me.id) ? " · downloaded" : ""))),
+        el("div", { class: "meta" }, (f.kind === "folder" ? "folder · " : "") + size(f.size) + " · " + (mine ? "you" : f.from_name) + (state.me && f.downloaded.includes(state.me.id) ? " · downloaded" : ""))),
       button));
   }
   if (hidden.size) {
@@ -370,12 +373,13 @@ async function request(method, path, opts = {}) {
 async function download(f, button) {
   if (!remote) {
     // The browser does the rest.
-    const a = el("a", { href: base + "dl/" + encodeURIComponent(f.id), download: f.name });
+    const a = el("a", { href: base + "dl/" + encodeURIComponent(f.id), download: saveAs(f) });
     document.body.append(a);
     a.click();
     a.remove();
     return;
   }
+  const name = saveAs(f);
   const label = button.textContent;
   button.setAttribute("aria-disabled", "true");
   const done = (text) => { button.textContent = text; setTimeout(() => { button.textContent = label; button.removeAttribute("aria-disabled"); }, 2000); };
@@ -393,7 +397,7 @@ async function download(f, button) {
     try {
       const parts = [];
       for (let c; (c = await res.chunk()); ) { parts.push(c); progress(c.length); }
-      const a = el("a", { href: URL.createObjectURL(new Blob(parts)), download: f.name });
+      const a = el("a", { href: URL.createObjectURL(new Blob(parts)), download: name });
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
       done("Saved");
@@ -412,8 +416,8 @@ async function download(f, button) {
       else { channel.port1.postMessage({ done: true }); end("Saved"); }
     } catch (e) { channel.port1.postMessage({ error: String(e) }); end("Failed"); }
   };
-  sw.postMessage({ download: { id, name: f.name, size: total } }, [channel.port2]);
-  frame.src = "save/" + id + "/" + encodeURIComponent(f.name);
+  sw.postMessage({ download: { id, name, size: total } }, [channel.port2]);
+  frame.src = "save/" + id + "/" + encodeURIComponent(name);
   document.body.append(frame);
 }
 

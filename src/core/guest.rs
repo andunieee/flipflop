@@ -581,16 +581,14 @@ impl Core {
 
     // ---- files ------------------------------------------------------------------------
 
-    /// Where the bytes of an offer are on this device, for a guest to download.
-    pub(super) fn guest_file(&self, gid: &str, fid: &str) -> Result<(PathBuf, String, u64)> {
+    /// Where the bytes of an offer are on this device, for a guest to download. A folder comes as its
+    /// directory, which the guest gets as a zip of what it holds (`true`).
+    pub(super) fn guest_file(&self, gid: &str, fid: &str) -> Result<(PathBuf, String, u64, bool)> {
         let offer = self
             .with_doc(gid, |d| d.file(fid))
             .context("no such file")?;
         if offer.stopped {
             bail!("no longer shared");
-        }
-        if offer.kind == super::sharing::FOLDER_KIND {
-            bail!("folders cannot be downloaded from the browser");
         }
         if crate::groupdoc::is_music(&offer.kind) {
             bail!("music is played, not downloaded");
@@ -604,7 +602,12 @@ impl Core {
             .find(|s| s.group == gid && s.file == fid)
             .map(|s| s.path.clone())
             .context("not on this device yet")?;
-        Ok((path, offer.name, offer.size))
+        Ok((
+            path,
+            offer.name,
+            offer.size,
+            offer.kind == sharing::FOLDER_KIND,
+        ))
     }
 
     /// A guest finished downloading a file.

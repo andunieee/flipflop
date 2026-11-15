@@ -2,7 +2,8 @@
 //! the page and the app always agree on its layout and its sync protocol. With the `tunnel` feature,
 //! [`Tunnel`] is iroh in the browser: it dials the app through its home relay (browsers have no UDP) and
 //! carries the document's sync messages on the connection's first stream, and the page's downloads and
-//! uploads as HTTP/1.1 exchanges on the following ones, `Connection: close`.
+//! uploads as HTTP/1.1 exchanges on the following ones, `Connection: close` (a body whose length is not
+//! known up front, such as a folder's zip, arrives chunked and is un-chunked here).
 
 use wasm_bindgen::prelude::*;
 
@@ -347,9 +348,18 @@ mod tunnel {
     pub struct Response {
         status: u16,
         headers: Vec<(String, String)>,
-        /// Body bytes that came with the head.
-        leftover: Option<Vec<u8>>,
+        /// Body bytes already read from the stream, not handed out yet.
+        pending: Vec<u8>,
         recv: Arc<tokio::sync::Mutex<RecvStream>>,
+        /// The body is `Transfer-Encoding: chunked` (a stream whose length was not known when it started,
+        /// such as a folder's zip): its framing has to be taken off.
+        chunked: bool,
+        /// In a chunk, how many of its bytes are still to hand out (0: a size line comes next).
+        left: usize,
+        /// The CRLF that follows a chunk's bytes is still to be taken off.
+        crlf: bool,
+        /// The last (empty) chunk arrived.
+        done: bool,
     }
 
     impl Response {
@@ -360,9 +370,78 @@ mod tunnel {
                 return Err(JsError::new("incomplete response head"));
             };
             let status = parsed.code.unwrap_or(500);
+            let chunked = parsed.headers.iter().any(|h| {
+                h.name.eq_ignore_ascii_case("transfer-encoding")
+                    && String::from_utf8_lossy(h.value).to_ascii_lowercase().contains("chunked")
+            });
             let headers = parsed.headers.iter().map(|h| (h.name.to_ascii_lowercase(), String::from_utf8_lossy(h.value).into_owned())).collect();
-            let leftover = buf[head_len..].to_vec();
-            Ok(Response { status, headers, leftover: (!leftover.is_empty()).then_some(leftover), recv: Arc::new(tokio::sync::Mutex::new(recv)) })
+            Ok(Response {
+                status,
+                headers,
+                pending: buf[head_len..].to_vec(),
+                recv: Arc::new(tokio::sync::Mutex::new(recv)),
+                chunked,
+                left: 0,
+                crlf: false,
+                done: false,
+            })
+        }
+
+        /// Reads more of the body into `pending`.
+        async fn more(&mut self) -> Result<(), JsError> {
+            let mut recv = self.recv.lock().await;
+            match recv.read_chunk(1024 * 1024).await.map_err(js_err)? {
+                Some(chunk) => {
+                    self.pending.extend_from_slice(&chunk);
+                    Ok(())
+                }
+                None => Err(JsError::new("the body ended early")),
+            }
+        }
+
+        /// The next piece of a chunked body, its framing taken off.
+        async fn chunked_chunk(&mut self) -> Result<Option<Uint8Array>, JsError> {
+            loop {
+                if self.done {
+                    return Ok(None);
+                }
+                if self.left > 0 {
+                    if self.pending.is_empty() {
+                        self.more().await?;
+                    }
+                    let n = self.left.min(self.pending.len());
+                    let bytes: Vec<u8> = self.pending.drain(..n).collect();
+                    self.left -= n;
+                    if self.left == 0 {
+                        self.crlf = true;
+                    }
+                    return Ok(Some(Uint8Array::from(bytes.as_slice())));
+                }
+                if self.crlf {
+                    while self.pending.len() < 2 {
+                        self.more().await?;
+                    }
+                    if &self.pending[..2] != b"\r\n" {
+                        return Err(JsError::new("bad chunk ending"));
+                    }
+                    self.pending.drain(..2);
+                    self.crlf = false;
+                }
+                // A chunk's size line: hex digits, maybe `;extensions`, then CRLF.
+                if let Some(end) = self.pending.windows(2).position(|w| w == b"\r\n") {
+                    let line = String::from_utf8_lossy(&self.pending[..end]).into_owned();
+                    self.pending.drain(..end + 2);
+                    let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)
+                        .map_err(|_| JsError::new("bad chunk size"))?;
+                    if size == 0 {
+                        self.done = true;
+                        return Ok(None);
+                    }
+                    self.left = size;
+                } else {
+                    self.more().await?;
+                }
+            }
         }
     }
 
@@ -380,7 +459,11 @@ mod tunnel {
 
         /// The next piece of the body; `undefined` at its end.
         pub async fn chunk(&mut self) -> Result<Option<Uint8Array>, JsError> {
-            if let Some(bytes) = self.leftover.take() {
+            if self.chunked {
+                return self.chunked_chunk().await;
+            }
+            if !self.pending.is_empty() {
+                let bytes = std::mem::take(&mut self.pending);
                 return Ok(Some(Uint8Array::from(bytes.as_slice())));
             }
             let mut recv = self.recv.lock().await;
@@ -390,10 +473,9 @@ mod tunnel {
 
         /// The whole body as text.
         pub async fn text(&mut self) -> Result<String, JsError> {
-            let mut body = self.leftover.take().unwrap_or_default();
-            let mut recv = self.recv.lock().await;
-            while let Some(chunk) = recv.read_chunk(1024 * 1024).await.map_err(js_err)? {
-                body.extend_from_slice(&chunk);
+            let mut body = Vec::new();
+            while let Some(chunk) = self.chunk().await? {
+                body.extend_from_slice(&chunk.to_vec());
             }
             Ok(String::from_utf8_lossy(&body).into_owned())
         }

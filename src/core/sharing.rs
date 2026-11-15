@@ -2589,6 +2589,11 @@ impl SendMeter {
         }
     }
 
+    /// Count bytes sent by a writer that does its own I/O (the guest server's zip stream).
+    pub(super) fn add(&self, bytes: u64) {
+        self.done.fetch_add(bytes, Ordering::Relaxed);
+    }
+
     /// Count a prefix that is not read now (a resumed send).
     fn set_done(&self, done: u64) {
         self.done.store(done, Ordering::Relaxed);

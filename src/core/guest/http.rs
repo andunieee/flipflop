@@ -6,15 +6,16 @@
 //!
 //! - `GET /<token>/`                 the page, with `flipflop_web.js` and `flipflop_web_bg.wasm` next to it
 //! - `GET /<token>/ws`               WebSocket: the document's sync messages (LAN)
-//! - `GET /<token>/dl/<file id>`     download an offer
+//! - `GET /<token>/dl/<file id>`     download an offer (a folder as a zip of what it holds, streamed)
 //! - `GET|HEAD /<token>/play/<file id>[/<track>]`  a song of the music tab (or an album's song), ranges
 //!   included, for the page's player
 //! - `PUT /<token>/up?name=<name>`   upload a file (only while the link allows it)
 
 use std::{
     convert::Infallible,
-    io,
+    io::{self, Write as _},
     net::IpAddr,
+    path::PathBuf,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -40,7 +41,11 @@ use tokio_tungstenite::{
 };
 
 use super::{GuestSession, MAX_FRAME, Origin, Out, TAG_CONTROL};
-use crate::core::{Core, music::serve_music, sharing::open_source};
+use crate::core::{
+    Core,
+    music::serve_music,
+    sharing::{self, open_source},
+};
 
 const PAGE: &str = include_str!("page.html");
 const WASM_JS: &str = include_str!("assets/flipflop_web.js");
@@ -214,7 +219,8 @@ enum Body {
     Full(Option<Bytes>),
     Stream {
         rx: mpsc::Receiver<io::Result<Bytes>>,
-        len: u64,
+        /// The body's length, when it is known before streaming it.
+        len: Option<u64>,
     },
     Bytes {
         stream: BoxStream<'static, io::Result<Bytes>>,
@@ -244,7 +250,11 @@ impl hyper::body::Body for Body {
     fn size_hint(&self) -> SizeHint {
         match self {
             Body::Full(data) => SizeHint::with_exact(data.as_ref().map_or(0, |d| d.len() as u64)),
-            Body::Stream { len, .. } | Body::Bytes { len, .. } => SizeHint::with_exact(*len),
+            Body::Stream { len: Some(len), .. } | Body::Bytes { len, .. } => {
+                SizeHint::with_exact(*len)
+            }
+            // Streamed as it is made (a folder's zip): chunked.
+            Body::Stream { len: None, .. } => SizeHint::default(),
         }
     }
 }
@@ -394,10 +404,13 @@ fn upgrade(core: &Core, gid: &str, origin: &Origin, mut req: Request<Incoming>) 
 }
 
 async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
-    let (path, name, size) = match core.guest_file(gid, fid) {
+    let (path, name, size, folder) = match core.guest_file(gid, fid) {
         Ok(found) => found,
         Err(err) => return error(StatusCode::NOT_FOUND, &err.to_string()),
     };
+    if folder {
+        return folder_zip(core, gid, fid, origin, path, name).await;
+    }
     let file = match tokio::task::spawn_blocking(move || open_source(&path)).await {
         Ok(Ok(file)) => tokio::fs::File::from_std(file),
         _ => return error(StatusCode::NOT_FOUND, "The file is not readable here"),
@@ -446,7 +459,7 @@ async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
         drop(tx);
         core.guest_downloaded(&gid, &fid, &guest);
     });
-    let mut res = Response::new(Body::Stream { rx, len });
+    let mut res = Response::new(Body::Stream { rx, len: Some(len) });
     let h = res.headers_mut();
     h.insert(
         header::CONTENT_TYPE,
@@ -458,6 +471,183 @@ async fn download(core: &Core, gid: &str, fid: &str, origin: &Origin) -> Reply {
         h.insert(header::CONTENT_DISPOSITION, v);
     }
     res
+}
+
+/// A folder offered to the group, as a zip the browser saves and opens itself. The listing is read before
+/// answering (an unreadable folder is an error, not a download that stops partway); the zip is written on a
+/// blocking thread, streamed as it is made.
+async fn folder_zip(
+    core: &Core,
+    gid: &str,
+    fid: &str,
+    origin: &Origin,
+    path: PathBuf,
+    name: String,
+) -> Reply {
+    let read = path.clone();
+    let (listing, paths) =
+        match tokio::task::spawn_blocking(move || sharing::walk_folder(&read)).await {
+            Ok(Ok(found)) => found,
+            Ok(Err(err)) => {
+                return error(
+                    StatusCode::NOT_FOUND,
+                    &format!("The folder is not readable here: {err}"),
+                );
+            }
+            Err(_) => {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "The folder could not be read",
+                );
+            }
+        };
+    let total = listing.files.iter().map(|(_, size)| *size).sum();
+    let (tx, rx) = mpsc::channel(8);
+    let (core, gid, fid, guest, guest_name) = (
+        core.clone(),
+        gid.to_owned(),
+        fid.to_owned(),
+        origin.id(),
+        origin.name(),
+    );
+    let file_name = format!("{name}.zip");
+    let shown = file_name.clone();
+    tokio::task::spawn_blocking(move || {
+        let sending = core.track_send(&gid, &fid, &shown, &guest, &guest_name, total);
+        let writer = BodyWriter {
+            tx,
+            buf: Vec::with_capacity(BodyWriter::CHUNK),
+        };
+        match zip_folder(listing, &paths, writer, &sending) {
+            Ok(()) => core.guest_downloaded(&gid, &fid, &guest),
+            Err(err) => tracing::debug!("zip of {shown} for a guest stopped: {err:#}"),
+        }
+    });
+    let mut res = Response::new(Body::Stream { rx, len: None });
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/zip"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Ok(v) = HeaderValue::from_str(&content_disposition(&file_name)) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    res
+}
+
+/// Writes the folder (`listing`, its files at `paths`) as a zip into `writer`, uncompressed (the files are
+/// usually already compressed, and it keeps the zip going out as fast as the disk reads). Counts the files'
+/// bytes, not the zip's own headers, as sent.
+fn zip_folder(
+    listing: sharing::Listing,
+    paths: &[PathBuf],
+    writer: BodyWriter,
+    sending: &sharing::SendMeter,
+) -> anyhow::Result<()> {
+    let mut zip = zip::ZipWriter::new_stream(writer);
+    let folder_options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .unix_permissions(0o755);
+    for dir in &listing.dirs {
+        if let Some(dir) = zip_path(dir) {
+            zip.add_directory(format!("{dir}/"), folder_options)?;
+        }
+    }
+    let mut buf = vec![0u8; CHUNK];
+    for (path, (rel, size)) in paths.iter().zip(&listing.files) {
+        let Some(rel) = zip_path(rel) else {
+            continue;
+        };
+        let options = folder_options
+            .unix_permissions(0o644)
+            .large_file(*size >= u32::MAX as u64);
+        zip.start_file(rel, options)?;
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+        let mut written = 0u64;
+        loop {
+            let n = std::io::Read::read(&mut file, &mut buf)
+                .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+            if n == 0 {
+                break;
+            }
+            zip.write_all(&buf[..n])?;
+            written += n as u64;
+            sending.add(n as u64);
+        }
+        if written != *size {
+            anyhow::bail!("{} changed since it was offered", path.display());
+        }
+    }
+    let mut out = zip.finish()?.into_inner();
+    out.flush()?;
+    Ok(())
+}
+
+/// A path from a folder's listing as a zip entry: `/`-separated, without `.` or `..`, and without what
+/// Windows takes as a separator inside a name.
+fn zip_path(rel: &str) -> Option<String> {
+    let parts: Vec<&str> = rel
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(
+        parts
+            .iter()
+            .map(|p| p.replace(['\\', ':'], "_"))
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// A `std` writer that sends what it writes on the response's channel, a chunk at a time. Used by the zip
+/// writer, which is blocking.
+struct BodyWriter {
+    tx: mpsc::Sender<io::Result<Bytes>>,
+    buf: Vec<u8>,
+}
+
+impl BodyWriter {
+    const CHUNK: usize = 64 * 1024;
+
+    fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.buf.len() + bytes.len() > Self::CHUNK {
+            self.flush_buf()?;
+        }
+        if bytes.len() >= Self::CHUNK {
+            self.tx
+                .blocking_send(Ok(Bytes::copy_from_slice(bytes)))
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the download went away"))
+        } else {
+            self.buf.extend_from_slice(bytes);
+            Ok(())
+        }
+    }
+
+    fn flush_buf(&mut self) -> io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let bytes = Bytes::from(std::mem::take(&mut self.buf));
+        self.tx
+            .blocking_send(Ok(bytes))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the download went away"))
+    }
+}
+
+impl io::Write for BodyWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.send(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buf()
+    }
 }
 
 async fn play(

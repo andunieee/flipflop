@@ -2,6 +2,7 @@
 //! group document, exactly as the page does.
 
 use std::{
+    io::Read as _,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -68,7 +69,38 @@ async fn http(port: u16, method: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>
         .unwrap()
         .parse()
         .unwrap();
-    (status, raw[split..].to_vec())
+    let mut body = raw[split..].to_vec();
+    // A streamed body (a folder's zip) has no length up front.
+    if std::str::from_utf8(&raw[..split])
+        .unwrap()
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        body = dechunk(&body);
+    }
+    (status, body)
+}
+
+fn dechunk(mut raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    while let Some(eol) = raw.windows(2).position(|w| w == b"\r\n") {
+        let size = usize::from_str_radix(
+            std::str::from_utf8(&raw[..eol])
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap(),
+            16,
+        )
+        .unwrap();
+        if size == 0 {
+            break;
+        }
+        let start = eol + 2;
+        out.extend_from_slice(&raw[start..start + size]);
+        raw = &raw[start + size + 2..];
+    }
+    out
 }
 
 type Ws = tokio_tungstenite::WebSocketStream<TcpStream>;
@@ -304,6 +336,30 @@ async fn a_guest_syncs_downloads_and_uploads_over_the_lan() {
         http(port, "GET", &format!("/{token}/dl/nope"), b"").await.0,
         404
     );
+
+    // A folder comes as a zip of what it holds, empty directories included.
+    let folder = dir.path().join("papers");
+    std::fs::create_dir_all(folder.join("2026")).unwrap();
+    std::fs::create_dir_all(folder.join("empty")).unwrap();
+    std::fs::write(folder.join("readme.txt"), b"hello").unwrap();
+    std::fs::write(folder.join("2026/big.bin"), b"0123456789").unwrap();
+    let folder_id = host
+        .offer_file(&gid, folder, None, "file", false)
+        .await
+        .unwrap();
+    let (status, body) = http(port, "GET", &format!("/{token}/dl/{folder_id}"), b"").await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(body)).unwrap();
+    let mut readme = String::new();
+    zip.by_name("readme.txt")
+        .unwrap()
+        .read_to_string(&mut readme)
+        .unwrap();
+    assert_eq!(readme, "hello");
+    assert_eq!(zip.by_name("2026/big.bin").unwrap().size(), 10);
+    assert!(zip.by_name("empty/").is_ok(), "the empty folder is missing");
+    page.listen(500).await;
+    assert!(page.doc.files().iter().any(|f| f.id == folder_id));
 
     // A song of the music tab plays in the page's player, and is never downloaded.
     let song_path = dir.path().join("song.mp3");
