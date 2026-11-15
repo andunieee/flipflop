@@ -23,6 +23,7 @@ use freya::{
 };
 
 use crate::{
+    backend::TYPING_PAUSE,
     hyper::{HyperView, Session},
     icons::Icon,
     music::MusicTab,
@@ -509,6 +510,32 @@ fn thumbnail(path: &Path, px: i32) -> Option<Vec<u8>> {
 
 // ---- texts -----------------------------------------------------------------------------------
 
+/// Where a group's unsent text waits between runs (Android restarts apps at will).
+fn draft_path(data_dir: &Path, gid: &str) -> PathBuf {
+    data_dir.join("drafts").join(gid)
+}
+
+fn load_draft(data_dir: &Path, gid: &str) -> String {
+    std::fs::read_to_string(draft_path(data_dir, gid)).unwrap_or_default()
+}
+
+/// Keep `text` as the group's draft; empty text forgets it. Written aside and renamed, so a kill
+/// mid-write cannot leave half a draft behind.
+fn save_draft(data_dir: &Path, gid: &str, text: &str) {
+    let path = draft_path(data_dir, gid);
+    if text.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let aside = path.with_extension("tmp");
+    if std::fs::write(&aside, text).is_ok() {
+        let _ = std::fs::rename(&aside, &path);
+    }
+}
+
 #[derive(PartialEq)]
 struct TextsTab {
     gid: String,
@@ -518,15 +545,43 @@ struct TextsTab {
 impl Component for TextsTab {
     fn render(&self) -> impl IntoElement {
         let nav = use_consume::<Nav>();
-        let mut draft = use_state(String::new);
+        let dir = nav.backend().data_dir().to_owned();
         let gid = self.gid.clone();
-        let send = move |_| {
-            let text = draft.peek().clone();
-            if text.is_empty() {
-                return;
+        let shown = dir.clone();
+        let shown_gid = gid.clone();
+        let mut draft = use_state(move || load_draft(&shown, &shown_gid));
+        let send = {
+            let (dir, gid) = (dir.clone(), gid.clone());
+            move |_| {
+                let text = draft.peek().clone();
+                if text.is_empty() {
+                    return;
+                }
+                nav.backend().run(|core| core.send_text(&gid, &text));
+                draft.set(String::new());
+                // Settled: drop a save still waiting on the field, and clear it now, so the sent
+                // text cannot come back.
+                let field = format!("draft:{gid}");
+                let (dir, gid) = (dir.clone(), gid.clone());
+                nav.backend().settled(&field, move || save_draft(&dir, &gid, ""));
             }
-            nav.backend().run(|core| core.send_text(&gid, &text));
-            draft.set(String::new());
+        };
+        let typed = {
+            let (dir, gid) = (dir.clone(), gid.clone());
+            move |text: String| {
+                let (dir, gid) = (dir.clone(), gid.clone());
+                let saved = text.clone();
+                nav.backend().after_typing(format!("draft:{gid}"), TYPING_PAUSE, move || {
+                    save_draft(&dir, &gid, &saved)
+                });
+                draft.set(text)
+            }
+        };
+        let pasted = move |_| {
+            draft.write().push_str(&flipflop::platform::paste_text());
+            let text = draft.peek().clone();
+            let (dir, gid) = (dir.clone(), gid.clone());
+            nav.backend().settled(&format!("draft:{gid}"), move || save_draft(&dir, &gid, &text));
         };
         ScrollView::new()
             .expanded()
@@ -534,17 +589,14 @@ impl Component for TextsTab {
             .child(
                 card().child(
                     card_body(Dim::SPACE2)
-                        .child(
-                            area(draft, "A link, a code, anything to paste on the other devices…", move |text| {
-                                draft.set(text)
-                            }),
-                        )
+                        .child(area(
+                            draft,
+                            "A link, a code, anything to paste on the other devices…",
+                            typed,
+                        ))
                         .child(
                             actions()
-                                .child(Btn::secondary("Paste").icon(Icon::Clipboard).on_press(move |_| {
-                                    let pasted = flipflop::platform::paste_text();
-                                    draft.write().push_str(&pasted);
-                                }))
+                                .child(Btn::secondary("Paste").icon(Icon::Clipboard).on_press(pasted))
                                 .child(
                                     Btn::primary("Send")
                                         .icon(Icon::Send)
@@ -556,6 +608,11 @@ impl Component for TextsTab {
             )
             .children(self.texts.iter().map(|t| text_card(t, &self.gid, nav)))
             .maybe(self.texts.is_empty(), |el| el.child(hint_center("Nothing sent or received yet.")))
+    }
+
+    /// A page for another group gets its own draft, not the one still in the field.
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&self.gid)
     }
 }
 
@@ -619,6 +676,28 @@ fn text_card(t: &TextView, gid: &str, nav: Nav) -> Element {
                 ),
         )
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drafts_are_kept_per_group_until_sent() {
+        let dir = std::env::temp_dir().join(format!("flipflop-drafts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(load_draft(&dir, "aa"), "", "no draft yet");
+        save_draft(&dir, "aa", "a link");
+        save_draft(&dir, "bb", "for another group");
+        // A restart reads back what was typed.
+        assert_eq!(load_draft(&dir, "aa"), "a link");
+        assert_eq!(load_draft(&dir, "bb"), "for another group");
+        // Sending empties only that group's draft.
+        save_draft(&dir, "aa", "");
+        assert_eq!(load_draft(&dir, "aa"), "");
+        assert_eq!(load_draft(&dir, "bb"), "for another group");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 // ---- scratchpad ------------------------------------------------------------------------------

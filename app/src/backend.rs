@@ -53,6 +53,9 @@ pub enum Msg {
 /// A webcam preview frame: width, height, RGBA.
 pub type Frame = Option<(u32, u32, bytes::Bytes)>;
 
+/// How long typing in a field must pause before what was typed is saved.
+pub(crate) const TYPING_PAUSE: Duration = Duration::from_millis(400);
+
 /// What counts as a photo or video when picking or dropping files on the desktop.
 #[cfg(not(target_os = "android"))]
 const MEDIA_EXTENSIONS: &[&str] = &[
@@ -71,7 +74,7 @@ struct Inner {
     core: OnceLock<Core>,
     ble_status: Mutex<String>,
     /// Counts the keystrokes in each text field (by name, id), so only the last one typed is saved
-    /// (see [`Backend::typed`]).
+    /// (see [`Backend::after_typing`]).
     typing: Mutex<HashMap<String, u64>>,
     /// The group a system file picker was opened for (Android reports picks without one).
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -296,21 +299,36 @@ impl Backend {
     /// Run `save` once typing in `field` pauses. Every keystroke calls this; only the last value of
     /// a burst is saved, so typing does not hit the disk (and the peers) once per character.
     fn typed(&self, field: String, save: impl FnOnce(&Core) + Send + 'static) {
+        let Some(core) = self.core() else { return };
+        self.after_typing(field, TYPING_PAUSE, move || save(&core));
+    }
+
+    /// Run `f` once typing in `field` pauses for `after`. Every keystroke calls this; only the last
+    /// one's `f` runs, so typing does not hit the disk (and the peers) once per character.
+    pub(crate) fn after_typing(&self, field: String, after: Duration, f: impl FnOnce() + Send + 'static) {
         let edit = {
             let mut typing = self.0.typing.lock().unwrap();
             let edit = typing.entry(field.clone()).or_default();
             *edit += 1;
             *edit
         };
-        let Some(core) = self.core() else { return };
         let inner = self.0.clone();
         self.0.rt.spawn(async move {
-            tokio::time::sleep(Duration::from_millis(400)).await;
-            let latest = inner.typing.lock().unwrap().get(&field).copied() == Some(edit);
-            if latest {
-                save(&core);
+            tokio::time::sleep(after).await;
+            // Held while `f` runs, so a save that has been replaced cannot land after the new one.
+            let typing = inner.typing.lock().unwrap();
+            if typing.get(&field).copied() == Some(edit) {
+                f();
             }
         });
+    }
+
+    /// What was typed in `field` is settled: drop the save still waiting for it, and run `f` while
+    /// holding the field, so none that lost its place can land after this one.
+    pub(crate) fn settled(&self, field: &str, f: impl FnOnce()) {
+        let mut typing = self.0.typing.lock().unwrap();
+        *typing.entry(field.to_owned()).or_default() += 1;
+        f();
     }
 
     /// Rename this device as its name is typed. An empty name keeps the current one (the field is

@@ -2,11 +2,6 @@
 
 set positional-arguments
 
-default:
-    @just --list
-
-# --- Desktop ---
-
 # run the desktop app (Freya UI over the Rust core). FLIPFLOP_PHONE_LAYOUT=1 shows the phone layout.
 desktop *args:
     cargo run -p flipflop-app --bin flipflop-gui -- {{args}}
