@@ -4,14 +4,20 @@
 //! goes away with the connection.
 //!
 //! - [`Msg::Listen`]: what a sharer plays (or that they stopped sharing), sent on every change and
-//!   now and then while it plays, so followers correct their drift and late comers catch up.
+//!   every couple of seconds, so followers correct their drift and late comers catch up. What is not
+//!   said again soon expires. Numbered: each goes on its own stream, and one overtaken by a later one
+//!   is old news.
 //! - [`Msg::Follow`]: a follower tells the sharer they listen along (or no longer do).
 //! - [`Msg::Ping`] / [`Msg::Pong`]: how far each peer's clock is from ours, so a moment in a song
-//!   ("at `at_ms` it was at `position_ms`") means the same on both sides.
+//!   ("at `at_ms` it was at `position_ms`") means the same on both sides. Times are on
+//!   [`clock_ms`], which never jumps.
 
 use std::{
     collections::{BTreeSet, HashMap},
-    sync::Mutex,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -23,11 +29,27 @@ use crate::groupdoc::now_ms;
 
 /// Clock samples kept per peer: the one with the shortest round trip says the most.
 const SAMPLES: usize = 8;
-/// How old the freshest clock sample may get while listening along before we ask again.
+/// How old the freshest clock sample of a sharer may get before we ask again.
 const RESAMPLE_MS: i64 = 60_000;
 /// How long what a sharer said holds without them saying it again (they do every couple of
 /// seconds): a sharer gone quiet is no longer listed.
 const EXPIRE: Duration = Duration::from_secs(5);
+/// Pings when starting to listen along, for a good clock estimate from the start...
+const BURST: usize = 5;
+const BURST_GAP: Duration = Duration::from_millis(200);
+/// ...and then now and then while listening along, as the clocks drift apart.
+const REPING: Duration = Duration::from_secs(10);
+/// A new clock estimate this far from the last one changes what followers aim at.
+const OFFSET_CHANGED_MS: i64 = 5;
+
+/// Our clock for listening along, in ms: the wall clock when the app started, run on by a
+/// monotonic one, so it never jumps (the wall clock does, when the phone sets it), yet starts out
+/// close to everyone else's.
+pub fn clock_ms() -> i64 {
+    static START: OnceLock<(i64, Instant)> = OnceLock::new();
+    let (wall, at) = START.get_or_init(|| (now_ms(), Instant::now()));
+    wall + at.elapsed().as_millis() as i64
+}
 
 /// What a sharer plays.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -40,7 +62,7 @@ pub struct Listening {
     pub from_name: String,
     /// Where in the song it was at `at_ms`.
     pub position_ms: u64,
-    /// When, on the sender's clock (once received: on ours).
+    /// When, on the sender's [`clock_ms`] (as handed to the UI: on ours).
     pub at_ms: i64,
     pub paused: bool,
 }
@@ -76,8 +98,12 @@ struct Sample {
 pub(super) struct Listen {
     /// What we share, per group.
     mine: Mutex<HashMap<String, Listening>>,
-    /// What the others share, per group and sharer, on our clock, and when we heard it.
+    /// What the others share, per group and sharer, on their clock, and when we heard it.
     heard: Mutex<HashMap<String, HashMap<EndpointId, (Listening, Instant)>>>,
+    /// The number of the latest [`Msg::Listen`] heard per group and sharer, a stop's too.
+    numbers: Mutex<HashMap<(String, EndpointId), u64>>,
+    /// The number of our latest [`Msg::Listen`].
+    number: AtomicU64,
     /// Who listens along with us, per group.
     followers: Mutex<HashMap<String, BTreeSet<EndpointId>>>,
     /// Whom we listen along with: told again when they reconnect.
@@ -97,6 +123,25 @@ fn sample(t0: i64, t1: i64, t3: i64) -> Sample {
 /// Their clock minus ours, from the sample with the shortest round trip.
 fn best_offset(samples: &[Sample]) -> i64 {
     samples.iter().min_by_key(|s| s.rtt).map_or(0, |s| s.offset)
+}
+
+impl Listen {
+    /// Increasing, over restarts too (it starts from the time), so a peer that missed our going
+    /// away does not take what we say next for old news.
+    fn next_number(&self) -> u64 {
+        self.number
+            .fetch_max(now_ms().max(0) as u64 * 1000, Ordering::SeqCst);
+        self.number.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Their clock minus ours, as best known; none before they answered a ping.
+    fn offset(&self, peer: &EndpointId) -> Option<i64> {
+        let clocks = self.clocks.lock().unwrap();
+        clocks
+            .get(peer)
+            .filter(|s| !s.is_empty())
+            .map(|s| best_offset(s))
+    }
 }
 
 impl Core {
@@ -126,6 +171,7 @@ impl Core {
         let msg = Msg::Listen {
             group: gid.to_owned(),
             now,
+            number: listen.next_number(),
         };
         for peer in self.group_peers(gid) {
             self.send_soon(peer, msg.clone());
@@ -143,7 +189,7 @@ impl Core {
             }
         }
         if on {
-            self.ping(sharer);
+            self.keep_clock(gid, sharer);
         }
         self.send_soon(
             sharer,
@@ -154,7 +200,7 @@ impl Core {
         );
     }
 
-    /// Who shares what they play in `gid`, and who listens along with us there.
+    /// Who shares what they play in `gid` (on our clock), and who listens along with us there.
     pub fn listening(&self, gid: &str) -> (Vec<ListenView>, Vec<String>) {
         let names: HashMap<String, String> =
             self.with_doc(gid, |d| d.members()).into_iter().collect();
@@ -165,17 +211,25 @@ impl Core {
                 .unwrap_or_else(|| id.fmt_short().to_string())
         };
         let listen = &self.0.listen;
-        let mut sharers: Vec<ListenView> = listen
+        let heard: Vec<(EndpointId, Listening)> = listen
             .heard
             .lock()
             .unwrap()
             .get(gid)
             .into_iter()
             .flatten()
-            .map(|(id, (now, _))| ListenView {
-                sharer: *id,
-                name: name(id),
-                now: now.clone(),
+            .map(|(id, (now, _))| (*id, now.clone()))
+            .collect();
+        let mut sharers: Vec<ListenView> = heard
+            .into_iter()
+            .map(|(id, now)| ListenView {
+                sharer: id,
+                name: name(&id),
+                // With what we know of their clock now, not when they said it.
+                now: Listening {
+                    at_ms: now.at_ms - listen.offset(&id).unwrap_or(0),
+                    ..now
+                },
             })
             .collect();
         sharers.sort_by(|a, b| a.name.cmp(&b.name));
@@ -212,28 +266,58 @@ impl Core {
     }
 
     fn ping(&self, peer: EndpointId) {
-        self.send_soon(peer, Msg::Ping { t0: now_ms() });
+        self.send_soon(peer, Msg::Ping { t0: clock_ms() });
     }
 
-    pub(super) fn on_listen(&self, from: EndpointId, gid: String, now: Option<Listening>) {
+    /// Listening along with `sharer` in `gid`: measure their clock a few times now, then now and
+    /// then for as long as it lasts.
+    fn keep_clock(&self, gid: &str, sharer: EndpointId) {
+        let this = self.clone();
+        let followed = Some((gid.to_owned(), sharer));
+        tokio::spawn(async move {
+            for n in 0.. {
+                if *this.0.listen.following.lock().unwrap() != followed {
+                    return;
+                }
+                this.ping(sharer);
+                tokio::time::sleep(if n + 1 < BURST { BURST_GAP } else { REPING }).await;
+            }
+        });
+    }
+
+    pub(super) fn on_listen(
+        &self,
+        from: EndpointId,
+        gid: String,
+        now: Option<Listening>,
+        number: u64,
+    ) {
         if !self.has_group(&gid) || !self.group_peers(&gid).contains(&from) {
             return;
         }
-        let clock = {
+        // Overtaken by a later one? (0: from a version that did not number them.)
+        if number > 0 {
+            let mut numbers = self.0.listen.numbers.lock().unwrap();
+            let last = numbers.entry((gid.clone(), from)).or_default();
+            if number <= *last {
+                return;
+            }
+            *last = number;
+        }
+        let taken = {
             let clocks = self.0.listen.clocks.lock().unwrap();
             clocks
                 .get(&from)
-                .map(|s| (best_offset(s), s.iter().map(|s| s.taken).max().unwrap_or(0)))
+                .and_then(|s| s.iter().map(|s| s.taken).max())
         };
-        if clock.is_none_or(|(_, taken)| now_ms() - taken > RESAMPLE_MS) {
+        if taken.is_none_or(|taken| clock_ms() - taken > RESAMPLE_MS) {
             self.ping(from);
         }
         {
             let mut heard = self.0.listen.heard.lock().unwrap();
             let group = heard.entry(gid.clone()).or_default();
             match now {
-                Some(mut now) => {
-                    now.at_ms -= clock.map_or(0, |(offset, _)| offset);
+                Some(now) => {
                     group.insert(from, (now, Instant::now()));
                     let this = self.clone();
                     let gid = gid.clone();
@@ -289,19 +373,42 @@ impl Core {
     }
 
     pub(super) fn on_ping(&self, from: EndpointId, t0: i64) {
-        self.send_soon(from, Msg::Pong { t0, t1: now_ms() });
+        self.send_soon(from, Msg::Pong { t0, t1: clock_ms() });
     }
 
     pub(super) fn on_pong(&self, from: EndpointId, t0: i64, t1: i64) {
-        let t3 = now_ms();
+        let t3 = clock_ms();
         if t0 > t3 {
             return;
         }
-        let mut clocks = self.0.listen.clocks.lock().unwrap();
-        let samples = clocks.entry(from).or_default();
-        samples.push(sample(t0, t1, t3));
-        if samples.len() > SAMPLES {
-            samples.remove(0);
+        let listen = &self.0.listen;
+        let before = listen.offset(&from);
+        {
+            let mut clocks = listen.clocks.lock().unwrap();
+            let samples = clocks.entry(from).or_default();
+            samples.push(sample(t0, t1, t3));
+            if samples.len() > SAMPLES {
+                samples.remove(0);
+            }
+        }
+        let after = listen.offset(&from);
+        if before
+            .zip(after)
+            .is_some_and(|(b, a)| (a - b).abs() < OFFSET_CHANGED_MS)
+        {
+            return;
+        }
+        // What they share is somewhere else on our clock now.
+        let groups: Vec<String> = listen
+            .heard
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, sharers)| sharers.contains_key(&from))
+            .map(|(gid, _)| gid.clone())
+            .collect();
+        for gid in groups {
+            self.emit_listening(&gid);
         }
     }
 
@@ -320,17 +427,19 @@ impl Core {
         for (gid, now) in mine {
             if self.group_peers(&gid).contains(&peer) {
                 // Where it is now, not where it was when last told.
-                let at = now_ms();
+                let at = clock_ms();
                 let now = Listening {
                     position_ms: now.position_at(at),
                     at_ms: at,
                     ..now
                 };
+                let number = self.0.listen.next_number();
                 self.send_soon(
                     peer,
                     Msg::Listen {
                         group: gid,
                         now: Some(now),
+                        number,
                     },
                 );
             }
@@ -339,6 +448,7 @@ impl Core {
         if let Some((gid, sharer)) = following
             && sharer == peer
         {
+            self.keep_clock(&gid, sharer);
             self.send_soon(
                 peer,
                 Msg::Follow {
@@ -363,6 +473,12 @@ impl Core {
             }
         }
         self.0.listen.clocks.lock().unwrap().remove(&peer);
+        self.0
+            .listen
+            .numbers
+            .lock()
+            .unwrap()
+            .retain(|(_, from), _| *from != peer);
         for gid in touched {
             self.emit_listening(&gid);
         }
@@ -382,6 +498,15 @@ mod tests {
         let slow = sample(2_000, 2_900, 2_600);
         assert_eq!(best_offset(&[slow, s]), 500);
         assert_eq!(best_offset(&[]), 0);
+    }
+
+    #[test]
+    fn numbers_only_grow() {
+        let listen = Listen::default();
+        let first = listen.next_number();
+        // From the time: above what a run before this one said.
+        assert!(first > (now_ms() as u64 - 1_000) * 1000);
+        assert!(listen.next_number() > first);
     }
 
     #[test]

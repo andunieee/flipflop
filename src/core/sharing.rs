@@ -411,6 +411,10 @@ pub(super) struct DownloadRequest {
     /// The downloader understands the reply header with the start offset (see [`Core::serve`]).
     #[serde(default)]
     pub(super) resume: bool,
+    /// Stop before this byte of the stream; none: go on to its end. A player wants a piece of a
+    /// song, and the rest of a whole album sent unasked fills the connection for everything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) until: Option<u64>,
 }
 
 impl Core {
@@ -1979,6 +1983,7 @@ impl Core {
             file: fid.to_owned(),
             from: existing,
             resume: true,
+            until: None,
         })?;
         tx.write_all(&request).await.map_err(|e| anyhow!("{e}"))?;
         tx.finish().map_err(|e| anyhow!("{e}"))?;
@@ -2303,6 +2308,9 @@ impl Core {
         } else {
             0
         };
+        let end = request
+            .until
+            .map_or(stream_len, |u| u.clamp(start, stream_len));
         // A resumed send starts part-way, so the sender's bar does too.
         sending.set_done(start.saturating_sub(listing_len));
         let mut header = vec![if request.resume { 2u8 } else { 0u8 }];
@@ -2312,11 +2320,11 @@ impl Core {
             header.extend_from_slice(&stream_len.to_be_bytes());
         }
         tx.write_all(&header).await?;
-        if start >= stream_len {
+        if start >= end {
             return Ok(Some(sending));
         }
         if let Some((listing, paths)) = listing {
-            serve_folder(listing, paths, listing_len, start, tx, &sending).await?;
+            serve_folder(listing, paths, listing_len, start, end, tx, &sending).await?;
             return Ok(Some(sending));
         }
         let mut file = tokio::fs::File::from_std(
@@ -2329,7 +2337,7 @@ impl Core {
         }
         file.seek(SeekFrom::Start(start)).await?;
         let body = ZstdEncoder::with_quality(
-            BufReader::with_capacity(CHUNK, sending.counted(file)),
+            BufReader::with_capacity(CHUNK, sending.counted(file.take(end - start))),
             Level::Precise(1),
         );
         tokio::io::copy_buf(&mut BufReader::with_capacity(CHUNK, body), tx).await?;
@@ -2726,6 +2734,7 @@ async fn serve_folder(
     paths: Vec<PathBuf>,
     listing_len: u64,
     start: u64,
+    end: u64,
     tx: &mut SendStream,
     sending: &SendMeter,
 ) -> Result<()> {
@@ -2736,21 +2745,27 @@ async fn serve_folder(
     if start < listing_len {
         let bytes = listing.encode();
         let from = start.min(bytes.len() as u64) as usize;
-        body.write_all(&bytes[from..]).await?;
+        let to = end.min(bytes.len() as u64) as usize;
+        body.write_all(&bytes[from..to.max(from)]).await?;
     }
     let mut pos = listing_len;
     for (path, (_, size)) in paths.iter().zip(&listing.files) {
+        if pos >= end {
+            break;
+        }
         if pos + size <= start {
             pos += size;
             continue;
         }
         let skip = start.saturating_sub(pos).min(*size);
+        // The last file asked for, maybe only its beginning.
+        let upto = (*size).min(end - pos);
         let mut file = tokio::fs::File::open(path).await?;
         file.set_max_buf_size(CHUNK);
         if skip > 0 {
             file.seek(SeekFrom::Start(skip)).await?;
         }
-        let left = *size - skip;
+        let left = upto - skip;
         let mut reader = BufReader::with_capacity(CHUNK, sending.counted(file.take(left)));
         if tokio::io::copy_buf(&mut reader, &mut body).await? != left {
             bail!("folder changed since it was offered");

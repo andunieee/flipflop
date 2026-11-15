@@ -1,5 +1,7 @@
 //! The pages that are not a group's: Home, Groups, Peers, Add a peer, Settings, and the webcam view.
 
+use std::collections::HashMap;
+
 use flipflop::core::{GroupInfo, InviteInfo, Peer, TransferItem, Unseen};
 use freya::{elements::image::ImageHandle, engine::prelude::AlphaType, prelude::*, radio::use_radio};
 
@@ -153,7 +155,7 @@ fn home_card(item: &Unseen, nav: Nav) -> Element {
 }
 
 /// A file moving (or waiting its turn): its progress, opening the group's files.
-fn transfer_card(t: &TransferItem, detail: String, nav: Nav) -> Element {
+fn transfer_card(t: &TransferItem, detail: String, nav: Nav, key: String) -> Element {
     let (c, d) = look();
     let gid = t.group.clone();
     let tile = match t.kind.as_str() {
@@ -164,7 +166,7 @@ fn transfer_card(t: &TransferItem, detail: String, nav: Nav) -> Element {
     };
     let progress = transfer_progress(t);
     ClickCard::new(move |_| nav.open_group(&gid, Some("files")))
-        .key(format!("transfer{}{}{}", t.group, t.kind, t.name))
+        .key(key)
         .child(card_row(
             rect()
                 .horizontal()
@@ -227,7 +229,14 @@ impl Component for HomePage {
         if !m.transfers.is_empty() {
             items.push(overline("TRANSFERS").into_element());
         }
-        items.extend(m.transfers.iter().map(|t| transfer_card(t, m.transfer_detail(t), nav)));
+        // The same song can stream to the same peer more than once (a player reads it in pieces).
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        items.extend(m.transfers.iter().map(|t| {
+            let key = format!("transfer{}{}{}{}", t.group, t.kind, t.peer, t.name);
+            let n = seen.entry(key.clone()).or_default();
+            *n += 1;
+            transfer_card(t, m.transfer_detail(t), nav, format!("{key}#{n}"))
+        }));
         if has_news {
             items.push(overline("NEW").into_element());
         }

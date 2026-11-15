@@ -40,7 +40,7 @@ use crate::{
 
 pub use crate::state::MemberState;
 pub use guest::{GUEST_ALPN, GuestInfo, GuestPerson, is_guest};
-pub use listen::{ListenView, Listening};
+pub use listen::{ListenView, Listening, clock_ms};
 pub use music::AUDIO_EXTENSIONS;
 pub use sharing::{
     AppView, DocMember, FileView, GroupView, SendView, TabView, TextView, TransferItem,
@@ -175,6 +175,9 @@ enum Msg {
     Listen {
         group: String,
         now: Option<Listening>,
+        /// Increasing: one that arrives after a later one is dropped.
+        #[serde(default)]
+        number: u64,
     },
     /// "I listen along with what you share in `group`" / "no longer".
     Follow {
@@ -863,7 +866,9 @@ impl Core {
                     Ok(Msg::GroupReply { group, accept }) => this.on_reply(id, group, accept),
                     Ok(Msg::Pair) => this.on_pair(id, true),
                     Ok(Msg::Unpair) => this.on_pair(id, false),
-                    Ok(Msg::Listen { group, now }) => this.on_listen(id, group, now),
+                    Ok(Msg::Listen { group, now, number }) => {
+                        this.on_listen(id, group, now, number)
+                    }
                     Ok(Msg::Follow { group, on }) => this.on_follow(id, group, on),
                     Ok(Msg::Ping { t0 }) => this.on_ping(id, t0),
                     Ok(Msg::Pong { t0, t1 }) => this.on_pong(id, t0, t1),

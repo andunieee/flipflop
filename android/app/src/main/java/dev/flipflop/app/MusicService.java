@@ -19,8 +19,11 @@ import android.media.MediaPlayer;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.net.wifi.WifiManager;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.core.app.ServiceCompat;
@@ -64,9 +67,36 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
     private static boolean paused = false;
     /** Where to start the song, in ms (listening along starts it midway). */
     private static long startAt = 0;
+    /** How fast to play, the pitch kept (listening along catches up a little faster). */
+    private static float speed = 1f;
 
     private static MusicService running;
     private static boolean starting = false;
+
+    /** Where the song was (ms), when (on `SystemClock.elapsedRealtime`), and how fast it went on from
+     * there: where it is now, for any thread, without asking the player, which can be busy a while. */
+    private static final class Clock {
+        final long position;
+        final long at;
+        final float rate;
+
+        Clock(long position, long at, float rate) {
+            this.position = position;
+            this.at = at;
+            this.rate = rate;
+        }
+    }
+    private static volatile Clock clock = null;
+    /** How often the clock is set again from the player while it plays. */
+    private static final long CLOCK_EVERY_MS = 1000;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Runnable tick = new Runnable() {
+        @Override
+        public void run() {
+            mark();
+            if (player != null && prepared && !paused) main.postDelayed(this, CLOCK_EVERY_MS);
+        }
+    };
 
     private MediaPlayer player;
     /** The player has the song and can start. */
@@ -119,14 +149,29 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
 
     /** Where the song is, in ms; -1 before it can play. Called from any thread. */
     static long position() {
-        MusicService service = running;
-        MediaPlayer mp = service == null ? null : service.player;
-        if (mp == null || !service.prepared) return -1;
-        try {
-            return mp.getCurrentPosition();
-        } catch (IllegalStateException e) {
-            return -1;
+        Clock c = clock;
+        if (c == null) return -1;
+        return c.position + (long) ((SystemClock.elapsedRealtime() - c.at) * c.rate);
+    }
+
+    /** Set the clock from the player. */
+    private void mark() {
+        if (player == null || !prepared) {
+            clock = null;
+            return;
         }
+        try {
+            float rate = player.isPlaying() ? speed : 0f;
+            clock = new Clock(player.getCurrentPosition(), SystemClock.elapsedRealtime(), rate);
+        } catch (IllegalStateException e) {
+            clock = null;
+        }
+    }
+
+    /** Play faster or slower; 1 is as recorded. */
+    static void speed(float newSpeed) {
+        speed = newSpeed;
+        if (running != null) running.applySpeed();
     }
 
     /** Go to `ms` in the song; before it can play, start there. */
@@ -136,6 +181,9 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
             return;
         }
         running.player.seekTo(ms, MediaPlayer.SEEK_CLOSEST);
+        // Where it lands, until the player says.
+        Clock c = clock;
+        clock = new Clock(ms, SystemClock.elapsedRealtime(), c == null ? 0f : c.rate);
     }
 
     static void stop() {
@@ -233,6 +281,9 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
         player.setOnPreparedListener(this);
         player.setOnCompletionListener(this);
         player.setOnErrorListener(this);
+        player.setOnSeekCompleteListener(mp -> {
+            if (mp == player) mark();
+        });
         try {
             // Not the URL: a stream it cannot measure, it cannot seek in.
             player.setDataSource(new HttpSource(url));
@@ -260,6 +311,7 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
         if (mp != player) return;
         prepared = true;
         if (startAt > 0) mp.seekTo(startAt, MediaPlayer.SEEK_CLOSEST);
+        clock = new Clock(startAt, SystemClock.elapsedRealtime(), 0f);
         startAt = 0;
         nativeMusicEvent(ticket, EVENT_LOADED, "");
         applyPause();
@@ -289,12 +341,29 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
             pausedForFocus = false;
             player.setVolume(1f, 1f);
             player.start();
+            applySpeed();
         } else {
             // Someone else holds the sound (a call): stay paused, and say so.
             paused = true;
             nativeMusicEvent(ticket, EVENT_PAUSED, "");
         }
+        mark();
+        main.removeCallbacks(tick);
+        if (!paused) main.postDelayed(tick, CLOCK_EVERY_MS);
         show(paused ? PlaybackState.STATE_PAUSED : PlaybackState.STATE_PLAYING);
+    }
+
+    /** Only while it plays: a paused player given a speed starts. */
+    private void applySpeed() {
+        if (player == null || !prepared || !player.isPlaying()) return;
+        try {
+            if (player.getPlaybackParams().getSpeed() != speed) {
+                player.setPlaybackParams(player.getPlaybackParams().setSpeed(speed));
+                mark();
+            }
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            Log.w(TAG, "cannot play at " + speed, e);
+        }
     }
 
     /** Paused by Android or the user's surroundings, not by Rust: tell it. */
@@ -384,6 +453,8 @@ public class MusicService extends Service implements MediaPlayer.OnPreparedListe
     /** Let the current song go (not the service). */
     private void release() {
         prepared = false;
+        clock = null;
+        main.removeCallbacks(tick);
         if (player != null) {
             player.release();
             player = null;

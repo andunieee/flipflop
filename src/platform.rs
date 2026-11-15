@@ -378,6 +378,14 @@ mod android {
         });
     }
 
+    /// Play faster or slower (1: as recorded), the pitch kept.
+    pub fn music_speed(speed: f32) {
+        with_activity(|env, a| {
+            env.call_method(a, "musicSpeed", "(F)V", &[JValue::Float(speed)])
+                .map(|_| ())
+        });
+    }
+
     /// Stop playing, and let the notification go.
     pub fn music_stop() {
         call_void("musicStop");

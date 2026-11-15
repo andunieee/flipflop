@@ -3,10 +3,7 @@ use std::{
     time::Duration,
 };
 
-use flipflop::{
-    core::{Core, Listening, MemberState},
-    groupdoc::now_ms,
-};
+use flipflop::core::{Core, Listening, MemberState, clock_ms};
 use tokio::time::{sleep, timeout};
 
 struct Dir(PathBuf);
@@ -78,7 +75,7 @@ async fn listen_along() {
     let (b, _db) = node("bob").await;
     let gid = group_of(&a, &b).await;
 
-    let at = now_ms();
+    let at = clock_ms();
     a.share_listen(
         &gid,
         Some(Listening {
@@ -119,7 +116,7 @@ async fn listen_along() {
             name: "Song.opus".into(),
             from_name: "you".into(),
             position_ms: 0,
-            at_ms: now_ms(),
+            at_ms: clock_ms(),
             paused: false,
         }),
     );
@@ -135,7 +132,7 @@ async fn listen_along() {
             name: "Song.opus".into(),
             from_name: "you".into(),
             position_ms: 0,
-            at_ms: now_ms(),
+            at_ms: clock_ms(),
             paused: true,
         }),
     );

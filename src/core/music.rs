@@ -233,6 +233,7 @@ impl Core {
         gid: &str,
         offer: &crate::groupdoc::FileOffer,
         from: u64,
+        until: u64,
     ) -> Result<(u64, Song)> {
         let me = self.me();
         let sources: Vec<_> = std::iter::once(&offer.from)
@@ -250,6 +251,7 @@ impl Core {
                     file: offer.id.clone(),
                     from,
                     resume: true,
+                    until: Some(until),
                 })?;
                 tx.write_all(&request).await?;
                 tx.finish()?;
@@ -383,7 +385,9 @@ pub(super) async fn serve_music(
     } else {
         // Within an album's stream, the song starts at its offset.
         let from = song.offset + start;
-        let (at, mut bytes) = match core.open_remote_song(gid, &offer, from).await {
+        // Only what was asked: the rest of an album would crowd the connection.
+        let until = song.offset + end + 1;
+        let (at, mut bytes) = match core.open_remote_song(gid, &offer, from, until).await {
             Ok(opened) => opened,
             Err(err) => return Served::error(StatusCode::BAD_GATEWAY, format!("{err:#}")),
         };

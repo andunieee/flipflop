@@ -645,6 +645,10 @@ public class FlipflopActivity extends android.app.NativeActivity {
         main.post(() -> MusicService.seek(ms));
     }
 
+    public void musicSpeed(float speed) {
+        main.post(() -> MusicService.speed(speed));
+    }
+
     public void musicPause(boolean paused) {
         main.post(() -> MusicService.pause(paused));
     }

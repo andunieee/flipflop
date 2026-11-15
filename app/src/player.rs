@@ -6,18 +6,15 @@
 //! Every song started gets a new ticket; what the player says about an older one is not news.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::{
         Mutex,
         atomic::{AtomicI64, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use flipflop::{
-    core::{FileView, ListenView, Listening},
-    groupdoc::now_ms,
-};
+use flipflop::core::{FileView, ListenView, Listening, clock_ms};
 use iroh::EndpointId;
 
 use crate::backend::Backend;
@@ -74,8 +71,26 @@ pub struct Followed {
 /// How often a sharer says where it is, for followers to correct their drift (and what it says
 /// expires without it).
 const HEARTBEAT: Duration = Duration::from_secs(2);
-/// How far from the sharer a follower may drift before it seeks.
-const DRIFT_MS: i64 = 150;
+/// How often a follower checks how far it is from the sharer...
+const STEER_EVERY: Duration = Duration::from_millis(400);
+/// ...going by the middle one of its last few checks (players say where they are unevenly)...
+const READINGS: usize = 5;
+const READINGS_NEEDED: usize = 3;
+/// ...once a new song or a seek has settled.
+const SETTLE: Duration = Duration::from_secs(1);
+/// Further off than this, a follower seeks; closer, it plays a little faster or slower, which is
+/// not heard, where a seek is.
+const SEEK_MS: i64 = 500;
+/// It starts catching up past `NUDGE_FROM_MS` off, and stops within `NUDGE_UNTIL_MS`, not to
+/// flap at the edge.
+const NUDGE_FROM_MS: i64 = 30;
+const NUDGE_UNTIL_MS: i64 = 10;
+/// Speed change per second off, at most `MAX_NUDGE` (5% faster or slower), in steps of `NUDGE_STEP`.
+const NUDGE_PER_S: f64 = 0.5;
+const MAX_NUDGE: f64 = 0.05;
+const NUDGE_STEP: f64 = 0.005;
+/// A paused follower seeks to where the sharer paused if this far from it (nobody hears it).
+const PAUSED_OFF_MS: i64 = 20;
 
 /// What a player says about the song it was given.
 #[derive(Debug)]
@@ -149,6 +164,16 @@ impl Player {
         }
     }
 
+    /// Play faster or slower (1: as recorded), the pitch kept.
+    fn set_speed(&self, speed: f64) {
+        match self {
+            #[cfg(not(target_os = "android"))]
+            Player::Mpv(mpv) => mpv.set_speed(speed),
+            #[cfg(target_os = "android")]
+            Player::Android => flipflop::platform::music_speed(speed as f32),
+        }
+    }
+
     fn pause(&self, paused: bool) {
         match self {
             #[cfg(not(target_os = "android"))]
@@ -182,6 +207,8 @@ pub struct Music {
     heartbeats: AtomicU64,
     /// How much later than asked a follower's seek lands, learned from its drift.
     lead_ms: AtomicI64,
+    /// Counts listening along started, so only the latest steering goes on.
+    follows: AtomicU64,
 }
 
 impl Music {
@@ -265,7 +292,7 @@ impl Music {
                 Ok(url) if music.ticket.load(Ordering::SeqCst) == ticket => {
                     // Worked out now, not when asked: finding the song takes a moment.
                     let start = along.as_ref().map_or(0, |l| {
-                        l.position_at(now_ms())
+                        l.position_at(clock_ms())
                             + music.lead_ms.load(Ordering::Relaxed).max(0) as u64
                     });
                     player.load(ticket, url, &song, start);
@@ -323,7 +350,13 @@ impl Music {
 
     /// Where the song plays, in ms; none before it plays.
     pub fn position(&self) -> Option<u64> {
-        self.player.lock().unwrap().as_ref()?.as_ref().ok()?.position()
+        self.player
+            .lock()
+            .unwrap()
+            .as_ref()?
+            .as_ref()
+            .ok()?
+            .position()
     }
 
     /// Pause or resume; with nothing playing, start the queue.
@@ -405,17 +438,7 @@ impl Music {
         }
         match update {
             Update::Paused(paused) => self.change(backend, |s| s.paused = paused),
-            Update::Loaded => {
-                self.change(backend, |s| s.loading = false);
-                // The song took a moment to start: catch up once it plays.
-                if self.state.lock().unwrap().following.is_some() {
-                    let backend = backend.clone();
-                    backend.clone().spawn_task(async move {
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                        backend.music().resync(&backend);
-                    });
-                }
-            }
+            Update::Loaded => self.change(backend, |s| s.loading = false),
             // Listening along, the sharer says what comes next.
             Update::Ended if self.state.lock().unwrap().following.is_some() => {}
             Update::Ended => self.next(backend),
@@ -431,8 +454,14 @@ impl Music {
                     Some(name) => format!("{name}: {why}"),
                     None => why,
                 });
-                // Listening along, the sharer's next song comes by itself; ours would end it.
-                if self.state.lock().unwrap().following.is_none() {
+                // Listening along, ours would end it: what the sharer says next starts the song
+                // again (or theirs next).
+                if self.state.lock().unwrap().following.is_some() {
+                    self.change(backend, |s| {
+                        s.current = None;
+                        s.loading = false;
+                    });
+                } else {
                     self.next(backend);
                 }
             }
@@ -473,7 +502,7 @@ impl Music {
     /// Tell the group what we play, if we share it and it changed (or, `again`, anyway).
     fn announce(&self, backend: &Backend, again: bool) {
         let now = self.state.lock().unwrap().clone();
-        let at = now_ms();
+        let at = clock_ms();
         let told = self
             .shared
             .lock()
@@ -597,7 +626,14 @@ impl Music {
             }
         });
         match (followed, along) {
-            (Some(f), None) => backend.notice(format!("{} stopped sharing", f.name)),
+            (Some(f), None) => {
+                // Gone quiet or away: no longer listening along, and they hear so if they can.
+                backend.run(|core| Ok(core.follow(&f.gid, f.sharer, false)));
+                if let Some(Ok(player)) = self.player.lock().unwrap().as_ref() {
+                    player.set_speed(1.);
+                }
+                backend.notice(format!("{} stopped sharing", f.name))
+            }
             (Some(_), Some(v)) => self.apply(backend, &gid, v.now),
             _ => {}
         }
@@ -626,6 +662,18 @@ impl Music {
             })
         });
         self.apply(backend, gid, view.now);
+        let generation = self.follows.fetch_add(1, Ordering::SeqCst) + 1;
+        let backend = backend.clone();
+        backend.clone().spawn_task(async move {
+            let mut steer = Steer::default();
+            loop {
+                tokio::time::sleep(STEER_EVERY).await;
+                let music = backend.music();
+                if music.follows.load(Ordering::SeqCst) != generation || !music.steer(&mut steer) {
+                    return;
+                }
+            }
+        });
     }
 
     /// No longer listen along; what plays goes on, on its own.
@@ -634,6 +682,10 @@ impl Music {
             return;
         };
         backend.run(|core| Ok(core.follow(&f.gid, f.sharer, false)));
+        // Caught up or not, on its own it plays as recorded.
+        if let Some(Ok(player)) = self.player.lock().unwrap().as_ref() {
+            player.set_speed(1.);
+        }
     }
 
     /// Make what plays match what the followed sharer plays.
@@ -662,8 +714,9 @@ impl Music {
         if now.paused != along.paused {
             self.set_paused(backend, along.paused);
         }
-        if !now.loading {
-            self.seek_to(&along);
+        // Playing, steering keeps up; paused, nobody hears a seek to exactly where they are.
+        if along.paused && !now.loading {
+            self.seek_paused(&along);
         }
     }
 
@@ -675,37 +728,145 @@ impl Music {
         player.pause(paused);
     }
 
-    /// Seek to where the sharer is, if we drifted from it.
-    fn seek_to(&self, along: &Listening) {
+    /// Paused along with the sharer: be where they paused.
+    fn seek_paused(&self, along: &Listening) {
         let Some(Ok(player)) = self.player.lock().unwrap().clone() else {
             return;
         };
         let Some(position) = player.position() else {
             return;
         };
-        let expected = along.position_at(now_ms()) as i64;
-        let drift = expected - position as i64;
-        if drift.abs() <= DRIFT_MS {
-            return;
+        if (position as i64 - along.position_ms as i64).abs() > PAUSED_OFF_MS {
+            player.seek(along.position_ms);
         }
-        // Still behind after a seek: seeks land later than asked, by about that much.
-        let lead = (self.lead_ms.load(Ordering::Relaxed) + drift / 2).clamp(0, 2_000);
-        self.lead_ms.store(lead, Ordering::Relaxed);
-        tracing::info!("listening along: {drift} ms off, seeking (lead {lead} ms)");
-        player.seek((expected + lead).max(0) as u64);
     }
 
-    /// Check the drift against what the followed sharer last said.
-    fn resync(&self, backend: &Backend) {
+    /// One look at how far we are from the followed sharer, and what to do about it; false once
+    /// no longer listening along.
+    fn steer(&self, st: &mut Steer) -> bool {
         let now = self.state.lock().unwrap().clone();
-        let Some(f) = now.following else { return };
+        let Some(f) = now.following else {
+            return false;
+        };
+        let Some(Ok(player)) = self.player.lock().unwrap().clone() else {
+            return true;
+        };
+        let ticket = self.ticket.load(Ordering::SeqCst);
+        // Another song: start over, at the speed it was recorded.
+        if ticket != st.ticket {
+            *st = Steer {
+                ticket,
+                ..Steer::default()
+            };
+            player.set_speed(1.);
+        }
         let along = now
             .sharers
             .get(&f.gid)
-            .and_then(|v| v.iter().find(|v| v.sharer == f.sharer));
-        if let Some(v) = along {
-            let _ = backend;
-            self.seek_to(&v.now);
+            .and_then(|v| v.iter().find(|v| v.sharer == f.sharer))
+            .map(|v| v.now.clone());
+        let ours = |a: &Listening| {
+            now.current
+                .as_ref()
+                .is_some_and(|c| c.is(&f.gid, &a.fid, a.track))
+        };
+        let Some(along) = along.filter(|a| !a.paused && ours(a)) else {
+            st.settle();
+            return true;
+        };
+        if now.loading || now.paused {
+            st.settle();
+            return true;
         }
+        if st.settled.is_none_or(|t| t.elapsed() < SETTLE) {
+            st.settled.get_or_insert_with(Instant::now);
+            return true;
+        }
+        let Some(position) = player.position() else {
+            return true;
+        };
+        let target = along.position_at(clock_ms()) as i64;
+        st.readings.push_back(position as i64 - target);
+        if st.readings.len() > READINGS {
+            st.readings.pop_front();
+        }
+        if st.readings.len() < READINGS_NEEDED {
+            return true;
+        }
+        let mut sorted: Vec<i64> = st.readings.iter().copied().collect();
+        sorted.sort_unstable();
+        // Ahead of the sharer when positive.
+        let off = sorted[sorted.len() / 2];
+
+        // Where the last seek landed says how far ahead to aim the next.
+        if std::mem::take(&mut st.seeked) {
+            let lead = (self.lead_ms.load(Ordering::Relaxed) - off / 2).clamp(0, 2_000);
+            self.lead_ms.store(lead, Ordering::Relaxed);
+        }
+        if off.abs() > SEEK_MS {
+            let lead = self.lead_ms.load(Ordering::Relaxed);
+            tracing::info!("listening along: {off} ms off, seeking (lead {lead} ms)");
+            player.set_speed(1.);
+            player.seek((target + lead).max(0) as u64);
+            *st = Steer {
+                ticket,
+                seeked: true,
+                ..Steer::default()
+            };
+            return true;
+        }
+        st.nudging = if st.nudging {
+            off.abs() > NUDGE_UNTIL_MS
+        } else {
+            off.abs() > NUDGE_FROM_MS
+        };
+        let speed = if st.nudging {
+            let nudge = (NUDGE_PER_S * off as f64 / 1000.).clamp(-MAX_NUDGE, MAX_NUDGE);
+            ((1. - nudge) / NUDGE_STEP).round() * NUDGE_STEP
+        } else {
+            1.
+        };
+        if speed != st.speed {
+            tracing::info!("listening along: {off} ms off, playing at {speed:.3}");
+            player.set_speed(speed);
+            st.speed = speed;
+        }
+        true
+    }
+}
+
+/// What a follower's steering remembers between looks.
+struct Steer {
+    /// The song it is about.
+    ticket: u64,
+    /// Since when the song has played undisturbed; none while it cannot be steered.
+    settled: Option<Instant>,
+    /// How far ahead of the sharer it was, last looks first to go.
+    readings: VecDeque<i64>,
+    /// Playing faster or slower to catch up.
+    nudging: bool,
+    speed: f64,
+    /// Just seeked: the next look says where it landed.
+    seeked: bool,
+}
+
+impl Default for Steer {
+    fn default() -> Self {
+        Steer {
+            ticket: 0,
+            settled: None,
+            readings: VecDeque::new(),
+            nudging: false,
+            speed: 1.,
+            seeked: false,
+        }
+    }
+}
+
+impl Steer {
+    /// Nothing to steer now: what was seen is old once there is again.
+    fn settle(&mut self) {
+        self.settled = None;
+        self.readings.clear();
     }
 }

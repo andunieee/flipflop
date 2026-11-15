@@ -114,6 +114,8 @@ enum Wake {
     /// A ticket, the source, and where to start (ms).
     Load(u64, String, u64),
     Seek(u64),
+    /// How fast it plays, the pitch kept: 1 is as recorded.
+    Speed(f64),
     Pause(bool),
     Stop,
     /// mpv has events.
@@ -135,11 +137,34 @@ pub struct Mpv {
 }
 
 /// Where the song was when mpv last said, so where it is now can be told without asking it.
-#[derive(Default)]
 struct Clock {
     /// Seconds into the song, and when that was; none before it plays.
     at: Option<(f64, Instant)>,
     paused: bool,
+    speed: f64,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Clock {
+            at: None,
+            paused: false,
+            speed: 1.,
+        }
+    }
+}
+
+impl Clock {
+    /// Seconds into the song now.
+    fn now(&self) -> Option<f64> {
+        let (secs, when) = self.at?;
+        let ran = if self.paused {
+            0.
+        } else {
+            when.elapsed().as_secs_f64() * self.speed
+        };
+        Some(secs + ran)
+    }
 }
 
 impl Mpv {
@@ -184,14 +209,18 @@ impl Mpv {
 
     /// Where the song plays, in ms; none before it plays.
     pub fn position(&self) -> Option<u64> {
-        let clock = self.clock.lock().unwrap();
-        let (secs, when) = clock.at?;
-        let ran = if clock.paused {
-            0.
-        } else {
-            when.elapsed().as_secs_f64()
-        };
-        Some(((secs + ran) * 1000.) as u64)
+        let secs = self.clock.lock().unwrap().now()?;
+        Some((secs * 1000.) as u64)
+    }
+
+    /// Play faster or slower (1: as recorded), the pitch kept.
+    pub fn set_speed(&self, speed: f64) {
+        let mut clock = self.clock.lock().unwrap();
+        // From here on it runs at the new speed.
+        clock.at = clock.now().map(|secs| (secs, Instant::now()));
+        clock.speed = speed;
+        drop(clock);
+        let _ = self.tx.send(Wake::Speed(speed));
     }
 
     pub fn pause(&self, paused: bool) {
@@ -277,6 +306,7 @@ impl Worker {
                 Wake::Pause(paused) => self.set_flag("pause", paused),
                 // A seek it cannot do is no reason to drop the song: no ticket to fail.
                 Wake::Seek(ms) => self.command(0, &["seek", &seconds(ms), "absolute+exact"]),
+                Wake::Speed(speed) => self.set_double("speed", speed),
                 Wake::Stop => {
                     (loading, playing) = (0, 0);
                     self.command(0, &["stop"]);
@@ -325,11 +355,7 @@ impl Worker {
                         let paused = unsafe { *(prop.data as *const c_int) } != 0;
                         let mut clock = self.clock.lock().unwrap();
                         // Keep where it was when it paused.
-                        if let Some((secs, when)) = clock.at
-                            && !clock.paused
-                        {
-                            clock.at = Some((secs + when.elapsed().as_secs_f64(), Instant::now()));
-                        }
+                        clock.at = clock.now().map(|secs| (secs, Instant::now()));
                         clock.paused = paused;
                         drop(clock);
                         (self.told)(loading, Update::Paused(paused));
@@ -363,6 +389,19 @@ impl Worker {
                 name.as_ptr(),
                 FORMAT_STRING,
                 &mut ptr as *mut *const c_char as *mut c_void,
+            )
+        };
+    }
+
+    fn set_double(&self, name: &str, value: f64) {
+        let name = CString::new(name).unwrap();
+        let mut value: c_double = value;
+        unsafe {
+            (self.lib.set_property)(
+                self.mpv,
+                name.as_ptr(),
+                FORMAT_DOUBLE,
+                &mut value as *mut c_double as *mut c_void,
             )
         };
     }
