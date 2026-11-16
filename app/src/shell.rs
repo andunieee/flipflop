@@ -97,7 +97,10 @@ impl Component for Shell {
                 el.child(
                     rect()
                         .layer(Layer::Overlay)
-                        .position(Position::new_global().bottom(if touch { 80. } else { 24. } + insets[3]))
+                        .position(
+                            Position::new_global()
+                                .bottom(if touch { 80. } else { 24. } + insets[3]),
+                        )
                         .width(Size::window_percent(100.))
                         .cross_align(Alignment::Center)
                         .child(
@@ -107,9 +110,7 @@ impl Component for Shell {
                                 .background(c.text_strong)
                                 .shadow(Shadow::new().blur(12.).color(Color::BLACK.with_a(60)))
                                 .padding((10., 16.))
-                                .child(
-                                    txt(text, d.font_sm(), c.window_bg, 400),
-                                ),
+                                .child(txt(text, d.font_sm(), c.window_bg, 400)),
                         ),
                 )
             })
@@ -210,7 +211,12 @@ struct SideRow {
 }
 
 impl SideRow {
-    fn button(label: impl Into<String>, icon: Icon, active: bool, on_press: impl FnMut(()) + 'static) -> Self {
+    fn button(
+        label: impl Into<String>,
+        icon: Icon,
+        active: bool,
+        on_press: impl FnMut(()) + 'static,
+    ) -> Self {
         Self {
             label: label.into(),
             icon: Some(icon),
@@ -223,7 +229,12 @@ impl SideRow {
         }
     }
 
-    fn place(label: impl Into<String>, online: bool, active: bool, on_press: impl FnMut(()) + 'static) -> Self {
+    fn place(
+        label: impl Into<String>,
+        online: bool,
+        active: bool,
+        on_press: impl FnMut(()) + 'static,
+    ) -> Self {
         Self {
             label: label.into(),
             icon: None,
@@ -273,7 +284,15 @@ impl Component for SideRow {
             .on_pointer_leave(move |_| hovered.set(false))
             .on_press(move |_| on_press.call(()))
             .map(self.icon, |el, i| {
-                el.child(icon(i, 18., if self.active { c.accent_text } else { c.text_muted }))
+                el.child(icon(
+                    i,
+                    18.,
+                    if self.active {
+                        c.accent_text
+                    } else {
+                        c.text_muted
+                    },
+                ))
             })
             .map(self.dot, |el, online| el.child(dot(online, 8.)))
             .child(
@@ -303,7 +322,12 @@ fn count_badge(n: usize, size: f32) -> Rect {
         .background(c.accent)
         .padding((0., 5.))
         .center()
-        .child(txt(n.to_string(), if size > 16. { 11. } else { 10. }, Color::WHITE, 700))
+        .child(txt(
+            n.to_string(),
+            if size > 16. { 11. } else { 10. },
+            Color::WHITE,
+            700,
+        ))
 }
 
 fn empty_note(text: &str) -> Label {
@@ -346,25 +370,34 @@ impl Component for Sidebar {
                 let gid = p.pair_group.clone()?;
                 let active = open.as_deref() == Some(gid.as_str());
                 Some(
-                    SideRow::place(peer_title(p), p.connected, active, move |_| nav.open_group(&gid, None))
-                        .key(p.id.to_string())
-                        .into_element(),
+                    SideRow::place(peer_title(p), p.connected, active, move |_| {
+                        nav.open_group(&gid, None)
+                    })
+                    .key(p.id.to_string())
+                    .into_element(),
                 )
             })
             .collect();
         let invite_rows = m.groups.invites.iter().map(|i| {
-            SideRow::button(format!("Invitation: {}", i.haiku), Icon::Groups, false, move |_| nav.go(Page::Home))
-                .badge(1)
-                .key(format!("{}{}", i.inviter, i.group))
-                .into_element()
+            SideRow::button(
+                format!("Invitation: {}", i.haiku),
+                Icon::Groups,
+                false,
+                move |_| nav.go(Page::Home),
+            )
+            .badge(1)
+            .key(format!("{}{}", i.inviter, i.group))
+            .into_element()
         });
         let group_rows: Vec<Element> = m
             .listed_groups()
             .map(|g| {
                 let (gid, active) = (g.id.clone(), open.as_deref() == Some(g.id.as_str()));
-                SideRow::place(group_title(g), m.group_online(&g.id), active, move |_| nav.open_group(&gid, None))
-                    .key(g.id.clone())
-                    .into_element()
+                SideRow::place(group_title(g), m.group_online(&g.id), active, move |_| {
+                    nav.open_group(&gid, None)
+                })
+                .key(g.id.clone())
+                .into_element()
             })
             .collect();
         let no_groups = group_rows.is_empty() && m.groups.invites.is_empty();
@@ -384,15 +417,21 @@ impl Component for Sidebar {
                     .child(rect().padding(Dim::SPACE1).child(brand(34., NodeStatus)))
                     .child(rect().height(Size::px(Dim::SPACE3)))
                     .child(
-                        SideRow::button("Home", Icon::Inbox, page == Page::Home, move |_| nav.go(Page::Home))
-                            .badge(m.home_badge()),
+                        SideRow::button("Home", Icon::Inbox, page == Page::Home, move |_| {
+                            nav.go(Page::Home)
+                        })
+                        .badge(m.home_badge()),
                     )
                     .child(
                         ScrollView::new()
                             .width(Size::fill())
                             .height(Size::flex(1.))
                             .spacing(2.)
-                            .child(rect().padding((Dim::SPACE2, 0., 0., Dim::SPACE3)).child(overline("PEERS")))
+                            .child(
+                                rect()
+                                    .padding((Dim::SPACE2, 0., 0., Dim::SPACE3))
+                                    .child(overline("PEERS")),
+                            )
                             .children(peer_rows)
                             .maybe(no_peers, |el| el.child(empty_note("No paired peers yet")))
                             .child(
@@ -413,12 +452,30 @@ impl Component for Sidebar {
                             .children(group_rows)
                             .maybe(no_groups, |el| el.child(empty_note("No groups yet"))),
                     )
-                    .child(SideRow::button("Peers", Icon::Peers, page == Page::Peers, move |_| nav.go(Page::Peers)))
-                    .child(SideRow::button("Add a peer", Icon::AddPeer, page == Page::Add, move |_| nav.go(Page::Add)))
-                    .child(SideRow::button("Guest link", Icon::Link, false, move |_| nav.new_guest_link()))
-                    .child(SideRow::button("Settings", Icon::Settings, page == Page::Settings, move |_| {
-                        nav.go(Page::Settings)
-                    })),
+                    .child(SideRow::button(
+                        "Peers",
+                        Icon::Peers,
+                        page == Page::Peers,
+                        move |_| nav.go(Page::Peers),
+                    ))
+                    .child(SideRow::button(
+                        "Add a peer",
+                        Icon::AddPeer,
+                        page == Page::Add,
+                        move |_| nav.go(Page::Add),
+                    ))
+                    .child(SideRow::button(
+                        "Guest link",
+                        Icon::Link,
+                        false,
+                        move |_| nav.new_guest_link(),
+                    ))
+                    .child(SideRow::button(
+                        "Settings",
+                        Icon::Settings,
+                        page == Page::Settings,
+                        move |_| nav.go(Page::Settings),
+                    )),
             )
             // The divider doubles as a resize handle: a wide invisible strip around a hairline.
             .child(
@@ -445,16 +502,13 @@ impl Component for Sidebar {
                             nav.save_sidebar_width();
                         }
                     })
-                    .child(
-                        rect()
-                            .width(Size::px(1.))
-                            .height(Size::fill())
-                            .background(if *handle_hovered.read() || drag.read().is_some() {
-                                c.border_strong
-                            } else {
-                                c.border
-                            }),
-                    ),
+                    .child(rect().width(Size::px(1.)).height(Size::fill()).background(
+                        if *handle_hovered.read() || drag.read().is_some() {
+                            c.border_strong
+                        } else {
+                            c.border
+                        },
+                    )),
             )
     }
 }
@@ -485,9 +539,21 @@ impl Component for NavTab {
                     .width(Size::px(60.))
                     .height(Size::px(32.))
                     .corner_radius(16.)
-                    .background(if self.active { c.accent_soft } else { Color::TRANSPARENT })
+                    .background(if self.active {
+                        c.accent_soft
+                    } else {
+                        Color::TRANSPARENT
+                    })
                     .center()
-                    .child(icon(self.icon, 22., if self.active { c.accent_text } else { c.text_muted }))
+                    .child(icon(
+                        self.icon,
+                        22.,
+                        if self.active {
+                            c.accent_text
+                        } else {
+                            c.text_muted
+                        },
+                    ))
                     .maybe(self.badge > 0, |el| {
                         el.child(
                             rect()
@@ -496,14 +562,16 @@ impl Component for NavTab {
                         )
                     }),
             )
-            .child(
-                txt(
-                    self.label,
-                    d.font_xs(),
-                    if self.active { c.text_strong } else { c.text_muted },
-                    if self.active { 700 } else { 500 },
-                )
-            )
+            .child(txt(
+                self.label,
+                d.font_xs(),
+                if self.active {
+                    c.text_strong
+                } else {
+                    c.text_muted
+                },
+                if self.active { 700 } else { 500 },
+            ))
     }
 }
 
@@ -571,7 +639,12 @@ impl Component for BottomNav {
 // ---- dialogs ---------------------------------------------------------------------------------
 
 /// A bottom sheet over most of the window, with a title row and a scrolling list.
-fn list_sheet(title: impl IntoElement, on_close: impl FnMut(()) + 'static, list: Vec<Element>, empty: String) -> Rect {
+fn list_sheet(
+    title: impl IntoElement,
+    on_close: impl FnMut(()) + 'static,
+    list: Vec<Element>,
+    empty: String,
+) -> Rect {
     let (c, d) = look();
     let empty_list = list.is_empty();
     sheet()
@@ -662,11 +735,20 @@ impl Component for EditDialog {
                 .max_width(Size::px(400.))
                 .corner_radius(Dim::RADIUS_LG)
                 .background(c.card_bg)
-                .border(Border::new().fill(c.border_strong).width(1.).alignment(BorderAlignment::Inner))
+                .border(
+                    Border::new()
+                        .fill(c.border_strong)
+                        .width(1.)
+                        .alignment(BorderAlignment::Inner),
+                )
                 .padding(d.card_padding())
                 .spacing(Dim::SPACE2)
                 .child(txt(
-                    if edit.kind == EditKind::Peer { "Rename peer" } else { "Rename group" },
+                    if edit.kind == EditKind::Peer {
+                        "Rename peer"
+                    } else {
+                        "Rename group"
+                    },
                     d.font_lg(),
                     c.text_strong,
                     700,
@@ -692,8 +774,12 @@ impl Component for EditDialog {
                         .spacing(Dim::SPACE2)
                         .child(Btn::primary("Done").on_press(move |_| nav.edit(None)))
                         .child(
-                            Btn::danger(if edit.kind == EditKind::Peer { "Remove" } else { "Leave" })
-                                .on_press(remove),
+                            Btn::danger(if edit.kind == EditKind::Peer {
+                                "Remove"
+                            } else {
+                                "Leave"
+                            })
+                            .on_press(remove),
                         ),
                 ),
         )
@@ -710,14 +796,19 @@ impl Component for AppPicker {
         let nav = use_consume::<Nav>();
         let mut ui = nav.ui;
         let apps = ui.read().apps.clone().unwrap_or_default();
-        let gid = ui.read().open_group().map(str::to_owned).unwrap_or_default();
+        let gid = ui
+            .read()
+            .open_group()
+            .map(str::to_owned)
+            .unwrap_or_default();
         let list = apps
             .into_iter()
             .map(|(path, name, detail)| {
                 let (gid, label) = (gid.clone(), name.clone());
                 ClickCard::new(move |_| {
                     ui.write().apps = None;
-                    nav.backend().share_app(gid.clone(), path.clone(), name.clone());
+                    nav.backend()
+                        .share_app(gid.clone(), path.clone(), name.clone());
                 })
                 .child(
                     card_body(2.)
@@ -763,13 +854,28 @@ impl Component for SharePicker {
         let mut targets: Vec<(String, String, String, bool, bool)> = m
             .paired_peers()
             .filter_map(|p| {
-                let detail = if p.connected { "Paired peer · connected" } else { "Paired peer · offline" };
-                Some((p.pair_group.clone()?, peer_title(p), detail.to_owned(), p.connected, true))
+                let detail = if p.connected {
+                    "Paired peer · connected"
+                } else {
+                    "Paired peer · offline"
+                };
+                Some((
+                    p.pair_group.clone()?,
+                    peer_title(p),
+                    detail.to_owned(),
+                    p.connected,
+                    true,
+                ))
             })
-            .chain(
-                m.listed_groups()
-                    .map(|g| (g.id.clone(), group_title(g), m.group_summary(&g.id), m.group_online(&g.id), false)),
-            )
+            .chain(m.listed_groups().map(|g| {
+                (
+                    g.id.clone(),
+                    group_title(g),
+                    m.group_summary(&g.id),
+                    m.group_online(&g.id),
+                    false,
+                )
+            }))
             .collect();
         // Stable: peers before groups within each half, each in its usual order.
         targets.sort_by_key(|t| !t.3);
@@ -787,7 +893,11 @@ impl Component for SharePicker {
                             .spacing(Dim::SPACE3)
                             .cross_align(Alignment::Center)
                             .child(dot_colored(if online { c.online } else { c.error }, 10.))
-                            .child(icon(if peer { Icon::Person } else { Icon::Groups }, 18., c.text_muted))
+                            .child(icon(
+                                if peer { Icon::Person } else { Icon::Groups },
+                                18.,
+                                c.text_muted,
+                            ))
                             .child(
                                 rect()
                                     .width(Size::flex(1.))
@@ -810,7 +920,12 @@ impl Component for SharePicker {
             list_sheet(
                 rect()
                     .spacing(2.)
-                    .child(txt(format!("Share {}", share.what()), d.font_xl(), c.text_strong, 700))
+                    .child(txt(
+                        format!("Share {}", share.what()),
+                        d.font_xl(),
+                        c.text_strong,
+                        700,
+                    ))
                     .maybe(!text.is_empty(), |el| {
                         el.child(txt(text, d.font_sm(), c.text_muted, 400).elide())
                     }),
@@ -832,7 +947,12 @@ impl Component for DropHint {
         let nav = use_consume::<Nav>();
         let groups = use_radio::<Model, Channel>(Channel::Groups);
         let m = groups.read();
-        let target = nav.ui.read().open_group().and_then(|id| m.group(id)).map(group_title);
+        let target = nav
+            .ui
+            .read()
+            .open_group()
+            .and_then(|id| m.group(id))
+            .map(group_title);
         rect()
             .layer(Layer::Overlay)
             .position(Position::new_global())
@@ -845,24 +965,35 @@ impl Component for DropHint {
                     .expanded()
                     .corner_radius(Dim::RADIUS_LG)
                     .background(c.window_bg.with_a(235))
-                    .border(Border::new().fill(c.accent).width(2.).alignment(BorderAlignment::Inner))
+                    .border(
+                        Border::new()
+                            .fill(c.accent)
+                            .width(2.)
+                            .alignment(BorderAlignment::Inner),
+                    )
                     .center()
                     .spacing(Dim::SPACE3)
                     .child(icon(Icon::Share, 40., c.accent))
                     .map(target, |el, group| {
                         el.child(
-                            txt(format!("Drop to share with {group}"), d.font_xl(), c.text_strong, 700)
-                                .width(Size::fill())
-                                .text_align(TextAlign::Center),
+                            txt(
+                                format!("Drop to share with {group}"),
+                                d.font_xl(),
+                                c.text_strong,
+                                700,
+                            )
+                            .width(Size::fill())
+                            .text_align(TextAlign::Center),
                         )
                     })
                     .maybe(nav.ui.read().open_group().is_none(), |el| {
-                        el.child(txt("Drop to share", d.font_xl(), c.text_strong, 700)).child(txt(
-                            "Then pick a group or peer to send it to",
-                            d.font_sm(),
-                            c.text_muted,
-                            400,
-                        ))
+                        el.child(txt("Drop to share", d.font_xl(), c.text_strong, 700))
+                            .child(txt(
+                                "Then pick a group or peer to send it to",
+                                d.font_sm(),
+                                c.text_muted,
+                                400,
+                            ))
                     }),
             )
     }

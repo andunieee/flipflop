@@ -4,9 +4,7 @@
 use std::collections::HashMap;
 
 use flipflop::{
-    core::{
-        Core, GroupInfo, GroupView, GroupsView, MemberState, Peer, TransferItem, Unseen,
-    },
+    core::{Core, GroupInfo, GroupView, GroupsView, MemberState, Peer, TransferItem, Unseen},
     format,
 };
 use freya::radio::*;
@@ -131,7 +129,9 @@ impl Model {
 
     /// The count on Home: news, invites and pair requests.
     pub fn home_badge(&self) -> usize {
-        self.home.len() + self.groups.invites.len() + self.peers.iter().filter(|p| pair_request(p)).count()
+        self.home.len()
+            + self.groups.invites.len()
+            + self.peers.iter().filter(|p| pair_request(p)).count()
     }
 
     /// Home shows these news (Unseen may be empty after a mark-seen raced an update).
@@ -176,7 +176,11 @@ impl Model {
                         } else {
                             "offline"
                         },
-                        tone: if m.me || m.online { Tone::Ok } else { Tone::Muted },
+                        tone: if m.me || m.online {
+                            Tone::Ok
+                        } else {
+                            Tone::Muted
+                        },
                         online: m.online || m.me,
                         me: m.me,
                     })

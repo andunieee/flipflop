@@ -4,9 +4,9 @@
 use std::time::Duration;
 
 use flipflop::groupdoc::map_cursor;
-use freya::{prelude::*, text_edit::*};
 #[cfg(target_os = "android")]
 use freya::radio::use_radio;
+use freya::{prelude::*, text_edit::*};
 
 #[cfg(target_os = "android")]
 use crate::model::{Channel, Ime, Model};
@@ -191,7 +191,11 @@ impl Component for PadEditor {
                             Ime::Right => Key::Named(NamedKey::ArrowRight),
                             Ime::Up => Key::Named(NamedKey::ArrowUp),
                             Ime::Down => Key::Named(NamedKey::ArrowDown),
-                            Ime::Text(_) | Ime::Composing(_) | Ime::SelectAll | Ime::Copy | Ime::Cut => continue,
+                            Ime::Text(_)
+                            | Ime::Composing(_)
+                            | Ime::SelectAll
+                            | Ime::Copy
+                            | Ime::Cut => continue,
                         };
                         let before = editable.editor().peek().committed_text();
                         editable.process_event(EditableEvent::KeyDown {
@@ -470,8 +474,12 @@ impl Component for PadEditor {
                                 .span(Span::new(preedit).text_decoration(TextDecoration::Underline))
                                 .span(after)
                         })
-                        .maybe(empty && !focused, |el| el.span("Everyone in the group can edit this field."))
-                        .maybe(!empty && !editable.editor().read().has_preedit(), |el| el.span(text)),
+                        .maybe(empty && !focused, |el| {
+                            el.span("Everyone in the group can edit this field.")
+                        })
+                        .maybe(!empty && !editable.editor().read().has_preedit(), |el| {
+                            el.span(text)
+                        }),
                 ),
             );
 
@@ -482,8 +490,16 @@ impl Component for PadEditor {
             .child(editor)
             .child(
                 actions()
-                    .child(Btn::secondary("Copy all").icon(Icon::Copy).on_press(copy_all))
-                    .child(Btn::secondary("Paste").icon(Icon::Clipboard).on_press(paste)),
+                    .child(
+                        Btn::secondary("Copy all")
+                            .icon(Icon::Copy)
+                            .on_press(copy_all),
+                    )
+                    .child(
+                        Btn::secondary("Paste")
+                            .icon(Icon::Clipboard)
+                            .on_press(paste),
+                    ),
             )
     }
 

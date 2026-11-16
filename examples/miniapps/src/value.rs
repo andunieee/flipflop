@@ -11,6 +11,10 @@ pub fn int(i: i64) -> Cbor {
     Cbor::Integer(i.into())
 }
 
+pub fn float(f: f64) -> Cbor {
+    Cbor::Float(f)
+}
+
 pub fn uint(i: usize) -> Cbor {
     Cbor::Integer((i as u64).into())
 }

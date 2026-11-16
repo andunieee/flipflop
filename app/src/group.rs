@@ -15,8 +15,8 @@ use flipflop::{
 use freya::{
     elements::image::ImageHandle,
     engine::prelude::{
-        AlphaType, ColorType, FilterMode, ImageInfo, MipmapMode, Paint, SamplingOptions, SkData, SkImage, SkRect,
-        raster_n32_premul,
+        AlphaType, ColorType, FilterMode, ImageInfo, MipmapMode, Paint, SamplingOptions, SkData,
+        SkImage, SkRect, raster_n32_premul,
     },
     prelude::*,
     radio::use_radio,
@@ -26,8 +26,8 @@ use crate::{
     backend::TYPING_PAUSE,
     hyper::{HyperView, Session},
     icons::Icon,
-    music::MusicTab,
     model::{Channel, Model, Tone, group_title, peer_subtitle, peer_title},
+    music::MusicTab,
     nav::{Edit, EditKind, Nav},
     pad::PadEditor,
     pages::{copy, rename_peer},
@@ -57,16 +57,39 @@ impl Component for GroupPage {
         let first = shown.first().map_or("info".to_owned(), |t| t.id.clone());
         let asked = nav.ui.read().group_tab.clone();
         // The tab asked for may be hidden (by anyone in the group): show the first one there is.
-        let tab = if asked == "info" || shown.iter().any(|t| t.id == asked) { asked.clone() } else { first.clone() };
+        let tab = if asked == "info" || shown.iter().any(|t| t.id == asked) {
+            asked.clone()
+        } else {
+            first.clone()
+        };
         let p = d.page_padding();
 
         let content = match tab.as_str() {
-            "files" => FilesTab { gid: self.id.clone(), files: view.files.clone() }.into_element(),
-            "texts" => TextsTab { gid: self.id.clone(), texts: view.texts.clone() }.into_element(),
-            "pad" => PadEditor { gid: self.id.clone(), text: view.scratch.clone(), local: view.scratch_local }
-                .into_element(),
-            "music" => MusicTab { gid: self.id.clone(), music: view.music.clone() }.into_element(),
-            "info" => InfoTab { gid: self.id.clone() }.into_element(),
+            "files" => FilesTab {
+                gid: self.id.clone(),
+                files: view.files.clone(),
+            }
+            .into_element(),
+            "texts" => TextsTab {
+                gid: self.id.clone(),
+                texts: view.texts.clone(),
+            }
+            .into_element(),
+            "pad" => PadEditor {
+                gid: self.id.clone(),
+                text: view.scratch.clone(),
+                local: view.scratch_local,
+            }
+            .into_element(),
+            "music" => MusicTab {
+                gid: self.id.clone(),
+                music: view.music.clone(),
+            }
+            .into_element(),
+            "info" => InfoTab {
+                gid: self.id.clone(),
+            }
+            .into_element(),
             app => shown
                 .iter()
                 .find(|t| t.id == app)
@@ -99,7 +122,10 @@ impl Component for GroupPage {
                     .spacing(Dim::SPACE2)
                     .cross_align(Alignment::Center)
                     .maybe(d.touch, |el| {
-                        el.child(IconButton::new(Icon::ArrowLeft, move |_| nav.close_group()).tint(c.text_strong))
+                        el.child(
+                            IconButton::new(Icon::ArrowLeft, move |_| nav.close_group())
+                                .tint(c.text_strong),
+                        )
                     })
                     .child(
                         rect()
@@ -107,24 +133,38 @@ impl Component for GroupPage {
                             .spacing(2.)
                             .child(txt(group_title(info), d.font_xl(), c.text_strong, 700).elide())
                             .maybe(info.name.is_some(), |el| {
-                                el.child(txt(info.haiku.clone(), d.font_sm(), c.text_muted, 400).elide())
+                                el.child(
+                                    txt(info.haiku.clone(), d.font_sm(), c.text_muted, 400).elide(),
+                                )
                             }),
                     )
                     .child(
                         IconButton::new(Icon::Settings, move |_| {
                             nav.set_tab(if asked == "info" { &first } else { "info" })
                         })
-                        .tint(if tab == "info" { c.accent_text } else { c.text_muted }),
+                        .tint(if tab == "info" {
+                            c.accent_text
+                        } else {
+                            c.text_muted
+                        }),
                     ),
             )
             .maybe(!shown.is_empty(), |el| {
                 el.child(TabStrip::new(
-                    shown.iter().map(|t| (t.id.clone(), t.title.clone())).collect(),
+                    shown
+                        .iter()
+                        .map(|t| (t.id.clone(), t.title.clone()))
+                        .collect(),
                     tab.clone(),
                     move |t: String| nav.set_tab(&t),
                 ))
             })
-            .child(rect().width(Size::fill()).height(Size::flex(1.)).child(content))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.))
+                    .child(content),
+            )
             .into_element()
     }
 }
@@ -146,9 +186,18 @@ impl Component for FilesTab {
         let hidden: Vec<&str> = if *all.read() {
             vec![]
         } else {
-            self.files.iter().filter(|f| f.stopped).skip(PAST_FILES).map(|f| f.id.as_str()).collect()
+            self.files
+                .iter()
+                .filter(|f| f.stopped)
+                .skip(PAST_FILES)
+                .map(|f| f.id.as_str())
+                .collect()
         };
-        let shown: Vec<&FileView> = self.files.iter().filter(|f| !hidden.contains(&f.id.as_str())).collect();
+        let shown: Vec<&FileView> = self
+            .files
+            .iter()
+            .filter(|f| !hidden.contains(&f.id.as_str()))
+            .collect();
         let more = self.files.len() - shown.len();
         ScrollView::new()
             .expanded()
@@ -161,23 +210,50 @@ impl Component for FilesTab {
                             .width(Size::fill())
                             .content(Content::flex())
                             .spacing(Dim::SPACE2)
-                            .child(Btn::primary("File").icon(Icon::File).expanded().on_press(move |_| nav.pick("file")))
-                            .child(Btn::secondary("Media").icon(Icon::Image).expanded().on_press(move |_| nav.pick("media")))
+                            .child(
+                                Btn::primary("File")
+                                    .icon(Icon::File)
+                                    .expanded()
+                                    .on_press(move |_| nav.pick("file")),
+                            )
+                            .child(
+                                Btn::secondary("Media")
+                                    .icon(Icon::Image)
+                                    .expanded()
+                                    .on_press(move |_| nav.pick("media")),
+                            )
                             .child(if d.touch {
-                                Btn::secondary("App").icon(Icon::Apps).expanded().on_press(move |_| nav.pick("app"))
+                                Btn::secondary("App")
+                                    .icon(Icon::Apps)
+                                    .expanded()
+                                    .on_press(move |_| nav.pick("app"))
                             } else {
-                                Btn::secondary("Folder").icon(Icon::Folder).expanded().on_press(move |_| nav.pick("folder"))
+                                Btn::secondary("Folder")
+                                    .icon(Icon::Folder)
+                                    .expanded()
+                                    .on_press(move |_| nav.pick("folder"))
                             }),
                     ),
                 ),
             )
             .children(shown.into_iter().map(|f| {
-                FileCard { gid: self.gid.clone(), file: f.clone(), key: DiffKey::from(&f.id) }.into_element()
+                FileCard {
+                    gid: self.gid.clone(),
+                    file: f.clone(),
+                    key: DiffKey::from(&f.id),
+                }
+                .into_element()
             }))
             .maybe(more > 0, |el| {
-                el.child(Btn::ghost(format!("Show {more} more")).icon(Icon::ChevronDown).on_press(move |_| all.set(true)))
+                el.child(
+                    Btn::ghost(format!("Show {more} more"))
+                        .icon(Icon::ChevronDown)
+                        .on_press(move |_| all.set(true)),
+                )
             })
-            .maybe(self.files.is_empty(), |el| el.child(hint_center("Nothing offered yet.")))
+            .maybe(self.files.is_empty(), |el| {
+                el.child(hint_center("Nothing offered yet."))
+            })
     }
 }
 
@@ -197,9 +273,17 @@ impl Component for FileCard {
         let downloading = f.progress.is_some() && !f.preparing;
         let can_download = !f.mine && !f.have && !f.stopped && !downloading && f.source_online;
         let (done, total) = f.progress.unwrap_or((0, f.size));
-        let progress = if total == 0 { 0. } else { done as f32 / total as f32 };
+        let progress = if total == 0 {
+            0.
+        } else {
+            done as f32 / total as f32
+        };
         let progress_label = if f.preparing {
-            format!("Preparing: {} of {}", format::size(done), format::size(total))
+            format!(
+                "Preparing: {} of {}",
+                format::size(done),
+                format::size(total)
+            )
         } else {
             format!("{} of {}", format::size(done), format::size(total))
         };
@@ -210,12 +294,23 @@ impl Component for FileCard {
         // Who got it: a badge while it is offered, then part of the details.
         let got = (f.audience > 0).then(|| format!("{}/{}", f.downloaded_by.len(), f.audience));
         // A folder's size is only known once it has been gone through.
-        let size = if f.preparing && f.size == 0 { "…".to_owned() } else { format::size(f.size) };
+        let size = if f.preparing && f.size == 0 {
+            "…".to_owned()
+        } else {
+            format::size(f.size)
+        };
         let meta = format!(
             "{size} · {} · {}{}",
-            if f.mine { "you".to_owned() } else { f.from_name.clone() },
+            if f.mine {
+                "you".to_owned()
+            } else {
+                f.from_name.clone()
+            },
             format::time(f.ts),
-            got.as_ref().filter(|_| f.stopped).map(|g| format!(" · {g}")).unwrap_or_default()
+            got.as_ref()
+                .filter(|_| f.stopped)
+                .map(|g| format!(" · {g}"))
+                .unwrap_or_default()
         );
         let tile = match f.kind.as_str() {
             "media" => Icon::Image,
@@ -269,12 +364,25 @@ impl Component for FileCard {
                 .on_press(move |_| flipflop::platform::open_file(&path)),
             None => el,
         };
-        let (tint, ink) = if f.stopped { (c.chip_bg, c.text_faint) } else { (c.accent_soft, c.accent_text) };
+        let (tint, ink) = if f.stopped {
+            (c.chip_bg, c.text_faint)
+        } else {
+            (c.accent_soft, c.accent_text)
+        };
         let picture = f
             .saved_to
             .clone()
             .filter(|_| f.size <= THUMBNAIL_MAX && is_picture(&f.name))
-            .map(|path| Thumbnail { path, icon: tile, size: 40., tint, ink }.into_element())
+            .map(|path| {
+                Thumbnail {
+                    path,
+                    icon: tile,
+                    size: 40.,
+                    tint,
+                    ink,
+                }
+                .into_element()
+            })
             .unwrap_or_else(|| icon_tile(tile, 40., tint, ink).into_element());
 
         card()
@@ -309,12 +417,21 @@ impl Component for FileCard {
                                     .child(open(rect().child(txt(
                                         f.name.clone(),
                                         d.font_md(),
-                                        if f.stopped { c.text_muted } else { c.text_strong },
+                                        if f.stopped {
+                                            c.text_muted
+                                        } else {
+                                            c.text_strong
+                                        },
                                         650,
                                     ))))
                                     .child(txt(meta, d.font_sm(), c.text_muted, 400))
                                     .maybe(!f.hosts.is_empty() && !f.stopped, |el| {
-                                        el.child(txt(format!("Also from {}", f.hosts.join(", ")), d.font_sm(), c.text_muted, 400))
+                                        el.child(txt(
+                                            format!("Also from {}", f.hosts.join(", ")),
+                                            d.font_sm(),
+                                            c.text_muted,
+                                            400,
+                                        ))
                                     }),
                             )
                             .maybe(removable && d.touch, |el| {
@@ -331,13 +448,22 @@ impl Component for FileCard {
                         )
                     })
                     .children(f.sending.iter().map(|s| {
-                        let p = if s.total == 0 { 0. } else { s.done as f32 / s.total as f32 };
+                        let p = if s.total == 0 {
+                            0.
+                        } else {
+                            s.done as f32 / s.total as f32
+                        };
                         rect()
                             .width(Size::fill())
                             .spacing(4.)
                             .child(progress_bar(p))
                             .child(txt(
-                                format!("Sending to {}: {} of {}", s.to, format::size(s.done), format::size(s.total)),
+                                format!(
+                                    "Sending to {}: {} of {}",
+                                    s.to,
+                                    format::size(s.done),
+                                    format::size(s.total)
+                                ),
                                 d.font_xs(),
                                 c.text_faint,
                                 400,
@@ -348,10 +474,20 @@ impl Component for FileCard {
                         el.child(txt(err, d.font_sm(), c.error, 400))
                     })
                     .map(saved_to.clone().filter(|_| !f.mine), |el, path| {
-                        el.child(txt(format!("Saved to {path}"), d.font_xs(), c.text_faint, 400))
+                        el.child(txt(
+                            format!("Saved to {path}"),
+                            d.font_xs(),
+                            c.text_faint,
+                            400,
+                        ))
                     })
                     .map(f.shared_from.as_ref(), |el, path| {
-                        el.child(txt(format!("Offered from {}", path.display()), d.font_xs(), c.text_faint, 400))
+                        el.child(txt(
+                            format!("Offered from {}", path.display()),
+                            d.font_xs(),
+                            c.text_faint,
+                            400,
+                        ))
                     })
                     .maybe(has_actions, |el| {
                         el.child(
@@ -376,11 +512,18 @@ impl Component for FileCard {
                                     )
                                 })
                                 .maybe(can_download, |el| {
-                                    let (backend, gid, id) = (backend.clone(), gid.clone(), id.clone());
+                                    let (backend, gid, id) =
+                                        (backend.clone(), gid.clone(), id.clone());
                                     el.child(
-                                        Btn::primary(if f.error.is_some() { "Retry" } else { "Download" })
-                                            .icon(Icon::ArrowDown)
-                                            .on_press(move |_| backend.download_file(gid.clone(), id.clone())),
+                                        Btn::primary(if f.error.is_some() {
+                                            "Retry"
+                                        } else {
+                                            "Download"
+                                        })
+                                        .icon(Icon::ArrowDown)
+                                        .on_press(
+                                            move |_| backend.download_file(gid.clone(), id.clone()),
+                                        ),
                                     )
                                 })
                                 .maybe(can_host, |el| {
@@ -392,18 +535,23 @@ impl Component for FileCard {
                                 })
                                 .maybe(hosting, |el| {
                                     el.child(
-                                        Btn::secondary("Stop hosting").on_press(act(|core, gid, id| core.unhost_file(gid, id))),
+                                        Btn::secondary("Stop hosting").on_press(act(
+                                            |core, gid, id| core.unhost_file(gid, id),
+                                        )),
                                     )
                                 })
                                 .maybe(can_stop, |el| {
-                                    el.child(Btn::danger("Stop offering").on_press(act(|core, gid, id| core.stop_file(gid, id))))
+                                    el.child(
+                                        Btn::danger("Stop offering")
+                                            .on_press(act(|core, gid, id| core.stop_file(gid, id))),
+                                    )
                                 })
                                 .maybe(f.can_reoffer, |el| {
-                                    let (backend, gid, id) = (backend.clone(), gid.clone(), id.clone());
-                                    el.child(
-                                        Btn::secondary("Offer")
-                                            .on_press(move |_| backend.reoffer_file(gid.clone(), id.clone())),
-                                    )
+                                    let (backend, gid, id) =
+                                        (backend.clone(), gid.clone(), id.clone());
+                                    el.child(Btn::secondary("Offer").on_press(move |_| {
+                                        backend.reoffer_file(gid.clone(), id.clone())
+                                    }))
                                 }),
                         )
                     }),
@@ -420,8 +568,14 @@ const THUMBNAIL_MAX: u64 = 40 * 1024 * 1024;
 
 /// A file Skia can show, by its name.
 fn is_picture(name: &str) -> bool {
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp")
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
+    )
 }
 
 thread_local! {
@@ -451,7 +605,9 @@ impl Component for Thumbnail {
                         move || thumbnail(&path, px)
                     })
                     .await;
-                    let handle = rgba.and_then(|rgba| ImageHandle::from_rgba(px as u32, px as u32, rgba.into(), AlphaType::Premul));
+                    let handle = rgba.and_then(|rgba| {
+                        ImageHandle::from_rgba(px as u32, px as u32, rgba.into(), AlphaType::Premul)
+                    });
                     THUMBNAILS.with(|t| {
                         let mut t = t.borrow_mut();
                         if t.len() > 200 {
@@ -482,11 +638,16 @@ impl Component for Thumbnail {
 /// The middle square of the picture at `path`, `px` pixels wide, as premultiplied RGBA.
 fn thumbnail(path: &Path, px: i32) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
-    flipflop::core::open_source(path).ok()?.read_to_end(&mut bytes).ok()?;
+    flipflop::core::open_source(path)
+        .ok()?
+        .read_to_end(&mut bytes)
+        .ok()?;
     let picture = SkImage::from_encoded(SkData::new_copy(&bytes))?;
     drop(bytes);
     // Mipmaps, so a big photo shrinks smoothly.
-    let picture = picture.make_raster_image(None, None)?.with_default_mipmaps()?;
+    let picture = picture
+        .make_raster_image(None, None)?
+        .with_default_mipmaps()?;
     let (w, h) = (picture.width() as f32, picture.height() as f32);
     let scale = px as f32 / w.min(h);
     let (dw, dh) = (w * scale, h * scale);
@@ -500,7 +661,9 @@ fn thumbnail(path: &Path, px: i32) -> Option<Vec<u8>> {
     );
     let info = ImageInfo::new((px, px), ColorType::RGBA8888, AlphaType::Premul, None);
     let mut rgba = vec![0; (px * px * 4) as usize];
-    surface.read_pixels(&info, &mut rgba, px as usize * 4, (0, 0)).then_some(rgba)
+    surface
+        .read_pixels(&info, &mut rgba, px as usize * 4, (0, 0))
+        .then_some(rgba)
 }
 
 // ---- texts -----------------------------------------------------------------------------------
@@ -558,7 +721,8 @@ impl Component for TextsTab {
                 // text cannot come back.
                 let field = format!("draft:{gid}");
                 let (dir, gid) = (dir.clone(), gid.clone());
-                nav.backend().settled(&field, move || save_draft(&dir, &gid, ""));
+                nav.backend()
+                    .settled(&field, move || save_draft(&dir, &gid, ""));
             }
         };
         let typed = {
@@ -566,9 +730,10 @@ impl Component for TextsTab {
             move |text: String| {
                 let (dir, gid) = (dir.clone(), gid.clone());
                 let saved = text.clone();
-                nav.backend().after_typing(format!("draft:{gid}"), TYPING_PAUSE, move || {
-                    save_draft(&dir, &gid, &saved)
-                });
+                nav.backend()
+                    .after_typing(format!("draft:{gid}"), TYPING_PAUSE, move || {
+                        save_draft(&dir, &gid, &saved)
+                    });
                 draft.set(text)
             }
         };
@@ -576,7 +741,9 @@ impl Component for TextsTab {
             draft.write().push_str(&flipflop::platform::paste_text());
             let text = draft.peek().clone();
             let (dir, gid) = (dir.clone(), gid.clone());
-            nav.backend().settled(&format!("draft:{gid}"), move || save_draft(&dir, &gid, &text));
+            nav.backend().settled(&format!("draft:{gid}"), move || {
+                save_draft(&dir, &gid, &text)
+            });
         };
         ScrollView::new()
             .expanded()
@@ -591,7 +758,11 @@ impl Component for TextsTab {
                         ))
                         .child(
                             actions()
-                                .child(Btn::secondary("Paste").icon(Icon::Clipboard).on_press(pasted))
+                                .child(
+                                    Btn::secondary("Paste")
+                                        .icon(Icon::Clipboard)
+                                        .on_press(pasted),
+                                )
                                 .child(
                                     Btn::primary("Send")
                                         .icon(Icon::Send)
@@ -602,7 +773,9 @@ impl Component for TextsTab {
                 ),
             )
             .children(self.texts.iter().map(|t| text_card(t, &self.gid, nav)))
-            .maybe(self.texts.is_empty(), |el| el.child(hint_center("Nothing sent or received yet.")))
+            .maybe(self.texts.is_empty(), |el| {
+                el.child(hint_center("Nothing sent or received yet."))
+            })
     }
 
     /// A page for another group gets its own draft, not the one still in the field.
@@ -629,7 +802,11 @@ fn text_card(t: &TextView, gid: &str, nav: Nav) -> Element {
                         .cross_align(Alignment::Center)
                         .child(
                             SelectableText::new()
-                                .span(Span::new(if t.mine { format!("{} (you)", t.name) } else { t.name.clone() }))
+                                .span(Span::new(if t.mine {
+                                    format!("{} (you)", t.name)
+                                } else {
+                                    t.name.clone()
+                                }))
                                 .font_size(d.font_sm())
                                 .color(c.accent_text)
                                 .font_weight(650)
@@ -667,7 +844,11 @@ fn text_card(t: &TextView, gid: &str, nav: Nav) -> Element {
                                     .on_press(move |_| flipflop::platform::open_url(open.trim())),
                             )
                         })
-                        .child(Btn::secondary("Copy").icon(Icon::Copy).on_press(move |_| copy(nav, &copied))),
+                        .child(
+                            Btn::secondary("Copy")
+                                .icon(Icon::Copy)
+                                .on_press(move |_| copy(nav, &copied)),
+                        ),
                 ),
         )
         .into_element()
@@ -721,7 +902,11 @@ impl Component for AppTab {
             .map(|session| Rc::new(RefCell::new(session)))
         });
         match &session {
-            Ok(session) => HyperView { session: session.clone(), rev }.into_element(),
+            Ok(session) => HyperView {
+                session: session.clone(),
+                rev,
+            }
+            .into_element(),
             Err(err) => error_card(err),
         }
     }
@@ -732,7 +917,12 @@ fn error_card(message: &str) -> Element {
     card()
         .child(
             card_body(Dim::SPACE3)
-                .child(txt("This app could not run", d.font_lg(), c.text_strong, 700))
+                .child(txt(
+                    "This app could not run",
+                    d.font_lg(),
+                    c.text_strong,
+                    700,
+                ))
                 .child(txt(message, d.font_sm(), c.error, 400)),
         )
         .into_element()
@@ -818,7 +1008,11 @@ impl Component for InfoTab {
             items.extend(guest_section(info, nav));
             items.extend(leave_section(info, nav, &mut confirm_leave));
         }
-        ScrollView::new().expanded().spacing(Dim::SPACE3).children(items).into_element()
+        ScrollView::new()
+            .expanded()
+            .spacing(Dim::SPACE3)
+            .children(items)
+            .into_element()
     }
 }
 
@@ -828,14 +1022,25 @@ fn peer_section(peer: &Peer, m: &Model, nav: Nav) -> Vec<Element> {
         .horizontal()
         .spacing(4.)
         .child(badge("paired", Tone::Ok))
-        .child(if peer.connected { badge("connected", Tone::Ok) } else { badge("offline", Tone::Muted) })
+        .child(if peer.connected {
+            badge("connected", Tone::Ok)
+        } else {
+            badge("offline", Tone::Muted)
+        })
         .maybe(peer.lan, |el| el.child(badge("LAN", Tone::Active)))
         .maybe(peer.ble, |el| el.child(badge("Bluetooth", Tone::Warn)));
     let id = peer.id;
     let edit = rename_peer(peer);
-    let invitable: Vec<(String, String)> =
-        m.invitable(id).iter().map(|g| (g.id.clone(), group_title(g))).collect();
-    let choice = nav.ui.read().invite_choice.min(invitable.len().saturating_sub(1));
+    let invitable: Vec<(String, String)> = m
+        .invitable(id)
+        .iter()
+        .map(|g| (g.id.clone(), group_title(g)))
+        .collect();
+    let choice = nav
+        .ui
+        .read()
+        .invite_choice
+        .min(invitable.len().saturating_sub(1));
     let mut ui = nav.ui;
     vec![
         overline("PEER").into_element(),
@@ -911,7 +1116,9 @@ fn rename_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
                             .spacing(3.)
                             .child(txt(group_title(info), d.font_lg(), c.text_strong, 650).elide())
                             .maybe(info.name.is_some(), |el| {
-                                el.child(txt(info.haiku.clone(), d.font_xs(), c.text_faint, 400).elide())
+                                el.child(
+                                    txt(info.haiku.clone(), d.font_xs(), c.text_faint, 400).elide(),
+                                )
                             }),
                     )
                     .child(
@@ -935,7 +1142,12 @@ fn members_section(info: &GroupInfo, m: &Model, nav: Nav) -> Vec<Element> {
         .collect();
     let row_height = d.control_height() + 12.;
     vec![
-        overline(if info.guest.is_some() { "GUESTS AND MEMBERS" } else { "MEMBERS" }).into_element(),
+        overline(if info.guest.is_some() {
+            "GUESTS AND MEMBERS"
+        } else {
+            "MEMBERS"
+        })
+        .into_element(),
         card()
             .child(
                 card_body(0.)
@@ -950,7 +1162,11 @@ fn members_section(info: &GroupInfo, m: &Model, nav: Nav) -> Vec<Element> {
                             .child(dot(row.online, 8.))
                             .child(
                                 txt(
-                                    if row.me { format!("{} (you)", row.name) } else { row.name.clone() },
+                                    if row.me {
+                                        format!("{} (you)", row.name)
+                                    } else {
+                                        row.name.clone()
+                                    },
                                     d.font_md(),
                                     c.text_strong,
                                     400,
@@ -963,7 +1179,12 @@ fn members_section(info: &GroupInfo, m: &Model, nav: Nav) -> Vec<Element> {
                     }))
                     .maybe(members.is_empty(), |el| el.child(hint("Nobody yet.")))
                     .child(divider())
-                    .child(txt("Invite", d.font_sm(), c.text_muted, 400).margin((Dim::SPACE2, 0., 0., 0.)))
+                    .child(txt("Invite", d.font_sm(), c.text_muted, 400).margin((
+                        Dim::SPACE2,
+                        0.,
+                        0.,
+                        0.,
+                    )))
                     .children(candidates.iter().map(|(id, name)| {
                         let (gid, id) = (info.id.clone(), *id);
                         rect()
@@ -973,14 +1194,20 @@ fn members_section(info: &GroupInfo, m: &Model, nav: Nav) -> Vec<Element> {
                             .height(Size::px(row_height))
                             .spacing(Dim::SPACE3)
                             .cross_align(Alignment::Center)
-                            .child(txt(name.clone(), d.font_md(), c.text_strong, 400).width(Size::flex(1.)).elide())
+                            .child(
+                                txt(name.clone(), d.font_md(), c.text_strong, 400)
+                                    .width(Size::flex(1.))
+                                    .elide(),
+                            )
                             .child(Btn::secondary("Invite").on_press(move |_| {
                                 nav.backend().run(|core| Ok(core.add_to_group(&gid, id)))
                             }))
                             .into_element()
                     }))
                     .maybe(candidates.is_empty(), |el| {
-                        el.child(hint("Every peer you know is already in, or has been invited."))
+                        el.child(hint(
+                            "Every peer you know is already in, or has been invited.",
+                        ))
                     }),
             )
             .into_element(),
@@ -998,7 +1225,9 @@ fn tabs_section(view: &GroupView, gid: &str, nav: Nav) -> Vec<Element> {
             "files" => "Files offered to the group.".to_owned(),
             "texts" => "Links, codes and snippets sent to the group.".to_owned(),
             "pad" => "A text everyone edits together.".to_owned(),
-            "music" => "Songs to play from whoever offers them, without downloading them.".to_owned(),
+            "music" => {
+                "Songs to play from whoever offers them, without downloading them.".to_owned()
+            }
             _ => app_detail(t),
         };
         let (gid, tab) = (gid.to_owned(), t.id.clone());
@@ -1010,7 +1239,12 @@ fn tabs_section(view: &GroupView, gid: &str, nav: Nav) -> Vec<Element> {
         );
     }
     rows.push(divider().into_element());
-    rows.push(Btn::secondary("Add an app").icon(Icon::Apps).on_press(move |_| nav.pick("wasm")).into_element());
+    rows.push(
+        Btn::secondary("Add an app")
+            .icon(Icon::Apps)
+            .on_press(move |_| nav.pick("wasm"))
+            .into_element(),
+    );
     vec![
         overline("TABS").into_element(),
         card().child(card_body(Dim::SPACE2).children(rows)).into_element(),
@@ -1036,21 +1270,28 @@ fn debug_section(gid: &str, doc: &mut State<Option<String>>, nav: Nav) -> Vec<El
                     .width(Size::flex(1.))
                     .spacing(2.)
                     .child(txt("Raw document", d.font_md(), c.text_strong, 650))
-                    .child(txt("The group's Automerge document as JSON.", d.font_xs(), c.text_muted, 400)),
+                    .child(txt(
+                        "The group's Automerge document as JSON.",
+                        d.font_xs(),
+                        c.text_muted,
+                        400,
+                    )),
             )
             .child(
-                Btn::secondary(if json.is_some() { "Hide" } else { "Show JSON" }).on_press(move |_| {
-                    if doc.peek().is_some() {
-                        doc.set(None);
-                        return;
-                    }
-                    let json = nav
-                        .backend()
-                        .core()
-                        .and_then(|core| core.group_json(&gid))
-                        .unwrap_or_else(|| "The group's document is not available.".to_owned());
-                    doc.set(Some(json));
-                }),
+                Btn::secondary(if json.is_some() { "Hide" } else { "Show JSON" }).on_press(
+                    move |_| {
+                        if doc.peek().is_some() {
+                            doc.set(None);
+                            return;
+                        }
+                        let json = nav
+                            .backend()
+                            .core()
+                            .and_then(|core| core.group_json(&gid))
+                            .unwrap_or_else(|| "The group's document is not available.".to_owned());
+                        doc.set(Some(json));
+                    },
+                ),
             ),
     );
     if let Some(text) = &json {
@@ -1147,9 +1388,18 @@ fn guest_address(title: &str, hint_text: &str, url: String, nav: Nav) -> Element
             card_body(Dim::SPACE2)
                 .child(txt(title, d.font_md(), c.text_strong, 650))
                 .child(hint(hint_text))
-                .child(rect().width(Size::fill()).cross_align(Alignment::Center).child(qr_code(&url, size)))
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .cross_align(Alignment::Center)
+                        .child(qr_code(&url, size)),
+                )
                 .child(copyable(url.clone()))
-                .child(Btn::secondary("Copy link").icon(Icon::Copy).on_press(move |_| copy(nav, &url))),
+                .child(
+                    Btn::secondary("Copy link")
+                        .icon(Icon::Copy)
+                        .on_press(move |_| copy(nav, &url)),
+                ),
         )
         .into_element()
 }
@@ -1210,7 +1460,10 @@ fn guest_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
                 url,
                 nav,
             ),
-            None => unavailable("Anywhere", "Not available because you're not connected to the internet."),
+            None => unavailable(
+                "Anywhere",
+                "Not available because you're not connected to the internet.",
+            ),
         });
         items.push(hint("Anyone with a link joins the group and can do things in it. Only share it with people you trust.").into_element());
     }
@@ -1220,7 +1473,11 @@ fn guest_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
 fn unavailable(title: &str, why: &str) -> Element {
     let (c, d) = look();
     card()
-        .child(card_body(Dim::SPACE2).child(txt(title, d.font_md(), c.text_strong, 650)).child(hint(why)))
+        .child(
+            card_body(Dim::SPACE2)
+                .child(txt(title, d.font_md(), c.text_strong, 650))
+                .child(hint(why)),
+        )
         .into_element()
 }
 

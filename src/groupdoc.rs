@@ -403,11 +403,17 @@ impl GroupDoc {
                         offer.downloaded = self
                             .doc
                             .map_range(&obj, ..)
-                            .filter_map(|item| Some((item.key.to_string(), item.value.into_value().as_i64()?)))
+                            .filter_map(|item| {
+                                Some((item.key.to_string(), item.value.into_value().as_i64()?))
+                            })
                             .collect()
                     }
                     ("hosts", _) => {
-                        offer.hosts = self.doc.map_range(&obj, ..).map(|item| item.key.to_string()).collect()
+                        offer.hosts = self
+                            .doc
+                            .map_range(&obj, ..)
+                            .map(|item| item.key.to_string())
+                            .collect()
                     }
                     ("tracks", ObjType::List) => offer.tracks = self.tracks_in(&obj),
                     _ => {}
@@ -415,7 +421,10 @@ impl GroupDoc {
                 continue;
             }
             let value = item.value.into_value();
-            let (text, int) = (|| value.as_str().unwrap_or_default().to_owned(), || value.as_i64().unwrap_or(0));
+            let (text, int) = (
+                || value.as_str().unwrap_or_default().to_owned(),
+                || value.as_i64().unwrap_or(0),
+            );
             match key {
                 "name" => offer.name = text(),
                 "size" => offer.size = int().max(0) as u64,

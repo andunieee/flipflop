@@ -23,13 +23,17 @@
 //!
 //! # Events (host to app)
 //!
-//! - `{"type": "start", "app": <id>, "me": <our peer id>}`: first, once.
-//! - `{"type": "change", "patches": [<patch>…]}`: the document changed in the app's section or in
-//!   a part it watches, whoever changed it (its own writes come back too: the document is the truth).
+//! - `{"type": "start", "app": <id>, "me": <our peer id>, "ts": <ms>, "tz": <minutes>}`: first, once.
+//! - `{"type": "change", "patches": [<patch>…], "ts": <ms>, "tz": <minutes>}`: the document
+//!   changed in the app's section or in a part it watches, whoever changed it (its own writes come
+//!   back too: the document is the truth).
 //! - `{"type": "action", "name": <str>, "payload": <value>, "signals": <map>, "me": <peer id>,
-//!   "ts": <ms>, "seq": <n>}`: the local hypereffect renderer sent an action. The app validates it,
-//!   writes the document, and lets the following `change` update the interface. `ts` and `seq` let
-//!   it name new things without a clock or randomness of its own.
+//!   "ts": <ms>, "tz": <minutes>, "seq": <n>}`: the local hypereffect renderer sent an action. The
+//!   app validates it, writes the document, and lets the following `change` update the interface.
+//!   `ts` and `seq` let it name new things without a clock or randomness of its own.
+//!
+//! Every event carries the time: `ts` is the device's clock in epoch milliseconds and `tz` its
+//! offset from UTC in minutes (east positive), so an app can show dates the way its user reads them.
 //!
 //! A patch is `{"root": "app" | "group", "path": […], "action": …}`, with `path` relative to the
 //! app's section (root `app`) or the document's root (root `group`), and the action one of
@@ -87,6 +91,8 @@ use codec::{Change, map, text};
 pub const FUEL: u64 = 500_000_000;
 /// The most memory an app may have.
 pub const MEMORY: usize = 64 << 20;
+/// The most hypereffect output an app may leave untaken by the host; past it the app is stopped.
+pub const UI_BACKLOG: usize = 16 << 20;
 
 /// Where an app's document lives.
 pub trait DocHost: Send + Sync {
@@ -204,6 +210,8 @@ impl App {
             ("type", text("start")),
             ("app", text(app)),
             ("me", text(self.store.data().me.as_str())),
+            ("ts", Cbor::Integer(crate::groupdoc::now_ms().into())),
+            ("tz", Cbor::Integer(utc_offset_minutes().into())),
         ]);
         Ok(self.send(&event)? || made)
     }
@@ -252,6 +260,8 @@ impl App {
         self.send(&map([
             ("type", text("change")),
             ("patches", Cbor::Array(patches)),
+            ("ts", Cbor::Integer(crate::groupdoc::now_ms().into())),
+            ("tz", Cbor::Integer(utc_offset_minutes().into())),
         ]))
     }
 
@@ -264,6 +274,11 @@ impl App {
         self.stopped = result.is_err();
         result?;
         Ok(std::mem::take(&mut self.store.data_mut().wrote))
+    }
+
+    /// Whether the app failed and gets no more events.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
     }
 
     /// The hypereffect messages the app emitted since this was last called, in order, as the UTF-8
@@ -289,6 +304,7 @@ impl App {
             ("signals", signals),
             ("me", text(me)),
             ("ts", Cbor::Integer(crate::groupdoc::now_ms().into())),
+            ("tz", Cbor::Integer(utc_offset_minutes().into())),
             ("seq", Cbor::Integer(self.seq.into())),
         ]);
         self.send(&event)
@@ -304,6 +320,18 @@ impl App {
         self.event.call(&mut self.store, (ptr, len))?;
         Ok(())
     }
+}
+
+/// This device's offset from UTC, in minutes.
+#[cfg(not(target_arch = "wasm32"))]
+fn utc_offset_minutes() -> i64 {
+    use chrono::Offset;
+    i64::from(chrono::Local::now().offset().fix().local_minus_utc()) / 60
+}
+
+#[cfg(target_arch = "wasm32")]
+fn utc_offset_minutes() -> i64 {
+    0
 }
 
 struct State {
@@ -366,7 +394,13 @@ fn host_emit(mut caller: Caller<'_, State>, ptr: i32, len: i32) -> Result<(), wa
         .and_then(|m| m.get(..len as u32 as usize))
         .ok_or_else(|| wasmi::Error::new("emit: messages outside memory"))?
         .to_vec();
-    caller.data_mut().out.extend_from_slice(&bytes);
+    let out = &mut caller.data_mut().out;
+    if out.len() + bytes.len() > UI_BACKLOG {
+        return Err(wasmi::Error::new(
+            "emit: too many messages the renderer has not taken",
+        ));
+    }
+    out.extend_from_slice(&bytes);
     Ok(())
 }
 
@@ -494,7 +528,7 @@ impl State {
             })
         })
         .inspect(|_| match op.as_str() {
-            "watch" => self.watches.push(path),
+            "watch" if !self.watches.contains(&path) => self.watches.push(path),
             "unwatch" => self.watches.retain(|w| *w != path),
             "log" => tracing::info!(app = %self.app, "{}", req.str("msg").unwrap_or("")),
             _ => {}

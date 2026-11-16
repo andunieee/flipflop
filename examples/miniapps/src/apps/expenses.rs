@@ -1,497 +1,472 @@
-//! Expenses: who paid what, split between people, and what settles it.
+//! Expenses: who paid what, split between people, and who owes whom.
+//!
+//! Amounts are typed as decimals (`12.50`) and kept as integer cents; the currency is a label.
 //!
 //! Flat state:
 //! - `currency`
 //! - `e<US><id><US>what|amount|payer|ts`, `e<US><id><US>among<US><peer>` = true
-//! - `s<US><id><US>from|to|amount|by|ts`
+//! - `s<US><id><US>from|to|amount|ts`: a payment between two people that settles part of what is owed
 //!
-//! Amounts are integer cents. Actions:
-//! - `{name:"add_expense", payload:{what, amount, payer?, among?}}` (`among` is a list or a
-//!   comma-separated string; omitted, it is everyone in the group)
-//! - `{name:"remove_expense", payload:{expense}}`
-//! - `{name:"settle", payload:{from, to, amount}}`
-//! - `{name:"set_currency", payload:{currency}}`
-//!
-//! Values may also come from the form signals (`form.what`, `form.amount`, …).
+//! Actions:
+//! - `add_expense` (`form.what|amount|payer`, `form.among.<peer hash>` ticks)
+//! - `remove_expense {expense}` (asks twice), `settle {from, to, amount}`, `remove_settlement {id}`
+//! - `set_currency` (`sync.currency`)
 
 use std::collections::BTreeMap;
 
 use ciborium::Value as Cbor;
 
-use crate::ui::{self, El};
-use crate::value::{field, i64_of, key, str_of, text};
+use crate::act::{form_patch, payload, Act};
+use crate::doc::{Doc, People};
+use crate::ui::{self, badge, button, card, input, row, text, El, Page};
+use crate::value::{int, key, map, text as cbor_text};
 use crate::Host;
 
-pub fn start(host: &Host) {
-    render(host, true);
+pub const NAME: &str = "Expenses";
+
+const CURRENCIES: [&str; 8] = ["EUR", "USD", "GBP", "BRL", "CAD", "AUD", "CHF", "SEK"];
+
+pub fn form(host: &Host) -> Cbor {
+    let people = People::load(host);
+    map([
+        ("what", cbor_text("")),
+        ("amount", Cbor::Null),
+        ("payer", cbor_text(&crate::me())),
+        (
+            "among",
+            Cbor::Map(
+                people
+                    .ids()
+                    .iter()
+                    .map(|id| (cbor_text(ui::path_id(id)), Cbor::Bool(true)))
+                    .collect(),
+            ),
+        ),
+    ])
 }
 
-pub fn change(host: &Host) {
-    render(host, false);
-}
-
-pub fn action(host: &Host, event: &Cbor) {
-    let name = str_of(event, "name").unwrap_or("");
-    let payload = crate::payload(event);
-    let signals = crate::signals(event);
-    let me = crate::event_me(event);
-    let id = crate::new_id(event);
-
-    match name {
+pub fn action(host: &Host, event: &Cbor) -> Result<(), String> {
+    let act = Act::parse(event);
+    let doc = Doc::load(host);
+    let people = People::load(host);
+    match act.name.as_str() {
         "add_expense" => {
-            let what = str_of(&payload, "what")
-                .or_else(|| crate::form_str(&signals, "what"))
-                .unwrap_or("")
-                .trim()
-                .to_owned();
-            let amount = i64_of(&payload, "amount")
-                .or_else(|| crate::form_i64(&signals, "amount"))
-                .unwrap_or(0);
-            if what.is_empty() || amount <= 0 {
-                ui::log(
-                    host,
-                    "An expense needs a name and a positive amount",
-                    "warning",
-                );
-                return;
+            let what = act.form("what");
+            if what.is_empty() {
+                return Err("What was it for?".into());
             }
-            let payer = str_of(&payload, "payer")
-                .filter(|p| !p.is_empty())
-                .map(str::to_owned)
-                .or_else(|| {
-                    crate::form_str(&signals, "payer")
-                        .filter(|p| !p.is_empty())
-                        .map(str::to_owned)
-                })
-                .unwrap_or(me);
-            let among = people(host, &payload, &signals);
-            for (field, value) in [
-                ("what", text(&what)),
-                ("amount", crate::value::int(amount)),
-                ("payer", text(&payer)),
-                ("ts", crate::value::int(crate::event_ts(event))),
-            ] {
-                host.put(&[key(&crate::join(&["e", &id, field]))], value);
+            let amount = act
+                .form_num("amount")
+                .filter(|a| a.is_finite() && *a > 0.0)
+                .ok_or("Type how much it cost, like 12.50.")?;
+            let cents = (amount * 100.0).round() as i64;
+            let payer = match act.form("payer") {
+                "" => act.me.clone(),
+                payer => payer.to_owned(),
+            };
+            let among: Vec<String> = people
+                .ids()
+                .into_iter()
+                .filter(|id| act.form_bool(&["form", "among", &ui::path_id(id)]) == Some(true))
+                .collect();
+            if among.is_empty() {
+                return Err("Tick at least one person to split it with.".into());
             }
-            for person in among {
-                host.put(
-                    &[key(&crate::join(&["e", &id, "among", &person]))],
-                    Cbor::Bool(true),
-                );
+            put(host, &["e", &act.id, "what"], cbor_text(what));
+            put(host, &["e", &act.id, "amount"], int(cents));
+            put(host, &["e", &act.id, "payer"], cbor_text(&payer));
+            put(host, &["e", &act.id, "ts"], int(act.ts));
+            for peer in &among {
+                put(host, &["e", &act.id, "among", peer], Cbor::Bool(true));
             }
-            ui::signal(host, clear_form(&["what", "amount", "payer", "among"]));
+            ui::signal(
+                host,
+                form_patch(&[("what", cbor_text("")), ("amount", Cbor::Null)]),
+            );
         }
         "remove_expense" => {
-            let Some(expense) = resolve_expense(host, str_of(&payload, "expense").unwrap_or(""))
-            else {
-                return;
-            };
-            delete_prefix(host, &crate::prefix(&["e", &expense]));
+            let expense = act.arg("expense");
+            if !ui::confirmed(&format!("remove {expense}")) {
+                return Ok(());
+            }
+            for flat in doc.keys_of(&["e", expense]) {
+                host.delete(&[key(&flat)]);
+            }
         }
         "settle" => {
-            let (Some(from), Some(to), Some(amount)) = (
-                str_of(&payload, "from"),
-                str_of(&payload, "to"),
-                i64_of(&payload, "amount"),
-            ) else {
-                return;
-            };
-            if amount <= 0 || from == to {
-                return;
+            let cents: i64 = act
+                .arg("amount")
+                .parse()
+                .map_err(|_| "That is not an amount.")?;
+            if cents <= 0 {
+                return Ok(());
             }
-            for (field, value) in [
-                ("from", text(from)),
-                ("to", text(to)),
-                ("amount", crate::value::int(amount)),
-                ("by", text(&me)),
-                ("ts", crate::value::int(crate::event_ts(event))),
-            ] {
-                host.put(&[key(&crate::join(&["s", &id, field]))], value);
+            put(host, &["s", &act.id, "from"], cbor_text(act.arg("from")));
+            put(host, &["s", &act.id, "to"], cbor_text(act.arg("to")));
+            put(host, &["s", &act.id, "amount"], int(cents));
+            put(host, &["s", &act.id, "ts"], int(act.ts));
+        }
+        "remove_settlement" => {
+            for flat in doc.keys_of(&["s", act.arg("id")]) {
+                host.delete(&[key(&flat)]);
             }
         }
         "set_currency" => {
-            let currency = str_of(&payload, "currency")
-                .or_else(|| crate::form_str(&signals, "currency"))
-                .unwrap_or("");
-            host.put(&[key("currency")], text(currency));
+            let currency = act.sync_str(&["currency"]);
+            if CURRENCIES.contains(&currency) {
+                host.put(&[key("currency")], cbor_text(currency));
+            }
         }
-        _ => return,
+        _ => {}
     }
-    // The document write makes the host call us back with `change`, which renders.
+    Ok(())
 }
 
-fn people(host: &Host, payload: &Cbor, signals: &Cbor) -> Vec<String> {
-    if let Some(items) = field(payload, "among").and_then(Cbor::as_array) {
-        let people: Vec<String> = items
-            .iter()
-            .filter_map(|p| p.as_text().map(str::to_owned))
-            .collect();
-        if !people.is_empty() {
-            return people;
-        }
-    }
-    let string = str_of(payload, "among")
-        .or_else(|| crate::form_str(signals, "among"))
-        .unwrap_or("");
-    let people = crate::words(string);
-    if !people.is_empty() {
-        return people;
-    }
-    host.members().into_iter().map(|(id, _)| id).collect()
-}
-
-fn clear_form(fields: &[&str]) -> Cbor {
-    Cbor::Map(vec![(
-        text("form"),
-        Cbor::Map(
-            fields
-                .iter()
-                .map(|f| (text(*f), if *f == "amount" { Cbor::Null } else { text("") }))
-                .collect(),
-        ),
-    )])
-}
-
-fn render(host: &Host, initial: bool) {
-    let expenses = state(host);
-    let mut el = Vec::new();
-    el.push(El::new("ex", "column").set("gap", text("medium")));
-    el.push(
-        El::new("ex-title", "text")
-            .parent("ex")
-            .variant("h1")
-            .text("Expenses"),
-    );
-
-    el.push(El::new("ex-form", "card").parent("ex").title("Add expense"));
-    el.push(El::new("ex-form-row1", "row").parent("ex-form"));
-    el.push(
-        El::new("ex-what", "input")
-            .parent("ex-form-row1")
-            .set("label", text("What"))
-            .bind("form.what"),
-    );
-    el.push(
-        El::new("ex-amount", "input")
-            .parent("ex-form-row1")
-            .set("label", text("Amount (cents)"))
-            .variant("number")
-            .bind("form.amount"),
-    );
-    el.push(El::new("ex-form-row2", "row").parent("ex-form"));
-    el.push(
-        El::new("ex-payer", "input")
-            .parent("ex-form-row2")
-            .set("label", text("Paid by"))
-            .placeholder("me")
-            .bind("form.payer"),
-    );
-    el.push(
-        El::new("ex-among", "input")
-            .parent("ex-form-row2")
-            .set("label", text("Split between"))
-            .placeholder("everyone")
-            .bind("form.among"),
-    );
-    el.push(
-        El::new("ex-add", "button")
-            .parent("ex-form")
-            .variant("primary")
-            .label("Add expense")
-            .on_press("add_expense", Cbor::Null),
-    );
-
-    el.push(
-        El::new("ex-list", "list")
-            .parent("ex")
-            .empty("No expenses yet."),
-    );
-    for expense in &expenses.expenses {
-        let row = format!("e-{}", ui::path_id(&expense.id));
-        el.push(El::new(&row, "row").parent("ex-list"));
-        el.push(
-            El::new(&format!("{row}-what"), "text")
-                .parent(&row)
-                .text(&expense.what),
-        );
-        el.push(
-            El::new(&format!("{row}-amount"), "badge")
-                .parent(&row)
-                .text(&money(expense.amount)),
-        );
-        el.push(
-            El::new(&format!("{row}-who"), "text")
-                .parent(&row)
-                .variant("caption")
-                .text(&format!("{} · {}", expense.payer, expense.among.join(", "))),
-        );
-        el.push(
-            El::new(&format!("{row}-del"), "button")
-                .parent(&row)
-                .variant("plain")
-                .label("Remove")
-                .on_press(
-                    "remove_expense",
-                    Cbor::Map(vec![(text("expense"), text(&expense.id))]),
-                ),
-        );
-    }
-
-    el.push(El::new("ex-balances", "card").parent("ex").title(&format!(
-        "Balances ({})",
-        host.get(&[key("currency")]).as_text().unwrap_or("")
-    )));
-    for (person, balance) in &expenses.balances {
-        el.push(
-            El::new(&format!("b-{}", ui::path_id(person)), "text")
-                .parent("ex-balances")
-                .text(&format!("{person}: {}", signed_money(*balance))),
-        );
-    }
-
-    el.push(El::new("ex-settle", "card").parent("ex").title("Settle up"));
-    if expenses.transfers.is_empty() {
-        el.push(
-            El::new("ex-settled", "text")
-                .parent("ex-settle")
-                .variant("caption")
-                .text("All square."),
-        );
-    }
-    for transfer in &expenses.transfers {
-        let row = format!(
-            "s-{}",
-            ui::path_id(&format!("{}:{}", transfer.from, transfer.to))
-        );
-        el.push(El::new(&row, "row").parent("ex-settle"));
-        el.push(
-            El::new(&format!("{row}-text"), "text")
-                .parent(&row)
-                .text(&format!(
-                    "{} pays {} {}",
-                    transfer.from,
-                    transfer.to,
-                    money(transfer.amount)
-                )),
-        );
-        el.push(
-            El::new(&format!("{row}-do"), "button")
-                .parent(&row)
-                .variant("secondary")
-                .label("Settle")
-                .on_press(
-                    "settle",
-                    Cbor::Map(vec![
-                        (text("from"), text(&transfer.from)),
-                        (text("to"), text(&transfer.to)),
-                        (text("amount"), crate::value::int(transfer.amount)),
-                    ]),
-                ),
-        );
-    }
-
-    if initial {
-        ui::start(
-            host,
-            "Expenses",
-            Cbor::Map(vec![(
-                text("form"),
-                Cbor::Map(vec![
-                    (text("what"), text("")),
-                    (text("payer"), text("")),
-                    (text("among"), text("")),
-                ]),
-            )]),
-            el,
-        );
-    } else {
-        ui::update(host, el);
-    }
-}
-
-fn signed_money(cents: i64) -> String {
-    if cents > 0 {
-        format!("+{}", money(cents))
-    } else if cents < 0 {
-        format!("-{}", money(-cents))
-    } else {
-        money(0)
-    }
-}
-
-fn money(cents: i64) -> String {
-    let cents = cents.abs();
-    format!("{}.{:02}", cents / 100, cents % 100)
-}
-
-struct Transfer {
-    from: String,
-    to: String,
-    amount: i64,
+fn put(host: &Host, parts: &[&str], value: Cbor) {
+    host.put(&[key(&crate::join(parts))], value);
 }
 
 struct Expense {
     id: String,
     what: String,
-    amount: i64,
+    cents: i64,
     payer: String,
+    ts: i64,
     among: Vec<String>,
 }
 
-#[derive(Default)]
-struct State {
-    expenses: Vec<Expense>,
-    balances: BTreeMap<String, i64>,
-    transfers: Vec<Transfer>,
+struct Payment {
+    id: String,
+    from: String,
+    to: String,
+    cents: i64,
+    ts: i64,
 }
 
-fn state(host: &Host) -> State {
-    let mut expenses: BTreeMap<String, Expense> = BTreeMap::new();
-    let mut settlements: BTreeMap<String, (String, String, i64)> = BTreeMap::new();
-    for flat in host.keys(&[]) {
-        let parts: Vec<&str> = flat.split(crate::SEP).collect();
-        let value = host.get(&[key(&flat)]);
-        match parts.as_slice() {
-            ["e", id, field] => {
-                let expense = expenses.entry((*id).to_owned()).or_insert_with(|| Expense {
-                    id: (*id).to_owned(),
-                    what: String::new(),
-                    amount: 0,
-                    payer: String::new(),
-                    among: Vec::new(),
-                });
-                match *field {
-                    "what" => expense.what = value.as_text().unwrap_or("").to_owned(),
-                    "amount" => expense.amount = as_i64(&value),
-                    "payer" => expense.payer = value.as_text().unwrap_or("").to_owned(),
-                    _ => {}
-                }
-            }
-            ["e", id, "among", person] => {
-                expenses
-                    .entry((*id).to_owned())
-                    .or_insert_with(|| Expense {
-                        id: (*id).to_owned(),
-                        what: String::new(),
-                        amount: 0,
-                        payer: String::new(),
-                        among: Vec::new(),
-                    })
-                    .among
-                    .push((*person).to_owned());
-            }
-            ["s", id, field] => {
-                let settlement = settlements.entry((*id).to_owned()).or_default();
-                match *field {
-                    "from" => settlement.0 = value.as_text().unwrap_or("").to_owned(),
-                    "to" => settlement.1 = value.as_text().unwrap_or("").to_owned(),
-                    "amount" => settlement.2 = as_i64(&value),
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
+fn expenses(doc: &Doc) -> Vec<Expense> {
+    doc.ids("e")
+        .into_iter()
+        .filter(|id| doc.get(&["e", id, "amount"]).is_some())
+        .map(|id| Expense {
+            what: doc.str(&["e", &id, "what"]).to_owned(),
+            cents: doc.int(&["e", &id, "amount"]),
+            payer: doc.str(&["e", &id, "payer"]).to_owned(),
+            ts: doc.int(&["e", &id, "ts"]),
+            among: doc
+                .under(&["e", &id, "among"])
+                .into_iter()
+                .filter(|(_, v)| v.as_bool() == Some(true))
+                .map(|(p, _)| p[0].to_owned())
+                .collect(),
+            id,
+        })
+        .collect()
+}
 
-    let mut balances: BTreeMap<String, i64> = BTreeMap::new();
-    for expense in expenses.values_mut() {
-        expense.among.sort();
-        expense.among.dedup();
-        if expense.amount <= 0 {
-            continue;
-        }
-        let mut among: Vec<&str> = expense.among.iter().map(String::as_str).collect();
-        if among.is_empty() {
-            among.push(&expense.payer);
-        }
-        *balances.entry(expense.payer.clone()).or_default() += expense.amount;
+fn payments(doc: &Doc) -> Vec<Payment> {
+    doc.ids("s")
+        .into_iter()
+        .filter(|id| doc.get(&["s", id, "amount"]).is_some())
+        .map(|id| Payment {
+            from: doc.str(&["s", &id, "from"]).to_owned(),
+            to: doc.str(&["s", &id, "to"]).to_owned(),
+            cents: doc.int(&["s", &id, "amount"]),
+            ts: doc.int(&["s", &id, "ts"]),
+            id,
+        })
+        .collect()
+}
+
+/// What each person is owed (positive) or owes (negative), in cents.
+fn balances(expenses: &[Expense], payments: &[Payment]) -> BTreeMap<String, i64> {
+    let mut balance: BTreeMap<String, i64> = BTreeMap::new();
+    for expense in expenses {
+        *balance.entry(expense.payer.clone()).or_default() += expense.cents;
+        let mut among = expense.among.clone();
+        among.sort();
         let n = among.len() as i64;
-        let base = expense.amount / n;
-        let rest = expense.amount % n;
-        for (i, person) in among.iter().enumerate() {
-            let share = base + i64::from((i as i64) < rest);
-            *balances.entry((*person).to_owned()).or_default() -= share;
-        }
-    }
-    for (from, to, amount) in settlements.values() {
-        if *amount <= 0 {
+        if n == 0 {
             continue;
         }
-        *balances.entry(from.clone()).or_default() += amount;
-        *balances.entry(to.clone()).or_default() -= amount;
+        // The cents that do not divide evenly go to the first few, the same on every device.
+        for (i, person) in among.iter().enumerate() {
+            let share = expense.cents / n + i64::from((i as i64) < expense.cents % n);
+            *balance.entry(person.clone()).or_default() -= share;
+        }
+    }
+    for payment in payments {
+        *balance.entry(payment.from.clone()).or_default() += payment.cents;
+        *balance.entry(payment.to.clone()).or_default() -= payment.cents;
+    }
+    balance
+}
+
+/// A few payments that settle everything: the biggest debtor pays the biggest creditor.
+fn transfers(balance: &BTreeMap<String, i64>) -> Vec<(String, String, i64)> {
+    let mut owed: Vec<(String, i64)> = balance
+        .iter()
+        .filter(|(_, c)| **c > 0)
+        .map(|(p, c)| (p.clone(), *c))
+        .collect();
+    let mut owes: Vec<(String, i64)> = balance
+        .iter()
+        .filter(|(_, c)| **c < 0)
+        .map(|(p, c)| (p.clone(), -*c))
+        .collect();
+    let mut out = Vec::new();
+    while !owed.is_empty() && !owes.is_empty() {
+        owed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        owes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let pay = owed[0].1.min(owes[0].1);
+        out.push((owes[0].0.clone(), owed[0].0.clone(), pay));
+        owed[0].1 -= pay;
+        owes[0].1 -= pay;
+        owed.retain(|(_, c)| *c > 0);
+        owes.retain(|(_, c)| *c > 0);
+    }
+    out
+}
+
+fn money(cents: i64, currency: &str) -> String {
+    format!("{}.{:02} {currency}", cents.abs() / 100, cents.abs() % 100)
+}
+
+pub fn page(host: &Host) -> Page {
+    let doc = Doc::load(host);
+    let people = People::load(host);
+    let currency = match doc.str(&["currency"]) {
+        "" => "EUR".to_owned(),
+        c => c.to_owned(),
+    };
+    let expenses = expenses(&doc);
+    let payments = payments(&doc);
+    let balance = balances(&expenses, &payments);
+    let mut page = Page::new(NAME);
+
+    page.add(row("cur", "root").set("justify", cbor_text("end")));
+    page.add(
+        El::new("cur-pick", "select")
+            .parent("cur")
+            .label("Currency")
+            .bind("sync.currency")
+            .set(
+                "options",
+                Cbor::Array(
+                    CURRENCIES
+                        .iter()
+                        .map(|c| map([("value", cbor_text(*c)), ("label", cbor_text(*c))]))
+                        .collect(),
+                ),
+            )
+            .on_change("set_currency", Cbor::Null),
+    );
+    page.sync("currency", cbor_text(&currency));
+
+    page.add(card("new", "root", "Add an expense"));
+    page.add(input("new-what", "new", "What was it for?", "form.what").placeholder("Groceries"));
+    page.add(row("new-pay", "new"));
+    page.add(
+        input(
+            "new-amount",
+            "new-pay",
+            &format!("Amount ({currency})"),
+            "form.amount",
+        )
+        .variant("number")
+        .placeholder("12.50"),
+    );
+    page.add(
+        El::new("new-payer", "select")
+            .parent("new-pay")
+            .label("Paid by")
+            .bind("form.payer")
+            .set(
+                "options",
+                Cbor::Array(
+                    people
+                        .ids()
+                        .iter()
+                        .map(|id| {
+                            map([
+                                ("value", cbor_text(id)),
+                                ("label", cbor_text(people.name(id))),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+    );
+    page.add(text("new-split", "new", "caption", "Split between"));
+    page.add(row("new-among", "new").set("wrap", Cbor::Bool(true)));
+    for id in people.ids() {
+        page.add(
+            El::new(&format!("new-among-{}", ui::path_id(&id)), "checkbox")
+                .parent("new-among")
+                .label(&people.name(&id))
+                .bind(&format!("form.among.{}", ui::path_id(&id))),
+        );
+    }
+    page.add(button(
+        "new-go",
+        "new",
+        "primary",
+        "Add expense",
+        "add_expense",
+        Cbor::Null,
+    ));
+
+    // Balances and what would settle them.
+    page.add(card("bal", "root", "Who owes whom"));
+    if expenses.is_empty() && payments.is_empty() {
+        page.add(text("bal-none", "bal", "caption", "Nothing to settle yet."));
+    }
+    for (person, cents) in &balance {
+        let line = format!("bal-{}", ui::path_id(person));
+        page.add(row(&line, "bal"));
+        page.add(text(
+            &format!("{line}-name"),
+            &line,
+            "body",
+            &people.name(person),
+        ));
+        let (variant, label) = match cents {
+            0 => ("neutral", "settled".to_owned()),
+            c if *c > 0 => ("success", format!("is owed {}", money(*c, &currency))),
+            c => ("failure", format!("owes {}", money(*c, &currency))),
+        };
+        page.add(badge(&format!("{line}-amount"), &line, variant, &label));
+    }
+    for (i, (from, to, cents)) in transfers(&balance).iter().enumerate() {
+        let line = format!("pay{i}");
+        page.add(row(&line, "bal"));
+        page.add(text(
+            &format!("{line}-t"),
+            &line,
+            "body",
+            &format!(
+                "{} pays {} {}",
+                people.name(from),
+                people.name(to),
+                money(*cents, &currency)
+            ),
+        ));
+        page.add(button(
+            &format!("{line}-go"),
+            &line,
+            "secondary",
+            "Mark paid",
+            "settle",
+            payload(&[("from", from), ("to", to), ("amount", &cents.to_string())]),
+        ));
     }
 
-    let mut debtors: Vec<(&str, i64)> = balances
+    // Newest first: expenses and payments in one history.
+    enum Entry<'a> {
+        Expense(&'a Expense),
+        Payment(&'a Payment),
+    }
+    let mut history: Vec<(i64, Entry)> = expenses
         .iter()
-        .filter(|(_, b)| **b < 0)
-        .map(|(p, b)| (p.as_str(), -*b))
+        .map(|e| (e.ts, Entry::Expense(e)))
+        .chain(payments.iter().map(|p| (p.ts, Entry::Payment(p))))
         .collect();
-    let mut creditors: Vec<(&str, i64)> = balances
-        .iter()
-        .filter(|(_, b)| **b > 0)
-        .map(|(p, b)| (p.as_str(), *b))
-        .collect();
-    debtors.sort_by_key(|(p, _)| *p);
-    creditors.sort_by_key(|(p, _)| *p);
-    let mut transfers = Vec::new();
-    let mut c = 0;
-    for (debtor, mut debt) in debtors {
-        while debt > 0 && c < creditors.len() {
-            let (creditor, credit) = creditors[c];
-            let amount = debt.min(credit);
-            transfers.push(Transfer {
-                from: debtor.to_owned(),
-                to: creditor.to_owned(),
-                amount,
-            });
-            debt -= amount;
-            creditors[c].1 -= amount;
-            if creditors[c].1 == 0 {
-                c += 1;
+    history.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+    if !history.is_empty() {
+        page.add(card("hist", "root", "History"));
+    }
+    for (ts, entry) in &history {
+        let day = crate::time::day_label(crate::time::day_of(*ts));
+        match entry {
+            Entry::Expense(e) => {
+                let line = format!("h-{}", ui::path_id(&e.id));
+                page.add(row(&line, "hist"));
+                page.add(
+                    El::new(&format!("{line}-t"), "column")
+                        .parent(&line)
+                        .set("gap", cbor_text("none")),
+                );
+                page.add(text(
+                    &format!("{line}-what"),
+                    &format!("{line}-t"),
+                    "body",
+                    &format!("{} · {}", e.what, money(e.cents, &currency)),
+                ));
+                page.add(text(
+                    &format!("{line}-who"),
+                    &format!("{line}-t"),
+                    "caption",
+                    &format!(
+                        "{} paid · split between {} · {day}",
+                        people.name(&e.payer),
+                        people.list(&e.among)
+                    ),
+                ));
+                let asking = ui::asking(&format!("remove {}", e.id));
+                page.add(button(
+                    &format!("{line}-del"),
+                    &line,
+                    if asking { "failure" } else { "plain" },
+                    if asking { "Press again" } else { "Remove" },
+                    "remove_expense",
+                    payload(&[("expense", &e.id)]),
+                ));
+            }
+            Entry::Payment(p) => {
+                let line = format!("h-{}", ui::path_id(&p.id));
+                page.add(row(&line, "hist"));
+                page.add(text(
+                    &format!("{line}-t"),
+                    &line,
+                    "caption",
+                    &format!(
+                        "{} paid {} {} · {day}",
+                        people.name(&p.from),
+                        people.name(&p.to),
+                        money(p.cents, &currency)
+                    ),
+                ));
+                page.add(button(
+                    &format!("{line}-del"),
+                    &line,
+                    "plain",
+                    "Undo",
+                    "remove_settlement",
+                    payload(&[("id", &p.id)]),
+                ));
             }
         }
     }
-
-    let mut expenses: Vec<Expense> = expenses.into_values().collect();
-    expenses.sort_by(|a, b| a.id.cmp(&b.id));
-    State {
-        expenses,
-        balances,
-        transfers,
-    }
+    page
 }
 
-fn resolve_expense(host: &Host, wanted: &str) -> Option<String> {
-    if wanted.is_empty() {
-        return None;
-    }
-    if !host
-        .get(&[key(&crate::join(&["e", wanted, "amount"]))])
-        .is_null()
-    {
-        return Some(wanted.to_owned());
-    }
-    for flat in host.keys(&[]) {
-        let parts: Vec<&str> = flat.split(crate::SEP).collect();
-        if let ["e", id, "what"] = parts.as_slice() {
-            if host.get(&[key(&flat)]).as_text() == Some(wanted) {
-                return Some((*id).to_owned());
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expense(cents: i64, payer: &str, among: &[&str]) -> Expense {
+        Expense {
+            id: "e".into(),
+            what: String::new(),
+            cents,
+            payer: payer.into(),
+            ts: 0,
+            among: among.iter().map(|s| (*s).to_owned()).collect(),
         }
     }
-    None
-}
 
-fn delete_prefix(host: &Host, prefix: &str) {
-    for flat in host.keys(&[]) {
-        if flat.starts_with(prefix) {
-            host.delete(&[key(&flat)]);
+    #[test]
+    fn uneven_splits_balance_to_zero() {
+        let expenses = [
+            expense(1000, "a", &["a", "b", "c"]),
+            expense(1, "b", &["a", "b"]),
+        ];
+        let balance = balances(&expenses, &[]);
+        assert_eq!(balance.values().sum::<i64>(), 0);
+        let mut settled = balance.clone();
+        for (from, to, cents) in transfers(&balance) {
+            *settled.get_mut(&from).unwrap() += cents;
+            *settled.get_mut(&to).unwrap() -= cents;
         }
+        assert!(settled.values().all(|c| *c == 0), "{settled:?}");
     }
-}
-
-fn as_i64(v: &Cbor) -> i64 {
-    v.as_integer()
-        .and_then(|i| i64::try_from(i128::from(i)).ok())
-        .unwrap_or(0)
 }

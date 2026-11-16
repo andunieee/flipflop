@@ -307,7 +307,12 @@ impl Backend {
 
     /// Run `f` once typing in `field` pauses for `after`. Every keystroke calls this; only the last
     /// one's `f` runs, so typing does not hit the disk (and the peers) once per character.
-    pub(crate) fn after_typing(&self, field: String, after: Duration, f: impl FnOnce() + Send + 'static) {
+    pub(crate) fn after_typing(
+        &self,
+        field: String,
+        after: Duration,
+        f: impl FnOnce() + Send + 'static,
+    ) {
         let edit = {
             let mut typing = self.0.typing.lock().unwrap();
             let edit = typing.entry(field.clone()).or_default();

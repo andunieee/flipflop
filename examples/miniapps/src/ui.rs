@@ -1,7 +1,7 @@
 //! hypereffect frames: build a `vtree` of elements, diff it against the last one, and emit the
 //! resulting `signal`/`element`/`remove`/`metadata` lines to the host's renderer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use ciborium::Value as Cbor;
@@ -104,9 +104,136 @@ pub fn path_id(id: &str) -> String {
     format!("h{hash:016x}")
 }
 
+/// One screen: the elements (parents before their children, siblings in order) and the signals the
+/// app owns. The `sync` signals mirror the document (a checkbox's state, a selected answer) and the
+/// app sets them on every redraw; the `form` signals belong to the user's inputs.
+pub struct Page {
+    els: Vec<El>,
+    sync: BTreeMap<String, Cbor>,
+}
+
+impl Page {
+    /// A page with its title, and the app's last error as a notice under it.
+    pub fn new(title: &str) -> Page {
+        let mut page = Page {
+            els: Vec::new(),
+            sync: BTreeMap::new(),
+        };
+        page.add(El::new("root", "column").set("gap", crate::value::text("medium")));
+        page.add(text("title", "root", "h1", title));
+        if let Some(error) = ERROR.lock().unwrap().clone() {
+            page.add(
+                El::new("error", "notice")
+                    .parent("root")
+                    .variant("failure")
+                    .text(&error),
+            );
+        }
+        page
+    }
+
+    pub fn add(&mut self, el: El) {
+        self.els.push(el);
+    }
+
+    /// Set the signal `sync.<key>`, which elements bind to as `sync.<key>`.
+    pub fn sync(&mut self, key: &str, value: Cbor) {
+        self.sync.insert(key.to_owned(), value);
+    }
+}
+
+static ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+/// Show `message` under the title until the next action.
+pub fn fail(message: impl Into<String>) {
+    *ERROR.lock().unwrap() = Some(message.into());
+}
+
+pub fn clear_error() {
+    *ERROR.lock().unwrap() = None;
+}
+
+/// What a destructive button asked about on the last action, and on the one before it.
+static CONFIRM: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
+
+/// A new action begins: what was asked last time can now be confirmed, and nothing older can.
+pub fn begin_action() {
+    let mut confirm = CONFIRM.lock().unwrap();
+    confirm.1 = std::mem::take(&mut confirm.0);
+}
+
+/// Whether the user already pressed this destructive button once, just before. If not, the app
+/// shows "Press again" on it and this is false.
+pub fn confirmed(key: &str) -> bool {
+    let mut confirm = CONFIRM.lock().unwrap();
+    if confirm.1 == key {
+        confirm.1.clear();
+        return true;
+    }
+    confirm.0 = key.to_owned();
+    false
+}
+
+/// Whether the button for `key` is waiting for its second press.
+pub fn asking(key: &str) -> bool {
+    CONFIRM.lock().unwrap().0 == key
+}
+
+// Shorthands for the elements apps use most.
+
+pub fn row(id: &str, parent: &str) -> El {
+    El::new(id, "row").parent(parent)
+}
+
+pub fn column(id: &str, parent: &str) -> El {
+    El::new(id, "column").parent(parent)
+}
+
+pub fn card(id: &str, parent: &str, title: &str) -> El {
+    El::new(id, "card").parent(parent).title(title)
+}
+
+/// `variant`: h1, h2, h3, body, caption or code.
+pub fn text(id: &str, parent: &str, variant: &str, value: &str) -> El {
+    El::new(id, "text")
+        .parent(parent)
+        .variant(variant)
+        .text(value)
+}
+
+/// `variant`: neutral, info, success, warning or failure.
+pub fn badge(id: &str, parent: &str, variant: &str, value: &str) -> El {
+    El::new(id, "badge")
+        .parent(parent)
+        .variant(variant)
+        .text(value)
+}
+
+/// `variant`: primary, secondary, plain, success or failure.
+pub fn button(
+    id: &str,
+    parent: &str,
+    variant: &str,
+    label: &str,
+    action: &str,
+    payload: Cbor,
+) -> El {
+    El::new(id, "button")
+        .parent(parent)
+        .variant(variant)
+        .label(label)
+        .on_press(action, payload)
+}
+
+/// A text field bound to the signal `bind`.
+pub fn input(id: &str, parent: &str, label: &str, bind: &str) -> El {
+    El::new(id, "input").parent(parent).label(label).bind(bind)
+}
+
 #[derive(Default)]
 struct Ui {
     last: Vec<Node>,
+    sync: BTreeMap<String, Cbor>,
 }
 
 static UI: OnceLock<Mutex<Ui>> = OnceLock::new();
@@ -118,11 +245,16 @@ fn ui() -> &'static Mutex<Ui> {
 /// A new session: the renderer starts with an empty tree.
 pub fn reset() {
     *ui().lock().unwrap() = Ui::default();
+    clear_error();
 }
 
-/// Start the session: metadata, initial signals, then the whole tree.
-pub fn start(host: &Host, name: &str, signals: Cbor, elements: Vec<El>) {
-    let roots = tree(elements);
+/// Start the session: metadata, initial signals (`form`, and the page's `sync`), then the tree.
+pub fn start(host: &Host, name: &str, form: Cbor, page: Page) {
+    let roots = tree(page.els);
+    let signals = crate::value::map([
+        ("form", form),
+        ("sync", Cbor::Map(sync_entries(&page.sync))),
+    ]);
     let mut out = String::new();
     out.push_str(&ServerMessage::Metadata(Metadata::new().name(name)).to_line());
     out.push_str(&ServerMessage::signal(ciborium_to_json(&signals)).to_line());
@@ -130,34 +262,58 @@ pub fn start(host: &Host, name: &str, signals: Cbor, elements: Vec<El>) {
         out.push_str(&message.to_line());
     }
     host.emit_text(&out);
-    ui().lock().unwrap().last = roots;
+    let mut ui = ui().lock().unwrap();
+    ui.last = roots;
+    ui.sync = page.sync;
 }
 
-/// Re-send what changed, add what is new, and remove what is gone.
-pub fn update(host: &Host, elements: Vec<El>) {
-    let roots = tree(elements);
+/// Re-send what changed: elements, and signals the app owns.
+pub fn update(host: &Host, page: Page) {
+    send(host, page, false);
+}
+
+/// Like [`update`], but resend every `sync` signal: after an action, the user's controls may be
+/// ahead of the document (a checkbox ticked, an action refused).
+pub fn refresh(host: &Host, page: Page) {
+    send(host, page, true);
+}
+
+fn send(host: &Host, page: Page, force: bool) {
+    let roots = tree(page.els);
     let mut ui = ui().lock().unwrap();
-    let messages = vtree::diff_into(None, &ui.last, &roots);
-    if messages.is_empty() {
-        return;
-    }
     let mut out = String::new();
-    for message in &messages {
+
+    // A merge patch: what is new or different, and null for what is gone.
+    let mut patch: Vec<(Cbor, Cbor)> = Vec::new();
+    for (key, value) in &page.sync {
+        if force || ui.sync.get(key) != Some(value) {
+            patch.push((crate::value::text(key), value.clone()));
+        }
+    }
+    for key in ui.sync.keys().filter(|k| !page.sync.contains_key(*k)) {
+        patch.push((crate::value::text(key), Cbor::Null));
+    }
+    if !patch.is_empty() {
+        let patch = crate::value::map([("sync", Cbor::Map(patch))]);
+        out.push_str(&ServerMessage::signal(ciborium_to_json(&patch)).to_line());
+    }
+    for message in vtree::diff_into(None, &ui.last, &roots) {
         out.push_str(&message.to_line());
     }
     host.emit_text(&out);
     ui.last = roots;
+    ui.sync = page.sync;
+}
+
+fn sync_entries(sync: &BTreeMap<String, Cbor>) -> Vec<(Cbor, Cbor)> {
+    sync.iter()
+        .map(|(k, v)| (crate::value::text(k), v.clone()))
+        .collect()
 }
 
 /// Send one signal patch (a JSON Merge Patch), for example to clear an input after an action.
 pub fn signal(host: &Host, patch: Cbor) {
     host.emit_text(&ServerMessage::signal(ciborium_to_json(&patch)).to_line());
-}
-
-/// An app's diagnostic; hypereffect 0.6.1's server messages have no log line, so this goes to the
-/// host's log instead.
-pub fn log(host: &Host, summary: &str, _kind: &str) {
-    host.log(summary);
 }
 
 /// Assemble the flat list (parents before children) into the `vtree` forest. The order of each

@@ -10,7 +10,18 @@
 //! - `change`: the document changed, locally or from a syncing peer (the event carries the
 //!   patches). Re-send what the interface needs.
 //! - `action`: the local renderer sent an action (name, payload, signals). Validate it, write the
-//!   document, and render. The following `change` renders the same result on every other device.
+//!   document, and render; if it is refused, say why in a notice. The following `change` renders
+//!   the same result on every other device.
+//!
+//! Every event carries the device's clock and time zone (see [`time`]), so dates are typed and shown
+//! in local time while the document holds UTC milliseconds.
+//!
+//! # An app
+//!
+//! A module in `apps/` with `NAME`, `form(host)` (the user's initial input signals), `page(host)` (the
+//! whole interface for the document as it is) and `action(host, event)` (`Err` is shown to the user).
+//! The driver below does the rest: it renders at the start, after every change and after every
+//! action, and the renderer only receives what differs from the last frame.
 //!
 //! # Why every value is a scalar under its own key
 //!
@@ -24,8 +35,12 @@
 
 #![allow(dead_code)] // each build has one app, so the shared helpers are not all used
 
+mod act;
 mod apps;
+mod doc;
 mod host;
+mod picker;
+mod time;
 mod ui;
 mod value;
 
@@ -33,6 +48,13 @@ use ciborium::Value as Cbor;
 
 use host::Host;
 use value::{key, str_of};
+
+static ME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Our own peer id, from the start event.
+pub fn me() -> String {
+    ME.lock().unwrap().clone()
+}
 
 /// The separator in flat keys: U+001F.
 pub const SEP: char = '\u{1f}';
@@ -100,32 +122,6 @@ pub fn words(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// `YYYY-MM-DD HH:MM` from epoch milliseconds (UTC), without a date library.
-pub fn fmt_time(ms: i64) -> String {
-    let secs = ms.div_euclid(1000);
-    let days = secs.div_euclid(86_400);
-    let sod = secs.rem_euclid(86_400);
-    let (y, m, d) = civil_from_days(days);
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
-        sod / 3600,
-        (sod % 3600) / 60
-    )
-}
-
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = mp + if mp < 10 { 3 } else { -9 };
-    (y + i64::from(m <= 2), m, d)
-}
-
 /// Room for one event, which the host fills and the app frees.
 #[no_mangle]
 pub extern "C" fn ff_alloc(len: i32) -> i32 {
@@ -146,54 +142,31 @@ pub extern "C" fn ff_event(ptr: i32, len: i32) {
         return;
     };
     let host = Host;
+    time::set_clock(
+        value::i64_of(&event, "ts").unwrap_or(0),
+        value::i64_of(&event, "tz").unwrap_or(0),
+    );
+    if let Some(me) = str_of(&event, "me") {
+        *ME.lock().unwrap() = me.to_owned();
+    }
+    use apps::current as app;
     match str_of(&event, "type") {
         Some("start") => {
             ui::reset();
+            picker::reset();
             // Member names, for apps that show or default to people.
             host.watch(&[key("members")]);
-            start(&host);
+            ui::start(&host, app::NAME, app::form(&host), app::page(&host));
         }
-        Some("change") => change(&host),
-        Some("action") => action(&host, &event),
+        Some("change") => ui::update(&host, app::page(&host)),
+        Some("action") => {
+            ui::clear_error();
+            ui::begin_action();
+            if let Err(why) = app::action(&host, &event) {
+                ui::fail(why);
+            }
+            ui::refresh(&host, app::page(&host));
+        }
         _ => {}
     }
-}
-
-fn start(host: &Host) {
-    #[cfg(feature = "checklist")]
-    apps::checklist::start(host);
-    #[cfg(feature = "expenses")]
-    apps::expenses::start(host);
-    #[cfg(feature = "poll")]
-    apps::poll::start(host);
-    #[cfg(feature = "availability")]
-    apps::availability::start(host);
-    #[cfg(feature = "calendar")]
-    apps::calendar::start(host);
-}
-
-fn change(host: &Host) {
-    #[cfg(feature = "checklist")]
-    apps::checklist::change(host);
-    #[cfg(feature = "expenses")]
-    apps::expenses::change(host);
-    #[cfg(feature = "poll")]
-    apps::poll::change(host);
-    #[cfg(feature = "availability")]
-    apps::availability::change(host);
-    #[cfg(feature = "calendar")]
-    apps::calendar::change(host);
-}
-
-fn action(host: &Host, event: &Cbor) {
-    #[cfg(feature = "checklist")]
-    apps::checklist::action(host, event);
-    #[cfg(feature = "expenses")]
-    apps::expenses::action(host, event);
-    #[cfg(feature = "poll")]
-    apps::poll::action(host, event);
-    #[cfg(feature = "availability")]
-    apps::availability::action(host, event);
-    #[cfg(feature = "calendar")]
-    apps::calendar::action(host, event);
 }

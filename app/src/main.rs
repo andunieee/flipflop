@@ -77,7 +77,13 @@ fn install_desktop_entry() -> anyhow::Result<()> {
     let exec = format!("Exec={}", quote(&exe.to_string_lossy()));
     let entry_text: String = template
         .lines()
-        .map(|line| if line == "Exec=flipflop" { exec.as_str() } else { line })
+        .map(|line| {
+            if line == "Exec=flipflop" {
+                exec.as_str()
+            } else {
+                line
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::create_dir_all(&applications)?;
@@ -100,7 +106,9 @@ fn install_desktop_entry() -> anyhow::Result<()> {
     }
 
     // Best effort: the entry works without these, just not right away.
-    let _ = std::process::Command::new("update-desktop-database").arg(&applications).status();
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(&applications)
+        .status();
     let _ = std::process::Command::new("gtk-update-icon-cache")
         .args(["-q", "-t"])
         .arg(&icons)

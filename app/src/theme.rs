@@ -83,7 +83,11 @@ impl Palette {
 
     /// Freya's own components (inputs, switches, menus) in the same colours.
     pub fn freya_theme(&self) -> Theme {
-        let mut theme = if self.dark { dark_theme() } else { light_theme() };
+        let mut theme = if self.dark {
+            dark_theme()
+        } else {
+            light_theme()
+        };
         theme.name = if self.dark { "dark" } else { "light" };
         let base = if self.dark { DARK_COLORS } else { LIGHT_COLORS };
         theme.colors = ColorsSheet {
@@ -178,7 +182,8 @@ impl Dim {
 pub fn touch() -> bool {
     static TOUCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TOUCH.get_or_init(|| {
-        cfg!(target_os = "android") || std::env::var_os("FLIPFLOP_PHONE_LAYOUT").is_some_and(|v| v == "1")
+        cfg!(target_os = "android")
+            || std::env::var_os("FLIPFLOP_PHONE_LAYOUT").is_some_and(|v| v == "1")
     })
 }
 

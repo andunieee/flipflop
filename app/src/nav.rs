@@ -127,7 +127,11 @@ impl Ui {
             drop_hover: false,
             toast: None,
             invite_choice: 0,
-            theme: if theme.is_empty() { "system".into() } else { theme },
+            theme: if theme.is_empty() {
+                "system".into()
+            } else {
+                theme
+            },
             sidebar_width: read("sidebar-width")
                 .parse::<f32>()
                 .map_or(240., |w| w.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)),
@@ -165,7 +169,11 @@ impl Nav {
 
     /// Where leaving a group goes: the groups list on phones, Home on the desktop (which has no list page).
     pub fn list_page(&self) -> Page {
-        if self.touch() { Page::Groups } else { Page::Home }
+        if self.touch() {
+            Page::Groups
+        } else {
+            Page::Home
+        }
     }
 
     pub fn go(mut self, page: Page) {
@@ -180,7 +188,8 @@ impl Nav {
         };
         // The group left is caught up, so is the new one.
         if left != now {
-            self.backend().mark_seen(left.into_iter().chain(now).collect());
+            self.backend()
+                .mark_seen(left.into_iter().chain(now).collect());
         }
     }
 
@@ -233,12 +242,15 @@ impl Nav {
         let mut ui = self.ui;
         // At the root: a task belongs to the component it was started from, and dies with it (a
         // card's button that is gone before the message is), which would leave the message up.
-        spawn_in_scope(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-            if ui.peek().toast.as_ref().is_some_and(|t| t.0 == serial) {
-                ui.write().toast = None;
-            }
-        }, ScopeId::ROOT);
+        spawn_in_scope(
+            async move {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                if ui.peek().toast.as_ref().is_some_and(|t| t.0 == serial) {
+                    ui.write().toast = None;
+                }
+            },
+            ScopeId::ROOT,
+        );
     }
 
     /// Send what was shared with us to this group (or paired peer's page), and show it there.
@@ -275,7 +287,9 @@ impl Nav {
         let open = self.ui.peek().open_group().map(str::to_owned);
         match open {
             // On the music tab, to play; anywhere else, as files.
-            Some(gid) if self.ui.peek().group_tab == "music" => self.backend().offer_music(gid, paths),
+            Some(gid) if self.ui.peek().group_tab == "music" => {
+                self.backend().offer_music(gid, paths)
+            }
             Some(gid) => {
                 self.set_tab("files");
                 self.backend().offer_paths(gid, paths);

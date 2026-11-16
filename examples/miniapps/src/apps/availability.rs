@@ -1,456 +1,300 @@
-//! Availability: a few time slots, and who can make each one.
+//! Finding a time: a few possible times, and who can make each one.
+//!
+//! A time is picked with selects (day, month, year, hour, minute) in the user's own zone and stored
+//! as UTC milliseconds.
 //!
 //! Flat state:
-//! - `a<US><plan><US>title|note|by|ts`
-//! - `a<US><plan><US>s<US><slot><US>start|end` (epoch ms)
-//! - `r<US><plan><US><slot><US><peer>` = `"yes"`, `"maybe"` or `"no"`
+//! - `a<US><plan><US>title|note|by`
+//! - `s<US><plan><US><slot><US>start` (epoch ms)
+//! - `v<US><plan><US><slot><US><peer>` = `"yes"`, `"maybe"` or `"no"`
 //!
 //! Actions:
-//! - `{name:"create", payload:{title, note?, slots:[{id,start,end}]}}` (or `form.slots` as
-//!   `"fri 1000 2000, sat 3000 4000"`)
-//! - `{name:"respond", payload:{plan, slot, value:"yes"|"maybe"|"no"}}`
-//! - `{name:"remove_plan", payload:{plan}}`
-
-use std::collections::BTreeMap;
+//! - `create` (`form.title`, `form.note`), `add_slot {plan}` (the picker at `form.slot.<plan hash>`)
+//! - `respond {plan, slot}` (the answer is in `sync.v.<plan hash>.<slot hash>`)
+//! - `remove_plan {plan}` (asks twice)
 
 use ciborium::Value as Cbor;
 
-use crate::ui::{self, El};
-use crate::value::{field, i64_of, key, str_of, text};
+use crate::act::{payload, Act};
+use crate::doc::{Doc, People};
+use crate::picker;
+use crate::time;
+use crate::ui::{self, badge, button, card, input, row, text, El, Page};
+use crate::value::{int, key, map, text as cbor_text};
 use crate::Host;
 
-pub fn start(host: &Host) {
-    render(host, true);
+pub const NAME: &str = "Find a time";
+
+pub fn form(host: &Host) -> Cbor {
+    let doc = Doc::load(host);
+    let slot = doc
+        .ids("a")
+        .iter()
+        .map(|plan| {
+            let hash = ui::path_id(plan);
+            picker::mark(&["slot", &hash]);
+            (cbor_text(hash), picker::initial())
+        })
+        .collect();
+    map([
+        ("title", cbor_text("")),
+        ("note", cbor_text("")),
+        ("slot", Cbor::Map(slot)),
+    ])
 }
 
-pub fn change(host: &Host) {
-    render(host, false);
-}
-
-pub fn action(host: &Host, event: &Cbor) {
-    let name = str_of(event, "name").unwrap_or("");
-    let payload = crate::payload(event);
-    let signals = crate::signals(event);
-    let id = crate::new_id(event);
-
-    match name {
+pub fn action(host: &Host, event: &Cbor) -> Result<(), String> {
+    let act = Act::parse(event);
+    let doc = Doc::load(host);
+    match act.name.as_str() {
         "create" => {
-            let title = str_of(&payload, "title")
-                .or_else(|| crate::form_str(&signals, "title"))
-                .unwrap_or("")
-                .trim()
-                .to_owned();
-            let slots = slots(&payload, &signals);
-            if title.is_empty() || slots.is_empty() {
-                ui::log(host, "A plan needs a title and a slot", "warning");
-                return;
+            let title = act.form("title");
+            if title.is_empty() {
+                return Err("What is it for? Give the plan a title.".into());
             }
-            for (field, value) in [
-                ("title", text(&title)),
-                (
-                    "note",
-                    text(
-                        str_of(&payload, "note")
-                            .or_else(|| crate::form_str(&signals, "note"))
-                            .unwrap_or(""),
-                    ),
-                ),
-                ("by", text(&crate::event_me(event))),
-                ("ts", crate::value::int(crate::event_ts(event))),
-            ] {
-                host.put(&[key(&crate::join(&["a", &id, field]))], value);
-            }
-            for (slot, start, end) in slots {
-                put_slot(host, &id, &slot, start, end);
-            }
+            put(host, &["a", &act.id, "title"], cbor_text(title));
+            put(host, &["a", &act.id, "note"], cbor_text(act.form("note")));
+            put(host, &["a", &act.id, "by"], cbor_text(&act.me));
+            let hash = ui::path_id(&act.id);
+            picker::mark(&["slot", &hash]);
             ui::signal(
                 host,
-                Cbor::Map(vec![(
-                    text("form"),
-                    Cbor::Map(vec![
-                        (text("title"), text("")),
-                        (text("note"), text("")),
-                        (text("slots"), text("")),
+                map([(
+                    "form",
+                    map([
+                        ("title", cbor_text("")),
+                        ("note", cbor_text("")),
+                        (
+                            "slot",
+                            Cbor::Map(vec![(cbor_text(hash), picker::initial())]),
+                        ),
                     ]),
                 )]),
             );
         }
-        "respond" => {
-            let (Some(plan), Some(slot), Some(value)) = (
-                resolve_plan(host, str_of(&payload, "plan").unwrap_or("")),
-                str_of(&payload, "slot"),
-                str_of(&payload, "value"),
-            ) else {
-                return;
-            };
-            if !matches!(value, "yes" | "maybe" | "no") {
-                return;
+        "add_slot" => {
+            let plan = act.arg("plan");
+            let start = picker::read(&act, &["slot", &ui::path_id(plan)], true)?;
+            if doc.get(&["a", plan, "title"]).is_none() {
+                return Err("That plan is gone.".into());
             }
-            host.put(
-                &[key(&crate::join(&[
-                    "r",
-                    &plan,
-                    slot,
-                    &crate::event_me(event),
-                ]))],
-                text(value),
-            );
+            let taken = doc.under(&["s", plan]).iter().any(|(p, v)| {
+                matches!(p.as_slice(), [_, "start"])
+                    && v.as_integer()
+                        .and_then(|i| i64::try_from(i128::from(i)).ok())
+                        == Some(start)
+            });
+            if taken {
+                return Err("That time is already on the plan.".into());
+            }
+            put(host, &["s", plan, &act.id, "start"], int(start));
+        }
+        "respond" => {
+            let (plan, slot) = (act.arg("plan"), act.arg("slot"));
+            let answer = act.sync_str(&["v", &ui::path_id(plan), &ui::path_id(slot)]);
+            if doc.get(&["s", plan, slot, "start"]).is_some()
+                && matches!(answer, "yes" | "maybe" | "no")
+            {
+                put(host, &["v", plan, slot, &act.me], cbor_text(answer));
+            }
         }
         "remove_plan" => {
-            if let Some(plan) = resolve_plan(host, str_of(&payload, "plan").unwrap_or("")) {
-                delete_prefix(host, &crate::prefix(&["a", &plan]));
-                delete_prefix(host, &crate::prefix(&["r", &plan]));
+            let plan = act.arg("plan");
+            if !ui::confirmed(&format!("remove {plan}")) {
+                return Ok(());
+            }
+            for flat in ["a", "s", "v"]
+                .iter()
+                .flat_map(|tag| doc.keys_of(&[tag, plan]))
+            {
+                host.delete(&[key(&flat)]);
             }
         }
-        _ => return,
+        _ => {}
     }
-    // The document write makes the host call us back with `change`, which renders.
+    Ok(())
 }
 
-fn slots(payload: &Cbor, signals: &Cbor) -> Vec<(String, i64, i64)> {
-    if let Some(items) = field(payload, "slots").and_then(Cbor::as_array) {
-        let slots: Vec<(String, i64, i64)> = items
-            .iter()
-            .filter_map(|item| {
-                Some((
-                    str_of(item, "id")?.to_owned(),
-                    i64_of(item, "start")?,
-                    i64_of(item, "end")?,
-                ))
-            })
-            .collect();
-        if !slots.is_empty() {
-            return slots;
-        }
-    }
-    str_of(payload, "slots")
-        .or_else(|| crate::form_str(signals, "slots"))
-        .unwrap_or("")
-        .split(',')
-        .filter_map(|piece| {
-            let mut words = piece.split_whitespace();
-            Some((
-                words.next()?.to_owned(),
-                words.next()?.parse().ok()?,
-                words.next()?.parse().ok()?,
-            ))
-        })
-        .collect()
-}
-
-fn put_slot(host: &Host, plan: &str, slot: &str, start: i64, end: i64) {
-    host.put(
-        &[key(&crate::join(&["a", plan, "s", slot, "start"]))],
-        crate::value::int(start),
-    );
-    host.put(
-        &[key(&crate::join(&["a", plan, "s", slot, "end"]))],
-        crate::value::int(end),
-    );
-}
-
-fn render(host: &Host, initial: bool) {
-    let plans = state(host);
-    let mut el = Vec::new();
-    el.push(El::new("av", "column").set("gap", text("medium")));
-    el.push(
-        El::new("av-title", "text")
-            .parent("av")
-            .variant("h1")
-            .text("Availability"),
-    );
-    el.push(El::new("av-form", "card").parent("av").title("New plan"));
-    el.push(
-        El::new("av-name", "input")
-            .parent("av-form")
-            .set("label", text("Title"))
-            .bind("form.title"),
-    );
-    el.push(
-        El::new("av-note", "input")
-            .parent("av-form")
-            .set("label", text("Note"))
-            .bind("form.note"),
-    );
-    el.push(
-        El::new("av-slots", "input")
-            .parent("av-form")
-            .set("label", text("Slots (name start end, …)"))
-            .placeholder("fri 1000 2000, sat 3000 4000")
-            .bind("form.slots"),
-    );
-    el.push(
-        El::new("av-create", "button")
-            .parent("av-form")
-            .variant("primary")
-            .label("Create plan")
-            .on_press("create", Cbor::Null),
-    );
-
-    for plan in plans {
-        let card = format!("a-{}", ui::path_id(&plan.id));
-        el.push(El::new(&card, "card").parent("av").title(&plan.title));
-        if !plan.note.is_empty() {
-            el.push(
-                El::new(&format!("{card}-note"), "text")
-                    .parent(&card)
-                    .variant("caption")
-                    .text(&plan.note),
-            );
-        }
-        el.push(
-            El::new(&format!("{card}-del"), "button")
-                .parent(&card)
-                .variant("plain")
-                .label("Remove plan")
-                .on_press(
-                    "remove_plan",
-                    Cbor::Map(vec![(text("plan"), text(&plan.id))]),
-                ),
-        );
-        el.push(
-            El::new(&format!("{card}-slots"), "list")
-                .parent(&card)
-                .empty("No slots."),
-        );
-        for slot in &plan.slots {
-            let row = format!("s-{}", ui::path_id(&format!("{}:{}", plan.id, slot.id)));
-            el.push(El::new(&row, "row").parent(&format!("{card}-slots")));
-            el.push(
-                El::new(&format!("{row}-when"), "text")
-                    .parent(&row)
-                    .text(&format!(
-                        "{} · {}–{}",
-                        slot.id,
-                        crate::fmt_time(slot.start),
-                        crate::fmt_time(slot.end)
-                    )),
-            );
-            if plan.best.as_deref() == Some(slot.id.as_str()) {
-                el.push(
-                    El::new(&format!("{row}-best"), "badge")
-                        .parent(&row)
-                        .variant("success")
-                        .text("best"),
-                );
-            }
-            el.push(
-                El::new(&format!("{row}-score"), "badge")
-                    .parent(&row)
-                    .text(&format!("{}", slot.yes.len() * 2 + slot.maybe.len())),
-            );
-            for (value, label, variant) in [
-                ("yes", "Yes", "success"),
-                ("maybe", "Maybe", "warning"),
-                ("no", "No", "failure"),
-            ] {
-                el.push(
-                    El::new(&format!("{row}-{value}"), "button")
-                        .parent(&row)
-                        .variant(variant)
-                        .label(label)
-                        .on_press(
-                            "respond",
-                            Cbor::Map(vec![
-                                (text("plan"), text(&plan.id)),
-                                (text("slot"), text(&slot.id)),
-                                (text("value"), text(value)),
-                            ]),
-                        ),
-                );
-            }
-            el.push(
-                El::new(&format!("{row}-who"), "text")
-                    .parent(&row)
-                    .variant("caption")
-                    .text(&format!(
-                        "yes: {} · maybe: {} · no: {}",
-                        join(&slot.yes),
-                        join(&slot.maybe),
-                        join(&slot.no)
-                    )),
-            );
-        }
-    }
-
-    if initial {
-        ui::start(
-            host,
-            "Availability",
-            Cbor::Map(vec![(
-                text("form"),
-                Cbor::Map(vec![
-                    (text("title"), text("")),
-                    (text("note"), text("")),
-                    (text("slots"), text("")),
-                ]),
-            )]),
-            el,
-        );
-    } else {
-        ui::update(host, el);
-    }
-}
-
-fn join(people: &[String]) -> String {
-    if people.is_empty() {
-        "—".to_owned()
-    } else {
-        people.join(", ")
-    }
-}
-
-struct Plan {
-    id: String,
-    title: String,
-    note: String,
-    best: Option<String>,
-    slots: Vec<Slot>,
+fn put(host: &Host, parts: &[&str], value: Cbor) {
+    host.put(&[key(&crate::join(parts))], value);
 }
 
 struct Slot {
     id: String,
     start: i64,
-    end: i64,
     yes: Vec<String>,
     maybe: Vec<String>,
     no: Vec<String>,
+    mine: String,
 }
 
-fn state(host: &Host) -> Vec<Plan> {
-    let mut plans: BTreeMap<String, Plan> = BTreeMap::new();
-    let mut answers: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>> = BTreeMap::new();
-    for flat in host.keys(&[]) {
-        let parts: Vec<&str> = flat.split(crate::SEP).collect();
-        let value = host.get(&[key(&flat)]);
-        match parts.as_slice() {
-            ["a", plan, field] => {
-                let plan = plans.entry((*plan).to_owned()).or_insert_with(|| Plan {
-                    id: (*plan).to_owned(),
-                    title: (*plan).to_owned(),
-                    note: String::new(),
-                    best: None,
-                    slots: Vec::new(),
-                });
-                match *field {
-                    "title" => plan.title = value.as_text().unwrap_or(plan.id.as_str()).to_owned(),
-                    "note" => plan.note = value.as_text().unwrap_or("").to_owned(),
-                    _ => {}
-                }
-            }
-            ["a", plan, "s", slot, field] => {
-                let slots = &mut plans
-                    .entry((*plan).to_owned())
-                    .or_insert_with(|| Plan {
-                        id: (*plan).to_owned(),
-                        title: (*plan).to_owned(),
-                        note: String::new(),
-                        best: None,
-                        slots: Vec::new(),
-                    })
-                    .slots;
-                let at = slots.iter().position(|s| s.id == *slot);
-                let slot = match at {
-                    Some(at) => &mut slots[at],
-                    None => {
-                        slots.push(Slot {
-                            id: (*slot).to_owned(),
-                            start: 0,
-                            end: 0,
-                            yes: Vec::new(),
-                            maybe: Vec::new(),
-                            no: Vec::new(),
-                        });
-                        slots.last_mut().unwrap()
-                    }
-                };
-                match *field {
-                    "start" => slot.start = as_i64(&value),
-                    "end" => slot.end = as_i64(&value),
-                    _ => {}
-                }
-            }
-            ["r", plan, slot, person] => {
-                if let Some(answer) = value.as_text() {
-                    answers
-                        .entry((*plan).to_owned())
-                        .or_default()
-                        .entry((*slot).to_owned())
-                        .or_default()
-                        .insert((*person).to_owned(), answer.to_owned());
-                }
-            }
-            _ => {}
-        }
+impl Slot {
+    /// Yes counts twice as much as maybe.
+    fn score(&self) -> usize {
+        self.yes.len() * 2 + self.maybe.len()
     }
+}
 
-    for (id, plan) in &mut plans {
-        let Some(plan_answers) = answers.remove(id) else {
-            continue;
-        };
-        for slot in &mut plan.slots {
-            let Some(who) = plan_answers.get(&slot.id) else {
-                continue;
+fn slots(doc: &Doc, plan: &str, me: &str) -> Vec<Slot> {
+    let mut slots: Vec<Slot> = doc
+        .under(&["s", plan])
+        .into_iter()
+        .filter_map(|(parts, value)| match parts.as_slice() {
+            [slot, "start"] => Some((
+                *slot,
+                value
+                    .as_integer()
+                    .and_then(|i| i64::try_from(i128::from(i)).ok())?,
+            )),
+            _ => None,
+        })
+        .map(|(slot, start)| {
+            let mut s = Slot {
+                id: slot.to_owned(),
+                start,
+                yes: Vec::new(),
+                maybe: Vec::new(),
+                no: Vec::new(),
+                mine: doc.str(&["v", plan, slot, me]).to_owned(),
             };
-            for (person, answer) in who {
-                match answer.as_str() {
-                    "yes" => slot.yes.push(person.clone()),
-                    "maybe" => slot.maybe.push(person.clone()),
-                    "no" => slot.no.push(person.clone()),
+            for (parts, value) in doc.under(&["v", plan, slot]) {
+                let [peer] = parts.as_slice() else { continue };
+                match value.as_text() {
+                    Some("yes") => s.yes.push((*peer).to_owned()),
+                    Some("maybe") => s.maybe.push((*peer).to_owned()),
+                    Some("no") => s.no.push((*peer).to_owned()),
                     _ => {}
                 }
             }
-            slot.yes.sort();
-            slot.maybe.sort();
-            slot.no.sort();
-        }
-        plan.best = plan
-            .slots
-            .iter()
-            .max_by(|a, b| {
-                (a.yes.len() * 2 + a.maybe.len())
-                    .cmp(&(b.yes.len() * 2 + b.maybe.len()))
-                    .then_with(|| b.start.cmp(&a.start))
-            })
-            .map(|s| s.id.clone());
-    }
-
-    let mut out: Vec<Plan> = plans.into_values().collect();
-    out.sort_by(|a, b| a.id.cmp(&b.id));
-    out
+            s
+        })
+        .collect();
+    slots.sort_by(|a, b| (a.start, &a.id).cmp(&(b.start, &b.id)));
+    slots
 }
 
-fn resolve_plan(host: &Host, wanted: &str) -> Option<String> {
-    if wanted.is_empty() {
-        return None;
+pub fn page(host: &Host) -> Page {
+    let doc = Doc::load(host);
+    let people = People::load(host);
+    let me = crate::me();
+    let mut page = Page::new(NAME);
+
+    page.add(card("new", "root", "New plan"));
+    page.add(
+        input("new-title", "new", "What is it for?", "form.title").placeholder("Board game night"),
+    );
+    page.add(input("new-note", "new", "Note (optional)", "form.note"));
+    page.add(button(
+        "new-go",
+        "new",
+        "primary",
+        "Create plan",
+        "create",
+        Cbor::Null,
+    ));
+
+    let mut plans = doc.ids("a");
+    plans.retain(|id| doc.get(&["a", id, "title"]).is_some());
+    plans.sort_by_key(|id| {
+        std::cmp::Reverse(
+            id.rsplit('-')
+                .nth(1)
+                .and_then(|t| t.parse::<i64>().ok())
+                .unwrap_or(0),
+        )
+    });
+    if plans.is_empty() {
+        page.add(El::new("none", "notice").parent("root").text(
+            "No plans yet. Create one above, add a few times and let everyone say which work.",
+        ));
     }
-    if !host
-        .get(&[key(&crate::join(&["a", wanted, "title"]))])
-        .is_null()
-    {
-        return Some(wanted.to_owned());
-    }
-    for flat in host.keys(&[]) {
-        let parts: Vec<&str> = flat.split(crate::SEP).collect();
-        if let ["a", id, "title"] = parts.as_slice() {
-            if host.get(&[key(&flat)]).as_text() == Some(wanted) {
-                return Some((*id).to_owned());
+
+    for plan in &plans {
+        let hash = ui::path_id(plan);
+        let id = format!("a-{hash}");
+        let slots = slots(&doc, plan, &me);
+        let best = slots.iter().map(Slot::score).max().unwrap_or(0);
+        page.add(card(&id, "root", doc.str(&["a", plan, "title"])));
+        let note = doc.str(&["a", plan, "note"]);
+        if !note.is_empty() {
+            page.add(text(&format!("{id}-note"), &id, "caption", note));
+        }
+        for slot in &slots {
+            let slot_hash = ui::path_id(&slot.id);
+            let line = format!("{id}-s{slot_hash}");
+            let args = payload(&[("plan", plan), ("slot", &slot.id)]);
+            page.add(row(&line, &id));
+            page.add(text(
+                &format!("{line}-when"),
+                &line,
+                "body",
+                &time::when(slot.start),
+            ));
+            if best > 0 && slot.score() == best {
+                page.add(badge(&format!("{line}-best"), &line, "success", "Best"));
+            }
+            page.add(
+                El::new(&format!("{line}-ans"), "select")
+                    .parent(&id)
+                    .variant("segmented")
+                    .bind(&format!("sync.v.{hash}.{slot_hash}"))
+                    .set(
+                        "options",
+                        Cbor::Array(
+                            [("yes", "Yes"), ("maybe", "Maybe"), ("no", "No")]
+                                .iter()
+                                .map(|(v, l)| {
+                                    map([("value", cbor_text(*v)), ("label", cbor_text(*l))])
+                                })
+                                .collect(),
+                        ),
+                    )
+                    .on_change("respond", args.clone()),
+            );
+            page.sync(&format!("v.{hash}.{slot_hash}"), cbor_text(&slot.mine));
+            let mut who = Vec::new();
+            for (label, ids) in [("Yes", &slot.yes), ("Maybe", &slot.maybe), ("No", &slot.no)] {
+                if !ids.is_empty() {
+                    who.push(format!("{label}: {}", people.list(ids)));
+                }
+            }
+            if !who.is_empty() {
+                page.add(text(
+                    &format!("{line}-who"),
+                    &id,
+                    "caption",
+                    &who.join(" · "),
+                ));
             }
         }
-    }
-    None
-}
 
-fn delete_prefix(host: &Host, prefix: &str) {
-    for flat in host.keys(&[]) {
-        if flat.starts_with(prefix) {
-            host.delete(&[key(&flat)]);
-        }
-    }
-}
+        picker::ensure(host, &["slot", &hash]);
+        let add = format!("{id}-add");
+        page.add(text(&format!("{add}-t"), &id, "caption", "Suggest a time"));
+        picker::add(&mut page, &add, &id, &["slot", &hash], true);
+        page.add(button(
+            &format!("{add}-go"),
+            &id,
+            "secondary",
+            "Add this time",
+            "add_slot",
+            payload(&[("plan", plan)]),
+        ));
 
-fn as_i64(v: &Cbor) -> i64 {
-    v.as_integer()
-        .and_then(|i| i64::try_from(i128::from(i)).ok())
-        .unwrap_or(0)
+        let asking = ui::asking(&format!("remove {plan}"));
+        page.add(row(&format!("{id}-foot"), &id).set("justify", cbor_text("end")));
+        page.add(button(
+            &format!("{id}-foot-del"),
+            &format!("{id}-foot"),
+            if asking { "failure" } else { "plain" },
+            if asking {
+                "Press again to delete"
+            } else {
+                "Delete plan"
+            },
+            "remove_plan",
+            payload(&[("plan", plan)]),
+        ));
+    }
+    page
 }

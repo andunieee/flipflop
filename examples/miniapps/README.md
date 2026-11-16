@@ -1,8 +1,8 @@
 # Experimental miniapps
 
-Five wasm apps for the runtime in `src/apps.rs`: checklists, an expense splitter, a poll, an
-availability planner and a shared calendar. They are prototypes of the app layer, not wired into the
-desktop or Android UI.
+Five wasm apps for the runtime in `src/apps.rs`, each drawn with the hypereffect components the desktop
+app renders (`app/src/hyper.rs`): lists, an expense splitter, polls, a "find a time" planner and a shared
+calendar. They are prototypes of the app layer and work in the desktop app's app tabs.
 
 ```sh
 examples/miniapps/build.sh                 # -> dist/{checklist,expenses,poll,availability,calendar}.wasm
@@ -17,9 +17,8 @@ a throwaway document; `miniapp-sync` feeds its first file to peer `me`, syncs, t
 
 ```json
 [
-  {"name": "add_list", "payload": {"name": "Groceries"}},
-  {"name": "add_item", "payload": {"list": "Groceries", "text": "Milk"}},
-  {"name": "toggle_item", "payload": {"list": "Groceries", "item": "Milk"}}
+  {"name": "add_list", "set": {"form": {"list": "Groceries"}}},
+  {"name": "add_list", "set": {"form": {"list": "Packing"}}}
 ]
 ```
 
@@ -54,19 +53,39 @@ keys merge; the same key is last-writer-wins. Deleting an entity deletes every k
 The cost is that the interface is recomputed from all keys after each change. For group-sized data
 (tens to hundreds of rows) that is fine; indexes stored as scalars would be the next step.
 
+## Writing an app
+
+An app is a module in `src/apps/` with `NAME`, `form(host)` (the initial input signals), `page(host)`
+(the whole interface for the document as it is) and `action(host, event)`, whose `Err` is shown to the
+user in a notice. `lib.rs` drives it: it renders at the start, after every `change` and after every
+action, and `ui.rs` sends the renderer only what differs from the last frame. Shared pieces:
+
+- `doc.rs`: the app's section read in one request (`Doc`), and the members' names (`People`);
+- `act.rs`: an action event: the button's payload, the user's inputs (`form.*`), bound controls (`sync.*`);
+- `time.rs`: dates and times shown in the device's own time zone (every event carries `ts` and `tz`); the
+  document holds UTC milliseconds;
+- `picker.rs`: a date and time picker made of selects (day, month, year, hour, minute), with Today and
+  Tomorrow buttons; a date that does not exist (31 Feb) is explained in a notice;
+- `ui.rs`: `Page`, element shorthands, the error notice, and a "press again" confirmation for
+  destructive buttons.
+
+Controls that mirror the document (a checkbox's state, an RSVP) bind to `sync.*` signals that the app sets
+on every page; the user's inputs live under `form.*`, which the app only clears after an action.
+
 ## The apps
 
 Each module's doc comment has its exact state keys and actions.
 
-- **checklist** — lists and items, add/remove, done/undo, clear done. Items that arrive before their
-  list are kept and show once the list is named.
-- **expenses** — integer cents, payer, participants, settlements; balances and a greedy set of
-  transfers, each with a Settle button. Currency is a label only.
-- **poll** — options, single- or multi-choice, per-voter ballots keyed by timestamp so the latest
-  vote wins; closed polls ignore later votes.
-- **availability** — plans with slots, yes/maybe/no per peer, score (2/1) and the best slot.
-- **calendar** — events with start/end (epoch ms), place, note, author, RSVP yes/maybe/no, sorted by
-  start (a new earlier event is inserted with `before`).
+- **checklist** (Lists) — lists of items with checkboxes and a progress bar; add and remove items, clear
+  the done ones, delete a list (press twice).
+- **expenses** — decimal amounts kept as cents, who paid, who it is split between, balances by name, a
+  short list of payments that settle everything with a "Mark paid" button, and a history.
+- **poll** (Polls) — one option per line, single or several answers, who voted for what, close and
+  reopen.
+- **availability** (Find a time) — a plan gets possible times from the picker, Yes/Maybe/No for each,
+  the best one marked, more times can be suggested later.
+- **calendar** — an event is a title, a day and time from the picker (or the Today/Tomorrow buttons) and a
+  length; upcoming events are grouped under their day, earlier ones below; RSVPs by name.
 
 ## What is missing
 
@@ -76,6 +95,7 @@ Each module's doc comment has its exact state keys and actions.
 - A reuse/reconnect `hello` is not implemented: a session starts with the wasm `start` event and ends
   when its tab unmounts.
 - Guests do not run apps; the guest page syncs the document but has no wasm app host.
+- There is no date picker component, so `picker.rs` builds one from selects.
 - The apps get no clock or randomness of their own; the host puts `ts`, `seq` and `me` in the action
   event, and new ids use them.
 - Anyone in the group can write any key: the document has no per-app permissions.

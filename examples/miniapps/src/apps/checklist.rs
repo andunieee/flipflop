@@ -1,412 +1,307 @@
-//! Lists and checklists: named lists of items, each with a checkbox-like done state.
+//! Lists: named checklists that everyone in the group ticks off together.
 //!
-//! Flat state (see the crate docs):
-//! - `l<US><list><US>name`, `l<US><list><US>ts`
-//! - `i<US><list><US><item><US>text|done|by|ts`
+//! Flat state:
+//! - `l<US><list><US>name` (the list's id is its name in lower case, so two people who start the
+//!   same list at once end up with one)
+//! - `i<US><list><US><item><US>text|done`
 //!
-//! Actions:
-//! - `{name:"add_list", signals:{form:{list:"..."}}}` (or `payload.name`)
-//! - `{name:"remove_list", payload:{list}}`
-//! - `{name:"add_item", payload:{list}, signals:{form:{item:{<list hash>:"..."}}}}` (or `payload.text`)
-//! - `{name:"toggle_item", payload:{list, item}}`
-//! - `{name:"remove_item", payload:{list, item}}`
-//! - `{name:"clear_done", payload:{list}}`
+//! Actions (`payload` is what the button carries, `form.*` the inputs):
+//! - `add_list` (`form.list`), `delete_list {list}` (asks twice)
+//! - `add_item {list}` (`form.item.<list hash>`), `remove_item {list, item}`
+//! - `set_done {list, item}` (from the checkbox, `sync.done.<item hash>`), `clear_done {list}`
 
 use std::collections::BTreeMap;
 
 use ciborium::Value as Cbor;
 
-use crate::ui::{self, El};
-use crate::value::{field, i64_of, key, str_of, text};
+use crate::act::{form_patch, payload, Act};
+use crate::doc::Doc;
+use crate::ui::{self, badge, button, card, input, row, text, El, Page};
+use crate::value::text as cbor_text;
 use crate::Host;
 
-pub fn start(host: &Host) {
-    render(host, true);
+pub const NAME: &str = "Lists";
+
+pub fn form(_host: &Host) -> Cbor {
+    crate::value::map([("list", cbor_text("")), ("item", Cbor::Map(Vec::new()))])
 }
 
-pub fn change(host: &Host) {
-    render(host, false);
-}
-
-pub fn action(host: &Host, event: &Cbor) {
-    let name = str_of(event, "name").unwrap_or("");
-    let payload = field(event, "payload").cloned().unwrap_or(Cbor::Null);
-    let signals = field(event, "signals").cloned().unwrap_or(Cbor::Null);
-    let id = new_id(event);
-
-    match name {
+pub fn action(host: &Host, event: &Cbor) -> Result<(), String> {
+    let act = Act::parse(event);
+    let doc = Doc::load(host);
+    match act.name.as_str() {
         "add_list" => {
-            let name = str_of(&payload, "name")
-                .or_else(|| str_of(field(&signals, "form").unwrap_or(&Cbor::Null), "list"))
-                .unwrap_or("")
-                .trim()
-                .to_owned();
+            let name = act.form("list");
             if name.is_empty() {
-                ui::log(host, "A list needs a name", "warning");
-                return;
+                return Err("Give the list a name first.".into());
             }
-            host.put(&[key(&crate::join(&["l", &id, "name"]))], text(&name));
-            host.put(&[key(&crate::join(&["l", &id, "ts"]))], now(event));
-            ui::signal(
-                host,
-                Cbor::Map(vec![(
-                    text("form"),
-                    Cbor::Map(vec![(text("list"), text(""))]),
-                )]),
+            let list = name.to_lowercase();
+            if doc.get(&["l", &list, "name"]).is_some() {
+                return Err(format!("There is already a list called “{name}”."));
+            }
+            host.put(
+                &[crate::value::key(&crate::join(&["l", &list, "name"]))],
+                cbor_text(name),
             );
+            ui::signal(host, form_patch(&[("list", cbor_text(""))]));
         }
-        "remove_list" => {
-            let Some(list) = resolve_list(host, str_of(&payload, "list").unwrap_or("")) else {
-                return;
-            };
-            delete_prefix(host, &crate::prefix(&["l", &list]));
-            delete_prefix(host, &crate::prefix(&["i", &list]));
+        "delete_list" => {
+            let list = act.arg("list");
+            if !ui::confirmed(&format!("delete {list}")) {
+                return Ok(());
+            }
+            delete_all(host, &doc.keys_of(&["l", list]));
+            delete_all(host, &doc.keys_of(&["i", list]));
+            delete_all(host, &[crate::join(&["l", list, "name"])]);
         }
         "add_item" => {
-            let Some(list) = resolve_list(host, str_of(&payload, "list").unwrap_or("")) else {
-                return;
-            };
-            let hash = ui::path_id(&list);
-            let item_signals = field(&signals, "form")
-                .and_then(|form| field(form, "item"))
-                .cloned()
-                .unwrap_or(Cbor::Null);
-            let body = str_of(&payload, "text")
-                .or_else(|| str_of(&item_signals, &hash))
+            let list = act.arg("list");
+            let hash = ui::path_id(list);
+            let item = act
+                .signal(&["form", "item", &hash])
+                .and_then(Cbor::as_text)
                 .unwrap_or("")
-                .trim()
-                .to_owned();
-            if body.is_empty() {
-                ui::log(host, "An item needs text", "warning");
-                return;
+                .trim();
+            if item.is_empty() {
+                return Err("Write the item first.".into());
             }
-            for (field, value) in [
-                ("text", text(&body)),
-                ("done", Cbor::Bool(false)),
-                ("by", text(str_of(event, "me").unwrap_or(""))),
-                ("ts", now(event)),
-            ] {
-                host.put(&[key(&crate::join(&["i", &list, &id, field]))], value);
+            if doc.get(&["l", list, "name"]).is_none() {
+                return Err("That list is gone.".into());
             }
+            put(host, &["i", list, &act.id, "text"], cbor_text(item));
+            put(host, &["i", list, &act.id, "done"], Cbor::Bool(false));
             ui::signal(
                 host,
-                Cbor::Map(vec![(
-                    text("form"),
-                    Cbor::Map(vec![(
-                        text("item"),
-                        Cbor::Map(vec![(text(&hash), text(""))]),
+                crate::value::map([(
+                    "form",
+                    crate::value::map([(
+                        "item",
+                        Cbor::Map(vec![(cbor_text(hash), cbor_text(""))]),
                     )]),
                 )]),
             );
         }
-        "toggle_item" => {
-            let (Some(list), Some(item)) = (
-                resolve_list(host, str_of(&payload, "list").unwrap_or("")),
-                str_of(&payload, "item"),
-            ) else {
-                return;
-            };
-            let item = resolve_item(host, &list, item).unwrap_or_else(|| item.to_owned());
-            let done = host
-                .get(&[key(&crate::join(&["i", &list, &item, "done"]))])
-                .as_bool()
-                .unwrap_or(false);
-            host.put(
-                &[key(&crate::join(&["i", &list, &item, "done"]))],
-                Cbor::Bool(!done),
-            );
-        }
         "remove_item" => {
-            let (Some(list), Some(item)) = (
-                resolve_list(host, str_of(&payload, "list").unwrap_or("")),
-                str_of(&payload, "item"),
-            ) else {
-                return;
-            };
-            if let Some(item) = resolve_item(host, &list, item) {
-                delete_prefix(host, &crate::prefix(&["i", &list, &item]));
+            delete_all(host, &doc.keys_of(&["i", act.arg("list"), act.arg("item")]));
+        }
+        "set_done" => {
+            let (list, item) = (act.arg("list"), act.arg("item"));
+            if doc.get(&["i", list, item, "text"]).is_none() {
+                return Ok(());
             }
+            let done = act
+                .sync_bool(&["done", &ui::path_id(item)])
+                .unwrap_or(!doc.bool(&["i", list, item, "done"]));
+            put(host, &["i", list, item, "done"], Cbor::Bool(done));
         }
         "clear_done" => {
-            let Some(list) = resolve_list(host, str_of(&payload, "list").unwrap_or("")) else {
-                return;
-            };
-            let mut done = Vec::new();
-            for flat in host.keys(&[]) {
-                let parts: Vec<&str> = flat.split(crate::SEP).collect();
-                if let ["i", l, item, "done"] = parts.as_slice() {
-                    if *l == list && host.get(&[key(&flat)]).as_bool().unwrap_or(false) {
-                        done.push((*item).to_owned());
+            let list = act.arg("list");
+            for (parts, value) in doc.under(&["i", list]) {
+                if let [item, "done"] = parts.as_slice() {
+                    if value.as_bool() == Some(true) {
+                        delete_all(host, &doc.keys_of(&["i", list, item]));
                     }
                 }
             }
-            for item in done {
-                delete_prefix(host, &crate::prefix(&["i", &list, &item]));
-            }
         }
-        _ => return,
+        _ => {}
     }
-    // The document write makes the host call us back with `change`, which renders.
+    Ok(())
 }
 
-fn render(host: &Host, initial: bool) {
-    let lists = state(host);
-    let mut el = Vec::new();
-    el.push(El::new("cl", "column").set("gap", text("medium")));
-    el.push(
-        El::new("cl-title", "text")
-            .parent("cl")
-            .variant("h1")
-            .text("Lists"),
-    );
-    el.push(El::new("cl-new", "row").parent("cl"));
-    el.push(
-        El::new("cl-new-input", "input")
-            .parent("cl-new")
-            .set("label", text("New list"))
-            .placeholder("Groceries")
-            .bind("form.list")
-            .on_submit("add_list", Cbor::Null),
-    );
-    el.push(
-        El::new("cl-new-add", "button")
-            .parent("cl-new")
-            .variant("primary")
-            .label("Add list")
-            .on_press("add_list", Cbor::Null),
-    );
+fn put(host: &Host, parts: &[&str], value: Cbor) {
+    host.put(&[crate::value::key(&crate::join(parts))], value);
+}
 
-    for list in lists {
-        let card = format!("l-{}", ui::path_id(&list.id));
-        el.push(El::new(&card, "card").parent("cl").title(&list.name));
-        el.push(El::new(&format!("{card}-head"), "row").parent(&card));
-        el.push(
-            El::new(&format!("{card}-clear"), "button")
-                .parent(&format!("{card}-head"))
-                .variant("plain")
-                .label("Clear done")
-                .on_press("clear_done", list_payload(&list.id)),
-        );
-        el.push(
-            El::new(&format!("{card}-del"), "button")
-                .parent(&format!("{card}-head"))
-                .variant("failure")
-                .label("Remove list")
-                .on_press("remove_list", list_payload(&list.id)),
-        );
-        el.push(
-            El::new(&format!("{card}-items"), "list")
-                .parent(&card)
-                .empty("Nothing yet."),
-        );
-        for item in &list.items {
-            let row = format!("i-{}", ui::path_id(&item.id));
-            el.push(El::new(&row, "row").parent(&format!("{card}-items")));
-            if item.done {
-                el.push(
-                    El::new(&format!("{row}-done"), "badge")
-                        .parent(&row)
-                        .variant("success")
-                        .text("done"),
-                );
-            }
-            el.push(
-                El::new(&format!("{row}-text"), "text")
-                    .parent(&row)
-                    .text(&item.text),
-            );
-            el.push(
-                El::new(&format!("{row}-toggle"), "button")
-                    .parent(&row)
-                    .variant("plain")
-                    .label(if item.done { "Undo" } else { "Done" })
-                    .on_press("toggle_item", item_payload(&list.id, &item.id)),
-            );
-            el.push(
-                El::new(&format!("{row}-del"), "button")
-                    .parent(&row)
-                    .variant("plain")
-                    .label("Remove")
-                    .on_press("remove_item", item_payload(&list.id, &item.id)),
-            );
-        }
-        el.push(El::new(&format!("{card}-add"), "row").parent(&card));
-        el.push(
-            El::new(&format!("{card}-input"), "input")
-                .parent(&format!("{card}-add"))
-                .set("label", text("Add item"))
-                .bind(&format!("form.item.{}", ui::path_id(&list.id)))
-                .on_submit("add_item", list_payload(&list.id)),
-        );
-        el.push(
-            El::new(&format!("{card}-addbtn"), "button")
-                .parent(&format!("{card}-add"))
-                .variant("secondary")
-                .label("Add")
-                .on_press("add_item", list_payload(&list.id)),
-        );
-    }
-
-    if initial {
-        ui::start(
-            host,
-            "Checklist",
-            Cbor::Map(vec![(
-                text("form"),
-                Cbor::Map(vec![
-                    (text("list"), text("")),
-                    (text("item"), Cbor::Map(Vec::new())),
-                ]),
-            )]),
-            el,
-        );
-    } else {
-        ui::update(host, el);
+fn delete_all(host: &Host, keys: &[String]) {
+    for key in keys {
+        host.delete(&[crate::value::key(key)]);
     }
 }
 
-fn list_payload(list: &str) -> Cbor {
-    Cbor::Map(vec![(text("list"), text(list))])
-}
-
-fn item_payload(list: &str, item: &str) -> Cbor {
-    Cbor::Map(vec![(text("list"), text(list)), (text("item"), text(item))])
-}
-
-fn now(event: &Cbor) -> Cbor {
-    crate::value::int(i64_of(event, "ts").unwrap_or(0))
-}
-
-fn new_id(event: &Cbor) -> String {
-    format!(
-        "{}-{}-{}",
-        str_of(event, "me").unwrap_or("me"),
-        i64_of(event, "ts").unwrap_or(0),
-        i64_of(event, "seq").unwrap_or(0)
-    )
-}
-
-fn resolve_list(host: &Host, wanted: &str) -> Option<String> {
-    if wanted.is_empty() {
-        return None;
-    }
-    if !host
-        .get(&[key(&crate::join(&["l", wanted, "name"]))])
-        .is_null()
-    {
-        return Some(wanted.to_owned());
-    }
-    for flat in host.keys(&[]) {
-        let parts: Vec<&str> = flat.split(crate::SEP).collect();
-        if let ["l", id, "name"] = parts.as_slice() {
-            if host.get(&[key(&flat)]).as_text() == Some(wanted) {
-                return Some((*id).to_owned());
-            }
-        }
-    }
-    None
-}
-
-fn resolve_item(host: &Host, list: &str, wanted: &str) -> Option<String> {
-    if !host
-        .get(&[key(&crate::join(&["i", list, wanted, "text"]))])
-        .is_null()
-    {
-        return Some(wanted.to_owned());
-    }
-    for flat in host.keys(&[]) {
-        let parts: Vec<&str> = flat.split(crate::SEP).collect();
-        if let ["i", l, id, "text"] = parts.as_slice() {
-            if *l == list && host.get(&[key(&flat)]).as_text() == Some(wanted) {
-                return Some((*id).to_owned());
-            }
-        }
-    }
-    None
-}
-
-fn delete_prefix(host: &Host, prefix: &str) {
-    for flat in host.keys(&[]) {
-        if flat.starts_with(prefix) {
-            host.delete(&[key(&flat)]);
-        }
-    }
-}
-
-struct ListState {
-    id: String,
-    name: String,
-    ts: i64,
-    items: Vec<ItemState>,
-}
-
-struct ItemState {
+struct Item {
     id: String,
     text: String,
     done: bool,
-    ts: i64,
 }
 
-fn state(host: &Host) -> Vec<ListState> {
-    let mut lists: BTreeMap<String, ListState> = BTreeMap::new();
-    let mut items: BTreeMap<String, BTreeMap<String, ItemState>> = BTreeMap::new();
-    for flat in host.keys(&[]) {
-        let parts: Vec<&str> = flat.split(crate::SEP).collect();
-        let value = host.get(&[key(&flat)]);
-        match parts.as_slice() {
-            ["l", id, "name"] => {
-                let list = lists.entry((*id).to_owned()).or_insert_with(|| ListState {
-                    id: (*id).to_owned(),
-                    name: (*id).to_owned(),
-                    ts: 0,
-                    items: Vec::new(),
+struct List {
+    id: String,
+    name: String,
+    items: Vec<Item>,
+}
+
+fn lists(doc: &Doc) -> Vec<List> {
+    let mut lists: Vec<List> = doc
+        .ids("l")
+        .into_iter()
+        .filter(|id| doc.get(&["l", id, "name"]).is_some())
+        .map(|id| {
+            let mut items: BTreeMap<&str, Item> = BTreeMap::new();
+            for (parts, value) in doc.under(&["i", &id]) {
+                let [item, field] = parts.as_slice() else {
+                    continue;
+                };
+                let entry = items.entry(item).or_insert_with(|| Item {
+                    id: (*item).to_owned(),
+                    text: String::new(),
+                    done: false,
                 });
-                list.name = value.as_text().unwrap_or(id).to_owned();
-            }
-            ["l", id, "ts"] => {
-                if let Some(list) = lists.get_mut(*id) {
-                    list.ts = as_i64(&value);
-                }
-            }
-            ["i", list, item, field] => {
-                let item = items
-                    .entry((*list).to_owned())
-                    .or_default()
-                    .entry((*item).to_owned())
-                    .or_insert_with(|| ItemState {
-                        id: parts[2].to_owned(),
-                        text: String::new(),
-                        done: false,
-                        ts: 0,
-                    });
                 match *field {
-                    "text" => item.text = value.as_text().unwrap_or("").to_owned(),
-                    "done" => item.done = value.as_bool().unwrap_or(false),
-                    "ts" => item.ts = as_i64(&value),
+                    "text" => entry.text = value.as_text().unwrap_or("").to_owned(),
+                    "done" => entry.done = value.as_bool().unwrap_or(false),
                     _ => {}
                 }
             }
-            _ => {}
-        }
-    }
-    for (list, items) in items {
-        let list = lists.entry(list.clone()).or_insert_with(|| ListState {
-            id: list.clone(),
-            name: list,
-            ts: 0,
-            items: Vec::new(),
-        });
-        let mut items: Vec<ItemState> = items.into_values().collect();
-        items.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
-        list.items = items;
-    }
-    let mut lists: Vec<ListState> = lists.into_values().collect();
-    lists.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
+            // The item ids start with the peer and the time, so this is roughly the order added;
+            // sort by time to make it so.
+            let mut items: Vec<Item> = items.into_values().filter(|i| !i.text.is_empty()).collect();
+            items.sort_by_key(|i| {
+                i.id.rsplit('-')
+                    .nth(1)
+                    .and_then(|t| t.parse::<i64>().ok())
+                    .unwrap_or(0)
+            });
+            List {
+                name: doc.str(&["l", &id, "name"]).to_owned(),
+                id,
+                items,
+            }
+        })
+        .collect();
+    lists.sort_by_key(|l| l.name.to_lowercase());
     lists
 }
 
-fn as_i64(v: &Cbor) -> i64 {
-    v.as_integer()
-        .and_then(|i| i64::try_from(i128::from(i)).ok())
-        .unwrap_or(0)
+pub fn page(host: &Host) -> Page {
+    let doc = Doc::load(host);
+    let lists = lists(&doc);
+    let mut page = Page::new(NAME);
+
+    page.add(row("new", "root"));
+    page.add(
+        input("new-name", "new", "New list", "form.list")
+            .placeholder("Groceries")
+            .on_submit("add_list", Cbor::Null),
+    );
+    page.add(button(
+        "new-add",
+        "new",
+        "primary",
+        "Create list",
+        "add_list",
+        Cbor::Null,
+    ));
+
+    if lists.is_empty() {
+        page.add(
+            El::new("none", "notice")
+                .parent("root")
+                .text("No lists yet. Name one above to start; everyone in the group sees it."),
+        );
+    }
+
+    for list in &lists {
+        let hash = ui::path_id(&list.id);
+        let card_id = format!("l-{hash}");
+        let done = list.items.iter().filter(|i| i.done).count();
+        page.add(card(&card_id, "root", &list.name));
+        if !list.items.is_empty() {
+            page.add(
+                El::new(&format!("{card_id}-progress"), "progress")
+                    .parent(&card_id)
+                    .label(&format!("{done} of {} done", list.items.len()))
+                    .set(
+                        "value",
+                        crate::value::float(done as f64 / list.items.len() as f64),
+                    ),
+            );
+        }
+        for item in &list.items {
+            let item_hash = ui::path_id(&item.id);
+            let row_id = format!("i-{item_hash}");
+            let args = payload(&[("list", &list.id), ("item", &item.id)]);
+            page.add(row(&row_id, &card_id));
+            page.add(
+                El::new(&format!("{row_id}-done"), "checkbox")
+                    .parent(&row_id)
+                    .label(&item.text)
+                    .bind(&format!("sync.done.{item_hash}"))
+                    .on_change("set_done", args.clone()),
+            );
+            page.sync(&format!("done.{item_hash}"), Cbor::Bool(item.done));
+            page.add(button(
+                &format!("{row_id}-del"),
+                &row_id,
+                "plain",
+                "Remove",
+                "remove_item",
+                args,
+            ));
+        }
+        if list.items.is_empty() {
+            page.add(text(
+                &format!("{card_id}-empty"),
+                &card_id,
+                "caption",
+                "Nothing here yet.",
+            ));
+        }
+        let add = format!("{card_id}-add");
+        let args = payload(&[("list", &list.id)]);
+        page.add(row(&add, &card_id));
+        page.add(
+            input(
+                &format!("{add}-text"),
+                &add,
+                "Add an item",
+                &format!("form.item.{hash}"),
+            )
+            .on_submit("add_item", args.clone()),
+        );
+        page.add(button(
+            &format!("{add}-go"),
+            &add,
+            "secondary",
+            "Add",
+            "add_item",
+            args.clone(),
+        ));
+
+        let foot = format!("{card_id}-foot");
+        page.add(row(&foot, &card_id).set("justify", cbor_text("between")));
+        page.add(
+            button(
+                &format!("{foot}-clear"),
+                &foot,
+                "plain",
+                "Clear done",
+                "clear_done",
+                args.clone(),
+            )
+            .disabled(done == 0),
+        );
+        let asking = ui::asking(&format!("delete {}", list.id));
+        page.add(button(
+            &format!("{foot}-del"),
+            &foot,
+            if asking { "failure" } else { "plain" },
+            if asking {
+                "Press again to delete"
+            } else {
+                "Delete list"
+            },
+            "delete_list",
+            args,
+        ));
+        if done > 0 && done == list.items.len() {
+            page.add(badge(
+                &format!("{card_id}-all"),
+                &card_id,
+                "success",
+                "All done",
+            ));
+        }
+    }
+    page
 }

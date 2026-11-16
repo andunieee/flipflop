@@ -97,7 +97,9 @@ mod android {
         let Some(vm) = VM.get() else {
             return false;
         };
-        blew::platform::android::init_jvm(unsafe { jni22::JavaVM::from_raw(vm.get_java_vm_pointer().cast()) });
+        blew::platform::android::init_jvm(unsafe {
+            jni22::JavaVM::from_raw(vm.get_java_vm_pointer().cast())
+        });
         if ble_permissions_granted() {
             return true;
         }
@@ -231,7 +233,10 @@ mod android {
         },
         /// Another app shared a text and/or `files` files: the user picks where they go, then
         /// [`deliver_shared`] stages the files.
-        Shared { text: String, files: u32 },
+        Shared {
+            text: String,
+            files: u32,
+        },
         QrScanned(String),
         /// Room taken by the system bars and the keyboard, in logical pixels, and whether the
         /// keyboard is up.

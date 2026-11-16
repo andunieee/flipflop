@@ -3,11 +3,16 @@
 use std::collections::HashMap;
 
 use flipflop::core::{GroupInfo, InviteInfo, Peer, TransferItem, Unseen};
-use freya::{elements::image::ImageHandle, engine::prelude::AlphaType, prelude::*, radio::use_radio};
+use freya::{
+    elements::image::ImageHandle, engine::prelude::AlphaType, prelude::*, radio::use_radio,
+};
 
 use crate::{
     icons::Icon,
-    model::{Channel, Model, Tone, group_title, pair_request, peer_subtitle, peer_title, transfer_progress},
+    model::{
+        Channel, Model, Tone, group_title, pair_request, peer_subtitle, peer_title,
+        transfer_progress,
+    },
     nav::{Edit, EditKind, Nav, Page},
     theme::{Dim, look},
     widgets::*,
@@ -71,17 +76,27 @@ fn invite_card(invite: &InviteInfo, nav: Nav) -> Element {
         .key(format!("invite{inviter}{group}"))
         .child(
             card_body(Dim::SPACE2)
-                .child(txt(format!("{} invites you to join", invite.inviter_name), d.font_sm(), c.text_muted, 400).elide())
+                .child(
+                    txt(
+                        format!("{} invites you to join", invite.inviter_name),
+                        d.font_sm(),
+                        c.text_muted,
+                        400,
+                    )
+                    .elide(),
+                )
                 .child(txt(invite.haiku.clone(), d.font_lg(), c.text_strong, 700))
                 .child(
                     rect()
                         .horizontal()
                         .spacing(Dim::SPACE2)
                         .child(Btn::primary("Accept").on_press(move |_| {
-                            nav.backend().run(|core| Ok(core.accept_invite(inviter, &group)))
+                            nav.backend()
+                                .run(|core| Ok(core.accept_invite(inviter, &group)))
                         }))
                         .child(Btn::secondary("Decline").on_press(move |_| {
-                            nav.backend().run(|core| Ok(core.reject_invite(inviter, &decline)))
+                            nav.backend()
+                                .run(|core| Ok(core.reject_invite(inviter, &decline)))
                         })),
                 ),
         )
@@ -98,7 +113,10 @@ fn pair_request_card(peer: &Peer, nav: Nav) -> Element {
             card_body(Dim::SPACE2)
                 .child(
                     txt(
-                        format!("Wants to pair with you{}", if peer.connected { "" } else { " · offline" }),
+                        format!(
+                            "Wants to pair with you{}",
+                            if peer.connected { "" } else { " · offline" }
+                        ),
                         d.font_sm(),
                         c.text_muted,
                         400,
@@ -117,8 +135,9 @@ fn pair_request_card(peer: &Peer, nav: Nav) -> Element {
                                 .on_press(move |_| nav.backend().run(|core| Ok(core.pair(id)))),
                         )
                         .child(
-                            Btn::secondary("Ignore")
-                                .on_press(move |_| nav.backend().run(|core| Ok(core.ignore_pair(id)))),
+                            Btn::secondary("Ignore").on_press(move |_| {
+                                nav.backend().run(|core| Ok(core.ignore_pair(id)))
+                            }),
                         ),
                 ),
         )
@@ -224,7 +243,12 @@ impl Component for HomePage {
 
         let has_news = m.news().next().is_some();
         let mut items: Vec<Element> = vec![];
-        items.extend(m.peers.iter().filter(|p| pair_request(p)).map(|p| pair_request_card(p, nav)));
+        items.extend(
+            m.peers
+                .iter()
+                .filter(|p| pair_request(p))
+                .map(|p| pair_request_card(p, nav)),
+        );
         items.extend(m.groups.invites.iter().map(|i| invite_card(i, nav)));
         if !m.transfers.is_empty() {
             items.push(overline("TRANSFERS").into_element());
@@ -257,7 +281,12 @@ impl Component for HomePage {
         items.extend(online_peers);
         items.extend(online_groups);
         if items.is_empty() {
-            items.push(hint_center("All caught up. New files, texts and members of your groups show up here.").into_element());
+            items.push(
+                hint_center(
+                    "All caught up. New files, texts and members of your groups show up here.",
+                )
+                .into_element(),
+            );
         }
 
         list_page(
@@ -283,7 +312,11 @@ impl Component for HomePage {
 fn group_card(g: &GroupInfo, m: &Model, nav: Nav, on_home: bool) -> Element {
     let (c, d) = look();
     let gid = g.id.clone();
-    let subtitle = if g.name.is_some() { g.haiku.clone() } else { String::new() };
+    let subtitle = if g.name.is_some() {
+        g.haiku.clone()
+    } else {
+        String::new()
+    };
     ClickCard::new(move |_| nav.open_group(&gid, None))
         .border(c.group_border, 2.)
         .key(format!("group{}", g.id))
@@ -307,10 +340,17 @@ fn group_card(g: &GroupInfo, m: &Model, nav: Nav, on_home: bool) -> Element {
                                 .spacing(Dim::SPACE2)
                                 .cross_align(Alignment::Center)
                                 .maybe(!on_home, |el| el.child(dot(m.group_online(&g.id), 8.)))
-                                .child(txt(group_title(g), d.font_lg(), c.text_strong, 650).width(Size::flex(1.)))
-                                .maybe(g.guest.is_some(), |el| el.child(badge("guest link", Tone::Active))),
+                                .child(
+                                    txt(group_title(g), d.font_lg(), c.text_strong, 650)
+                                        .width(Size::flex(1.)),
+                                )
+                                .maybe(g.guest.is_some(), |el| {
+                                    el.child(badge("guest link", Tone::Active))
+                                }),
                         )
-                        .maybe(!subtitle.is_empty(), |el| el.child(txt(subtitle, d.font_sm(), c.text_muted, 400)))
+                        .maybe(!subtitle.is_empty(), |el| {
+                            el.child(txt(subtitle, d.font_sm(), c.text_muted, 400))
+                        })
                         .child(txt(m.group_summary(&g.id), d.font_sm(), c.text_muted, 400)),
                 ),
         ))
@@ -325,7 +365,12 @@ impl Component for GroupsPage {
         let nav = use_consume::<Nav>();
         let groups = use_radio::<Model, Channel>(Channel::Groups);
         let m = groups.read();
-        let mut items: Vec<Element> = m.groups.invites.iter().map(|i| invite_card(i, nav)).collect();
+        let mut items: Vec<Element> = m
+            .groups
+            .invites
+            .iter()
+            .map(|i| invite_card(i, nav))
+            .collect();
         items.extend(m.listed_groups().map(|g| group_card(g, &m, nav, false)));
         if items.is_empty() {
             items.push(hint_center("No groups yet.").into_element());
@@ -337,8 +382,16 @@ impl Component for GroupsPage {
                 rect()
                     .horizontal()
                     .spacing(Dim::SPACE2)
-                    .child(Btn::secondary("Guest link").icon(Icon::Link).on_press(move |_| nav.new_guest_link()))
-                    .child(Btn::primary("New group").icon(Icon::AddPeer).on_press(move |_| nav.new_group())),
+                    .child(
+                        Btn::secondary("Guest link")
+                            .icon(Icon::Link)
+                            .on_press(move |_| nav.new_guest_link()),
+                    )
+                    .child(
+                        Btn::primary("New group")
+                            .icon(Icon::AddPeer)
+                            .on_press(move |_| nav.new_group()),
+                    ),
             ),
             items,
         )
@@ -354,10 +407,18 @@ pub fn peer_badges(p: &Peer, on_home: bool) -> Rect {
         .horizontal()
         .spacing(4.)
         .maybe(paired && !on_home, |el| el.child(badge("paired", Tone::Ok)))
-        .maybe(!paired && p.paired_us && !p.paired, |el| el.child(badge("wants to pair", Tone::Warn)))
-        .maybe(!paired && p.paired && !p.paired_us, |el| el.child(badge("waiting for them", Tone::Muted)))
-        .maybe(p.connected && !on_home, |el| el.child(badge("connected", Tone::Ok)))
-        .maybe(p.saved && !p.connected, |el| el.child(badge("offline", Tone::Muted)))
+        .maybe(!paired && p.paired_us && !p.paired, |el| {
+            el.child(badge("wants to pair", Tone::Warn))
+        })
+        .maybe(!paired && p.paired && !p.paired_us, |el| {
+            el.child(badge("waiting for them", Tone::Muted))
+        })
+        .maybe(p.connected && !on_home, |el| {
+            el.child(badge("connected", Tone::Ok))
+        })
+        .maybe(p.saved && !p.connected, |el| {
+            el.child(badge("offline", Tone::Muted))
+        })
         .maybe(p.lan, |el| el.child(badge("LAN", Tone::Active)))
         .maybe(p.ble, |el| el.child(badge("Bluetooth", Tone::Warn)))
 }
@@ -397,13 +458,20 @@ fn peer_card(p: &Peer, nav: Nav) -> Element {
             )
         })
         .maybe(p.paired && p.pair_group.is_none(), |el| {
-            el.child(Btn::ghost("Unpair").on_press(move |_| nav.backend().run(|core| Ok(core.unpair(id)))))
+            el.child(
+                Btn::ghost("Unpair")
+                    .on_press(move |_| nav.backend().run(|core| Ok(core.unpair(id)))),
+            )
         })
         .maybe(!p.connected, |el| {
             el.child(Btn::secondary("Connect").on_press(move |_| nav.backend().connect(id)))
         })
         .maybe(p.saved, |el| {
-            el.child(Btn::ghost("Edit").icon(Icon::Edit).on_press(move |_| nav.edit(Some(edit.clone()))))
+            el.child(
+                Btn::ghost("Edit")
+                    .icon(Icon::Edit)
+                    .on_press(move |_| nav.edit(Some(edit.clone()))),
+            )
         });
     let body = rect()
         .horizontal()
@@ -447,7 +515,9 @@ impl Component for PeersPage {
             header_row(
                 "Peers",
                 "Devices nearby and the ones you saved. Pair with a peer, and when it pairs back you get a page of your own with it.",
-                Btn::primary("Add").icon(Icon::AddPeer).on_press(move |_| nav.go(Page::Add)),
+                Btn::primary("Add")
+                    .icon(Icon::AddPeer)
+                    .on_press(move |_| nav.go(Page::Add)),
             ),
             items,
         )
@@ -477,7 +547,11 @@ impl Component for AddPage {
         let on_connect = connect.clone();
         let copied = ticket.clone();
         scroll_page(vec![
-            page_title("Add a peer", "Scan a code from the other device, or show yours.").into_element(),
+            page_title(
+                "Add a peer",
+                "Scan a code from the other device, or show yours.",
+            )
+            .into_element(),
             card()
                 .child(
                     card_body(Dim::SPACE3)
@@ -486,9 +560,15 @@ impl Component for AddPage {
                             rect()
                                 .width(Size::fill())
                                 .cross_align(Alignment::Center)
-                                .maybe(!ticket.is_empty(), |el| el.child(qr_code(&ticket, qr_size))),
+                                .maybe(!ticket.is_empty(), |el| {
+                                    el.child(qr_code(&ticket, qr_size))
+                                }),
                         )
-                        .child(Btn::primary("Scan a code").icon(Icon::Qr).on_press(move |_| nav.backend().scan())),
+                        .child(
+                            Btn::primary("Scan a code")
+                                .icon(Icon::Qr)
+                                .on_press(move |_| nav.backend().scan()),
+                        ),
                 )
                 .into_element(),
             card()
@@ -513,7 +593,11 @@ impl Component for AddPage {
                     card_body(Dim::SPACE2)
                         .child(txt("Your ticket", d.font_md(), c.text_strong, 650))
                         .child(copyable(ticket))
-                        .child(Btn::secondary("Copy").icon(Icon::Copy).on_press(move |_| copy(nav, &copied))),
+                        .child(
+                            Btn::secondary("Copy")
+                                .icon(Icon::Copy)
+                                .on_press(move |_| copy(nav, &copied)),
+                        ),
                 )
                 .into_element(),
         ])
@@ -546,9 +630,14 @@ impl Component for ScanView {
             .spacing(Dim::SPACE3)
             .content(Content::flex())
             .child(
-                txt("Point the camera at a FlipFlop code", d.font_md(), c.text_strong, 400)
-                    .width(Size::fill())
-                    .text_align(TextAlign::Center),
+                txt(
+                    "Point the camera at a FlipFlop code",
+                    d.font_md(),
+                    c.text_strong,
+                    400,
+                )
+                .width(Size::fill())
+                .text_align(TextAlign::Center),
             )
             .child(
                 rect()
@@ -634,15 +723,17 @@ impl Component for SettingsPage {
             NameCard { name: my_name }.into_element(),
             card()
                 .child(
-                    card_body(Dim::SPACE2).child(section("Appearance")).child(TabStrip::new(
-                        vec![
-                            ("system".into(), "System".into()),
-                            ("light".into(), "Light".into()),
-                            ("dark".into(), "Dark".into()),
-                        ],
-                        theme,
-                        move |t: String| nav.set_theme(&t),
-                    )),
+                    card_body(Dim::SPACE2)
+                        .child(section("Appearance"))
+                        .child(TabStrip::new(
+                            vec![
+                                ("system".into(), "System".into()),
+                                ("light".into(), "Light".into()),
+                                ("dark".into(), "Dark".into()),
+                            ],
+                            theme,
+                            move |t: String| nav.set_theme(&t),
+                        )),
                 )
                 .into_element(),
             card()
@@ -654,12 +745,18 @@ impl Component for SettingsPage {
                 .into_element(),
             card()
                 .child(
-                    card_body(Dim::SPACE2).child(section("Connection")).child(txt(
-                        if ble_status.is_empty() { "Starting…".to_owned() } else { ble_status },
-                        d.font_sm(),
-                        c.text_muted,
-                        400,
-                    )),
+                    card_body(Dim::SPACE2)
+                        .child(section("Connection"))
+                        .child(txt(
+                            if ble_status.is_empty() {
+                                "Starting…".to_owned()
+                            } else {
+                                ble_status
+                            },
+                            d.font_sm(),
+                            c.text_muted,
+                            400,
+                        )),
                 )
                 .into_element(),
         ])

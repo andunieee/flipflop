@@ -321,3 +321,25 @@ fn an_app_that_runs_forever_is_stopped() {
     assert!(app.start().is_err());
     assert!(app.notify().is_err());
 }
+
+#[test]
+fn an_app_that_floods_the_renderer_is_stopped() {
+    // Emits 1 MiB of memory over and over in one event, never letting the host take it.
+    let wasm = wat::parse_str(
+        r#"(module
+  (import "flipflop" "emit" (func $emit (param i32 i32)))
+  (memory (export "memory") 32)
+  (func (export "ff_alloc") (param i32) (result i32) (i32.const 0))
+  (func (export "ff_event") (param i32 i32)
+    (loop $again
+      (call $emit (i32.const 0) (i32.const 0x100000))
+      (br $again))))"#,
+    )
+    .unwrap();
+    let mut app = Runtime::default()
+        .load(&wasm, "flood", "me", shared())
+        .unwrap();
+    assert!(app.start().is_err());
+    assert!(app.is_stopped());
+    assert!(app.take_ui().len() <= UI_BACKLOG);
+}

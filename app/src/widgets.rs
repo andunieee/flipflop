@@ -233,7 +233,12 @@ impl Component for Btn {
         let mut hovered = use_state(|| false);
         let (fill, hover, ink, border) = match self.kind {
             Kind::Primary => (c.accent, c.accent_hover, Color::WHITE, None),
-            Kind::Secondary => (c.chip_bg, c.chip_bg_hover, c.text_strong, Some(c.border_strong)),
+            Kind::Secondary => (
+                c.chip_bg,
+                c.chip_bg_hover,
+                c.text_strong,
+                Some(c.border_strong),
+            ),
             Kind::Ghost => (Color::TRANSPARENT, c.chip_bg, c.text, None),
             Kind::Danger => (Color::TRANSPARENT, c.error_soft, c.error, None),
         };
@@ -245,10 +250,21 @@ impl Component for Btn {
             .min_height(Size::px(d.control_height()))
             .min_width(Size::px(d.control_height()))
             .maybe(self.expanded, |el| el.width(Size::flex(1.)))
-            .padding((0., if self.label.is_empty() { 0. } else { d.button_padding() }))
+            .padding((
+                0.,
+                if self.label.is_empty() {
+                    0.
+                } else {
+                    d.button_padding()
+                },
+            ))
             .spacing(if d.narrow { 6. } else { Dim::SPACE2 })
             .corner_radius(Dim::RADIUS_SM + 2.)
-            .background(if enabled && *hovered.read() { hover } else { fill })
+            .background(if enabled && *hovered.read() {
+                hover
+            } else {
+                fill
+            })
             .map(border, |el, border| {
                 el.border(
                     Border::new()
@@ -258,7 +274,11 @@ impl Component for Btn {
                 )
             })
             .maybe(!enabled, |el| el.opacity(0.45))
-            .cursor(if enabled { CursorIcon::Pointer } else { CursorIcon::Default })
+            .cursor(if enabled {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Default
+            })
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
             .on_press(move |e: Event<PressEventData>| {
@@ -448,7 +468,9 @@ impl Component for ToggleRow {
                     .child(txt(self.label.clone(), d.font_md(), c.text_strong, 600))
                     .child(txt(self.hint.clone(), d.font_sm(), c.text_muted, 400)),
             )
-            .child(Switch::new(WritableSetter::new(on, move |v| toggle.call(v))))
+            .child(Switch::new(WritableSetter::new(on, move |v| {
+                toggle.call(v)
+            })))
     }
 }
 
@@ -597,14 +619,15 @@ pub fn qr_code(text: &str, size: f32) -> Rect {
         .corner_radius(Dim::RADIUS)
         .background(Color::WHITE)
         .padding(4.)
-        .maybe_child(
-            handle.map(|h| image(h).width(Size::fill()).height(Size::fill())),
-        )
+        .maybe_child(handle.map(|h| image(h).width(Size::fill()).height(Size::fill())))
 }
 
 /// A dimmed backdrop over the whole window; pressing it calls `on_dismiss`. `content` must stop
 /// presses on itself from reaching the backdrop (see [`sheet`]).
-pub fn scrim(on_dismiss: impl FnMut(Event<PressEventData>) + 'static, content: impl IntoElement) -> Rect {
+pub fn scrim(
+    on_dismiss: impl FnMut(Event<PressEventData>) + 'static,
+    content: impl IntoElement,
+) -> Rect {
     rect()
         .layer(Layer::Overlay)
         .position(Position::new_global())
