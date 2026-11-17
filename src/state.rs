@@ -118,11 +118,22 @@ pub struct Share {
 }
 
 /// An invite we received and the user has not answered yet.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Invite {
     pub inviter: String,
     pub group: String,
+    /// The name the inviter knew the group by, if it had one. Not part of the invite's identity.
+    #[serde(default)]
+    pub name: Option<String>,
 }
+
+impl PartialEq for Invite {
+    fn eq(&self, other: &Self) -> bool {
+        self.inviter == other.inviter && self.group == other.group
+    }
+}
+
+impl Eq for Invite {}
 
 /// An answer to an invite that has not reached the inviter yet.
 #[derive(Serialize, Deserialize, Clone, Debug)]

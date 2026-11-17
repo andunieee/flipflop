@@ -1506,7 +1506,10 @@ mod tests {
         fill(&mut mine, "add-text", "form.item", "Milk");
         press(&mut mine, "add-go");
         let item = ids(&mine, HeComponent::Checkbox).remove(0);
-        let bind = format!("sync.{}", &item[..item.len() - 5].replacen("i-", "done.", 1));
+        let bind = format!(
+            "sync.{}",
+            &item[..item.len() - 5].replacen("i-", "done.", 1)
+        );
         let ticked = |s: &Session| s.value(&bind).and_then(Json::as_bool);
         assert_eq!(ticked(&mine), Some(false));
 

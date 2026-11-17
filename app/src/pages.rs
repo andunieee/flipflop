@@ -85,7 +85,12 @@ fn invite_card(invite: &InviteInfo, nav: Nav) -> Element {
                     )
                     .elide(),
                 )
-                .child(txt(invite.haiku.clone(), d.font_lg(), c.text_strong, 700))
+                .child(txt(
+                    invite.name.clone().unwrap_or_else(|| invite.haiku.clone()),
+                    d.font_lg(),
+                    c.text_strong,
+                    700,
+                ))
                 .child(
                     rect()
                         .horizontal()
@@ -482,13 +487,18 @@ fn peer_card(p: &Peer, nav: Nav) -> Element {
             .child(body)
             .into_element(),
         None => card_with(
-            pattern_fill(Pattern::Peer, c.card_bg, c.text_muted, if c.dark { 0.12 } else { 0.1 }),
+            pattern_fill(
+                Pattern::Peer,
+                c.card_bg,
+                c.text_muted,
+                if c.dark { 0.12 } else { 0.1 },
+            ),
             c.border,
             1.,
         )
-            .key(p.id.to_string())
-            .child(body)
-            .into_element(),
+        .key(p.id.to_string())
+        .child(body)
+        .into_element(),
     }
 }
 

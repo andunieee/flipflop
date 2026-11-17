@@ -405,7 +405,7 @@ impl Component for Sidebar {
             .collect();
         let invite_rows = m.groups.invites.iter().map(|i| {
             SideRow::button(
-                format!("Invitation: {}", i.haiku),
+                format!("Invitation: {}", i.name.as_ref().unwrap_or(&i.haiku)),
                 Icon::Groups,
                 false,
                 move |_| nav.go(Page::Home),

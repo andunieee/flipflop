@@ -127,7 +127,13 @@ thread_local! {
 
 /// A card background: `base` with a faint `ink` pattern drawn over it.
 pub fn pattern_fill(pattern: Pattern, base: Color, ink: Color, strength: f32) -> Fill {
-    let rgb = |c: Color| [c.r() as f32 / 255., c.g() as f32 / 255., c.b() as f32 / 255.];
+    let rgb = |c: Color| {
+        [
+            c.r() as f32 / 255.,
+            c.g() as f32 / 255.,
+            c.b() as f32 / 255.,
+        ]
+    };
     let [br, bg, bb] = rgb(base);
     let [ir, ig, ib] = rgb(ink);
     let kind = if pattern == Pattern::Peer { 0. } else { 1. };

@@ -116,6 +116,8 @@ pub struct InviteInfo {
     pub inviter_name: String,
     pub group: String,
     pub haiku: String,
+    /// The name the inviter gave the group, if any.
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -161,9 +163,12 @@ enum Msg {
     Text {
         text: String,
     },
-    /// "Please join this group" (the haiku name derives from the id, so only the id travels).
+    /// "Please join this group". The haiku name derives from the id; the name the members gave
+    /// it lives in the group document, which the invitee only gets after joining, so it travels too.
     GroupInvite {
         group: String,
+        #[serde(default)]
+        name: Option<String>,
     },
     GroupReply {
         group: String,
@@ -630,6 +635,7 @@ impl Core {
                     inviter_name: display_name(&inviter),
                     group: i.group.clone(),
                     haiku: crate::haiku::name(&parse_gid(&i.group)?),
+                    name: i.name.clone(),
                 })
             })
             .collect();
@@ -863,7 +869,7 @@ impl Core {
                             text,
                         });
                     }
-                    Ok(Msg::GroupInvite { group }) => this.on_invite(id, group),
+                    Ok(Msg::GroupInvite { group, name }) => this.on_invite(id, group, name),
                     Ok(Msg::GroupReply { group, accept }) => this.on_reply(id, group, accept),
                     Ok(Msg::Pair) => this.on_pair(id, true),
                     Ok(Msg::Unpair) => this.on_pair(id, false),
@@ -1200,6 +1206,7 @@ impl Core {
             let invite = Invite {
                 inviter: who.clone(),
                 group: group.to_string(),
+                name: None,
             };
             st.invites.retain(|i| *i != invite);
             if accept {
@@ -1231,7 +1238,7 @@ impl Core {
         self.flush_later(inviter);
     }
 
-    fn on_invite(&self, from: EndpointId, group: String) {
+    fn on_invite(&self, from: EndpointId, group: String, name: Option<String>) {
         if parse_gid(&group).is_none() {
             return;
         }
@@ -1240,6 +1247,7 @@ impl Core {
             let invite = Invite {
                 inviter: who.clone(),
                 group: group.clone(),
+                name: name.as_deref().map(clean_name).filter(|n| !n.is_empty()),
             };
             if st.rejected.contains(&invite) {
                 // Not shown again; just tell them (again) so they stop asking.
@@ -1256,8 +1264,9 @@ impl Core {
                 queue_reply(st, &who, &group, true);
                 true
             } else {
-                if !st.invites.contains(&invite) {
-                    st.invites.push(invite);
+                match st.invites.iter_mut().find(|i| **i == invite) {
+                    Some(i) => i.name = invite.name,
+                    None => st.invites.push(invite),
                 }
                 false
             }
@@ -1335,6 +1344,7 @@ impl Core {
                 &conn,
                 &Msg::GroupInvite {
                     group: group.clone(),
+                    name: self.with_doc(&group, |d| d.name()),
                 },
             )
             .await
