@@ -2,7 +2,11 @@
 
 use std::{cell::RefCell, collections::HashMap};
 
-use freya::{elements::image::ImageHandle, engine::prelude::AlphaType, prelude::*};
+use freya::{
+    elements::image::ImageHandle,
+    engine::prelude::{AlphaType, Data, RuntimeEffect},
+    prelude::*,
+};
 
 use crate::{
     icons::Icon,
@@ -91,7 +95,55 @@ pub fn card() -> Rect {
     card_with(c.card_bg, c.border, 1.)
 }
 
-pub fn card_with(background: Color, border: Color, width: f32) -> Rect {
+/// Which kind of thing a card shows; each gets its own faint background pattern.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pattern {
+    /// A grid of dots.
+    Peer,
+    /// Diagonal stripes.
+    Group,
+}
+
+const PATTERN_SKSL: &str = r#"
+uniform float4 base;
+uniform float4 ink;
+uniform float kind;
+
+half4 main(float2 p) {
+    float m;
+    if (kind < 0.5) {
+        m = 1.0 - smoothstep(0.7, 1.5, length(mod(p, 12.0) - 6.0));
+    } else {
+        m = 1.0 - smoothstep(0.5, 1.3, abs(mod(p.x + p.y, 10.0) - 5.0));
+    }
+    return half4(mix(base.rgb, ink.rgb, m * ink.a), 1.0);
+}
+"#;
+
+thread_local! {
+    static PATTERN_EFFECT: RuntimeEffect = RuntimeEffect::make_for_shader(PATTERN_SKSL, None)
+        .expect("card pattern shader");
+}
+
+/// A card background: `base` with a faint `ink` pattern drawn over it.
+pub fn pattern_fill(pattern: Pattern, base: Color, ink: Color, strength: f32) -> Fill {
+    let rgb = |c: Color| [c.r() as f32 / 255., c.g() as f32 / 255., c.b() as f32 / 255.];
+    let [br, bg, bb] = rgb(base);
+    let [ir, ig, ib] = rgb(ink);
+    let kind = if pattern == Pattern::Peer { 0. } else { 1. };
+    let uniforms: Vec<u8> = [br, bg, bb, 1., ir, ig, ib, strength, kind]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    let effect = PATTERN_EFFECT.with(|e| e.clone());
+    Fill::Shader(Box::new(ShaderFill::new(
+        PATTERN_SKSL,
+        effect.clone(),
+        move |effect, _| effect.make_shader(Data::new_copy(&uniforms), &[], None),
+    )))
+}
+
+pub fn card_with(background: impl Into<Fill>, border: Color, width: f32) -> Rect {
     rect()
         .width(Size::fill())
         .corner_radius(Dim::RADIUS_LG)
@@ -364,7 +416,7 @@ impl Component for IconButton {
 /// A card that darkens a little under the pointer.
 #[derive(PartialEq)]
 pub struct ClickCard {
-    border: Option<(Color, f32)>,
+    pattern: Option<Pattern>,
     children: Vec<Element>,
     on_press: EventHandler<()>,
     key: DiffKey,
@@ -373,14 +425,15 @@ pub struct ClickCard {
 impl ClickCard {
     pub fn new(on_press: impl FnMut(()) + 'static) -> Self {
         Self {
-            border: None,
+            pattern: None,
             children: vec![],
             on_press: EventHandler::new(on_press),
             key: DiffKey::None,
         }
     }
-    pub fn border(mut self, color: Color, width: f32) -> Self {
-        self.border = Some((color, width));
+    /// Draws the card's background with the pattern of a peer or a group.
+    pub fn pattern(mut self, pattern: Pattern) -> Self {
+        self.pattern = Some(pattern);
         self
     }
 }
@@ -401,14 +454,17 @@ impl Component for ClickCard {
     fn render(&self) -> impl IntoElement {
         let (c, _) = look();
         let mut hovered = use_state(|| false);
-        let (border, width) = self.border.unwrap_or((c.border, 1.));
-        let background = if *hovered.read() {
+        let base = if *hovered.read() {
             c.inset_bg
         } else {
             c.card_bg
         };
+        let background = match self.pattern {
+            Some(p) => pattern_fill(p, base, c.text_muted, if c.dark { 0.12 } else { 0.1 }),
+            None => Fill::Color(base),
+        };
         let on_press = self.on_press.clone();
-        card_with(background, border, width)
+        card_with(background, c.border, 1.)
             .cursor(CursorIcon::Pointer)
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
@@ -642,4 +698,16 @@ pub fn scrim(
 /// A panel on a [`scrim`] that keeps presses to itself.
 pub fn sheet() -> Rect {
     rect().on_press(|e: Event<PressEventData>| e.stop_propagation())
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    #[test]
+    fn pattern_shader_compiles() {
+        for p in [Pattern::Peer, Pattern::Group] {
+            pattern_fill(p, Color::WHITE, Color::BLACK, 0.1);
+        }
+    }
 }

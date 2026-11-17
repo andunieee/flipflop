@@ -338,6 +338,34 @@ fn empty_note(text: &str) -> Label {
         .padding((12., 0.))
 }
 
+/// A sidebar section heading that opens the section's page, with a "+" to add to it.
+fn section_title(
+    text: &str,
+    open: impl Fn() + 'static,
+    add: impl Fn() + 'static,
+) -> Rect {
+    let (c, _) = look();
+    rect()
+        .horizontal()
+        .width(Size::fill())
+        .content(Content::flex())
+        .cross_align(Alignment::Center)
+        // The right padding keeps the "+" clear of the scrollbar, which overlays the content.
+        .padding((Dim::SPACE2, 20., 0., Dim::SPACE3))
+        .child(
+            rect()
+                .width(Size::flex(1.))
+                .cursor(CursorIcon::Pointer)
+                .on_press(move |_| open())
+                .child(overline(text)),
+        )
+        .child(
+            IconButton::new(Icon::Plus, move |_| add())
+                .tint(c.accent_text)
+                .size(28.),
+        )
+}
+
 #[derive(PartialEq)]
 struct Sidebar;
 
@@ -427,43 +455,22 @@ impl Component for Sidebar {
                             .width(Size::fill())
                             .height(Size::flex(1.))
                             .spacing(2.)
-                            .child(
-                                rect()
-                                    .padding((Dim::SPACE2, 0., 0., Dim::SPACE3))
-                                    .child(overline("PEERS")),
-                            )
+                            .child(section_title(
+                                "PEERS",
+                                move || nav.go(Page::Peers),
+                                move || nav.go(Page::Add),
+                            ))
                             .children(peer_rows)
                             .maybe(no_peers, |el| el.child(empty_note("No paired peers yet")))
-                            .child(
-                                rect()
-                                    .horizontal()
-                                    .width(Size::fill())
-                                    .content(Content::flex())
-                                    .cross_align(Alignment::Center)
-                                    .padding((Dim::SPACE2, 0., 0., Dim::SPACE3))
-                                    .child(rect().width(Size::flex(1.)).child(overline("GROUPS")))
-                                    .child(
-                                        IconButton::new(Icon::AddPeer, move |_| nav.new_group())
-                                            .tint(c.accent_text)
-                                            .size(28.),
-                                    ),
-                            )
+                            .child(section_title(
+                                "GROUPS",
+                                move || nav.go(Page::Groups),
+                                move || nav.new_group(),
+                            ))
                             .children(invite_rows)
                             .children(group_rows)
                             .maybe(no_groups, |el| el.child(empty_note("No groups yet"))),
                     )
-                    .child(SideRow::button(
-                        "Peers",
-                        Icon::Peers,
-                        page == Page::Peers,
-                        move |_| nav.go(Page::Peers),
-                    ))
-                    .child(SideRow::button(
-                        "Add a peer",
-                        Icon::AddPeer,
-                        page == Page::Add,
-                        move |_| nav.go(Page::Add),
-                    ))
                     .child(SideRow::button(
                         "Guest link",
                         Icon::Link,
@@ -883,7 +890,7 @@ impl Component for SharePicker {
             .into_iter()
             .map(|(gid, title, detail, online, peer)| {
                 ClickCard::new(move |_| nav.share_to(&gid))
-                    .border(if peer { c.peer_border } else { c.group_border }, 2.)
+                    .pattern(if peer { Pattern::Peer } else { Pattern::Group })
                     .child(
                         rect()
                             .horizontal()

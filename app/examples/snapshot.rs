@@ -72,12 +72,16 @@ fn main() {
     shot(&mut runner, "home");
     let nav = |label: &str| label.to_owned();
     for (label, name) in [
-        (nav("Peers"), "peers"),
-        (nav(if phone { "Peers" } else { "Add a peer" }), "add"),
+        (nav(if phone { "Peers" } else { "PEERS" }), "peers"),
+        (nav(if phone { "Peers" } else { "PEERS" }), "add"),
         (nav("Settings"), "settings"),
     ] {
-        if phone && name == "add" {
-            click(&mut runner, "Add");
+        if name == "add" {
+            // Phone: the "Add" button on the peers page; desktop: the "+" has no label, so the
+            // snapshot just retakes the peers page.
+            if phone {
+                click(&mut runner, "Add");
+            }
         } else {
             click(&mut runner, &label);
         }

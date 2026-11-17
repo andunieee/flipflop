@@ -3,7 +3,6 @@
 /// An icon's SVG.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Icon {
-    AddPeer,
     Apps,
     ArrowDown,
     ArrowLeft,
@@ -41,7 +40,6 @@ pub enum Icon {
 impl Icon {
     pub fn svg(self) -> &'static [u8] {
         match self {
-            Icon::AddPeer => include_bytes!("../icons/add-peer.svg"),
             Icon::Apps => include_bytes!("../icons/apps.svg"),
             Icon::ArrowDown => include_bytes!("../icons/arrow-down.svg"),
             Icon::ArrowLeft => include_bytes!("../icons/arrow-left.svg"),

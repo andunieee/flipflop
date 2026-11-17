@@ -9,9 +9,6 @@ pub struct Palette {
     pub window_bg: Color,
     pub sidebar_bg: Color,
     pub card_bg: Color,
-    /// Card borders that tell peers (teal) from groups (blue).
-    pub peer_border: Color,
-    pub group_border: Color,
     pub inset_bg: Color,
     pub border: Color,
     pub border_strong: Color,
@@ -49,8 +46,6 @@ impl Palette {
             window_bg: c(0xFFf4faff, 0xFF0e1824),
             sidebar_bg: c(0xFFe6f3fd, 0xFF0a131c),
             card_bg: c(0xFFffffff, 0xFF15222f),
-            peer_border: c(0xFF2bb38a, 0xFF34c49a),
-            group_border: c(0xFF3d8fe0, 0xFF4f9fea),
             inset_bg: c(0xFFf2f8fd, 0xFF111c28),
             border: c(0xFFd6e7f5, 0xFF223446),
             border_strong: c(0xFFb8d4ec, 0xFF2e4660),

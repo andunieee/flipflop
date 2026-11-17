@@ -1082,7 +1082,7 @@ fn peer_section(peer: &Peer, m: &Model, nav: Nav) -> Vec<Element> {
                             },
                         )),
                     )
-                    .child(Btn::primary("Invite").icon(Icon::AddPeer).on_press(move |_| {
+                    .child(Btn::primary("Invite").icon(Icon::Plus).on_press(move |_| {
                         nav.backend().run(|core| Ok(core.add_to_group(&gid, id)));
                         nav.toast(format!("Invited to {title}"));
                     }))

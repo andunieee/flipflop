@@ -131,7 +131,7 @@ fn pair_request_card(peer: &Peer, nav: Nav) -> Element {
                         .spacing(Dim::SPACE2)
                         .child(
                             Btn::primary("Pair")
-                                .icon(Icon::AddPeer)
+                                .icon(Icon::Plus)
                                 .on_press(move |_| nav.backend().run(|core| Ok(core.pair(id)))),
                         )
                         .child(
@@ -213,7 +213,7 @@ fn online_peer_card(peer: &Peer, nav: Nav) -> Option<Element> {
     let gid = peer.pair_group.clone()?;
     Some(
         ClickCard::new(move |_| nav.open_group(&gid, None))
-            .border(c.peer_border, 2.)
+            .pattern(Pattern::Peer)
             .key(format!("online{}", peer.id))
             .child(card_row(
                 rect()
@@ -280,14 +280,6 @@ impl Component for HomePage {
         }
         items.extend(online_peers);
         items.extend(online_groups);
-        if items.is_empty() {
-            items.push(
-                hint_center(
-                    "All caught up. New files, texts and members of your groups show up here.",
-                )
-                .into_element(),
-            );
-        }
 
         list_page(
             header_row(
@@ -318,7 +310,7 @@ fn group_card(g: &GroupInfo, m: &Model, nav: Nav, on_home: bool) -> Element {
         String::new()
     };
     ClickCard::new(move |_| nav.open_group(&gid, None))
-        .border(c.group_border, 2.)
+        .pattern(Pattern::Group)
         .key(format!("group{}", g.id))
         .child(card_row(
             rect()
@@ -389,7 +381,7 @@ impl Component for GroupsPage {
                     )
                     .child(
                         Btn::primary("New group")
-                            .icon(Icon::AddPeer)
+                            .icon(Icon::Plus)
                             .on_press(move |_| nav.new_group()),
                     ),
             ),
@@ -453,7 +445,7 @@ fn peer_card(p: &Peer, nav: Nav) -> Element {
         .maybe(!p.paired, |el| {
             el.child(
                 Btn::primary("Pair")
-                    .icon(Icon::AddPeer)
+                    .icon(Icon::Plus)
                     .on_press(move |_| nav.backend().run(|core| Ok(core.pair(id)))),
             )
         })
@@ -485,11 +477,15 @@ fn peer_card(p: &Peer, nav: Nav) -> Element {
         .child(buttons);
     match p.pair_group.clone() {
         Some(gid) => ClickCard::new(move |_| nav.open_group(&gid, None))
-            .border(c.peer_border, 2.)
+            .pattern(Pattern::Peer)
             .key(p.id.to_string())
             .child(body)
             .into_element(),
-        None => card_with(c.card_bg, c.peer_border, 2.)
+        None => card_with(
+            pattern_fill(Pattern::Peer, c.card_bg, c.text_muted, if c.dark { 0.12 } else { 0.1 }),
+            c.border,
+            1.,
+        )
             .key(p.id.to_string())
             .child(body)
             .into_element(),
@@ -516,7 +512,7 @@ impl Component for PeersPage {
                 "Peers",
                 "Devices nearby and the ones you saved. Pair with a peer, and when it pairs back you get a page of your own with it.",
                 Btn::primary("Add")
-                    .icon(Icon::AddPeer)
+                    .icon(Icon::Plus)
                     .on_press(move |_| nav.go(Page::Add)),
             ),
             items,
