@@ -91,22 +91,18 @@ impl Core {
         })
     }
 
-    /// Add the app `draft` (from [`Core::prepare_app`]) to the group, with its tab on, named `name`
-    /// and with the answers `values` to its form (in the order of `draft.form.params`). Empty
-    /// answers are the form's defaults. Returns the app's id.
-    pub async fn add_app(
-        &self,
-        gid: &str,
-        draft: &AppDraft,
-        name: &str,
-        values: &[String],
-    ) -> Result<String> {
+    /// Add the app `draft` (from [`Core::prepare_app`]) to the group, with its tab on and the
+    /// answers `values` to its form (in the order of `draft.form.params`). Empty answers are the
+    /// form's defaults. The tab is named after the file until the app names it itself (see
+    /// [`Core::set_app_name`]). Returns the app's id.
+    pub async fn add_app(&self, gid: &str, draft: &AppDraft, values: &[String]) -> Result<String> {
         self.require_group(gid)?;
-        let (name, params) = draft.form.answers(name, values);
-        let name = match name.trim() {
-            "" => draft.file_name.clone(),
-            name => name.to_owned(),
-        };
+        let params = draft.form.answers(values);
+        let stem = draft
+            .file_name
+            .strip_suffix(".wasm")
+            .unwrap_or(&draft.file_name);
+        let name = format!("{stem} {}", &draft.hash[..6.min(draft.hash.len())]);
         let local = self.app_path(&draft.hash);
         if !local.exists() {
             bail!("the app's file is gone");
@@ -121,6 +117,15 @@ impl Core {
         });
         self.doc_changed(gid, false);
         Ok(id)
+    }
+
+    /// The app named its tab: show that name to the whole group.
+    pub fn set_app_name(&self, gid: &str, id: &str, name: &str) -> Result<()> {
+        self.require_group(gid)?;
+        if self.with_doc(gid, |d| d.set_app_name(id, name.trim())) {
+            self.doc_changed(gid, false);
+        }
+        Ok(())
     }
 
     /// Delete an app from the group, for every member: its tab and its data. If we offered its

@@ -346,21 +346,15 @@ fn an_app_that_floods_the_renderer_is_stopped() {
 
 #[test]
 fn an_app_describes_its_params() {
-    let spec = codec::encode(&map([
-        (
-            "name",
-            map([("default", text("Lists")), ("placeholder", text("My list"))]),
-        ),
-        (
-            "params",
-            Cbor::Array(vec![map([
-                ("key", text("list")),
-                ("label", text("List name")),
-                ("default", text("")),
-                ("placeholder", text("Groceries")),
-            ])]),
-        ),
-    ]));
+    let spec = codec::encode(&map([(
+        "params",
+        Cbor::Array(vec![map([
+            ("key", text("list")),
+            ("label", text("List name")),
+            ("default", text("")),
+            ("placeholder", text("Groceries")),
+        ])]),
+    )]));
     let wasm = wat::parse_str(format!(
         r#"(module
   (memory (export "memory") 1)
@@ -374,19 +368,16 @@ fn an_app_describes_its_params() {
     ))
     .unwrap();
     let form = Runtime::default().params(&wasm).unwrap();
-    assert_eq!(form.name.default, "Lists");
     assert_eq!(form.params[0].key, "list");
     assert_eq!(form.params[0].placeholder, "Groceries");
-    // Empty answers are the defaults, and the name falls back to the placeholder.
-    let (name, params) = form.answers("  ", &["".into()]);
+    // An empty answer is the default.
     assert_eq!(
-        (name.as_str(), params),
-        ("Lists", vec![("list".to_owned(), String::new())])
+        form.answers(&["  ".into()]),
+        [("list".to_owned(), String::new())]
     );
-    let (name, params) = form.answers("Trip", &["Tents".into()]);
     assert_eq!(
-        (name.as_str(), params),
-        ("Trip", vec![("list".to_owned(), "Tents".to_owned())])
+        form.answers(&["Tents".into()]),
+        [("list".to_owned(), "Tents".to_owned())]
     );
 
     // An app that asks nothing needs no `ff_get_params`.

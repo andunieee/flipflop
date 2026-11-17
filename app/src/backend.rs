@@ -425,16 +425,10 @@ impl Backend {
         });
     }
 
-    /// Add the app to the group, named `name`, with the answers `values` to its form.
-    pub fn add_app(
-        &self,
-        gid: String,
-        draft: flipflop::core::AppDraft,
-        name: String,
-        values: Vec<String>,
-    ) {
+    /// Add the app to the group, with the answers `values` to its form.
+    pub fn add_app(&self, gid: String, draft: flipflop::core::AppDraft, values: Vec<String>) {
         self.spawn(Some("App added to the group"), move |core| async move {
-            core.add_app(&gid, &draft, &name, &values).await
+            core.add_app(&gid, &draft, &values).await
         });
     }
 

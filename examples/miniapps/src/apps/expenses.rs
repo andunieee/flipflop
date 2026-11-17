@@ -30,7 +30,7 @@ pub fn title() -> String {
 
 /// Nothing to ask: the app starts empty.
 pub fn params() -> Cbor {
-    crate::params(NAME, NAME, Vec::new())
+    crate::params(Vec::new())
 }
 
 const CURRENCIES: [&str; 8] = ["EUR", "USD", "GBP", "BRL", "CAD", "AUD", "CHF", "SEK"];
@@ -271,7 +271,7 @@ pub fn page(host: &Host) -> Page {
     );
     page.sync("currency", cbor_text(&currency));
 
-    page.add(card("new", "root", "Add an expense"));
+    page.add(card("new", "root", ""));
     page.add(input("new-what", "new", "What was it for?", "form.what").placeholder("Groceries"));
     page.add(row("new-pay", "new"));
     page.add(
@@ -319,17 +319,17 @@ pub fn page(host: &Host) -> Page {
         "new-go",
         "new",
         "primary",
-        "Add expense",
+        "+",
         "add_expense",
         Cbor::Null,
     ));
 
     // Balances and what would settle them.
-    page.add(card("bal", "root", "Who owes whom"));
-    if expenses.is_empty() && payments.is_empty() {
-        page.add(text("bal-none", "bal", "caption", "Nothing to settle yet."));
+    let settle = !(expenses.is_empty() && payments.is_empty());
+    if settle {
+        page.add(card("bal", "root", "Who owes whom"));
     }
-    for (person, cents) in &balance {
+    for (person, cents) in balance.iter().filter(|_| settle) {
         let line = format!("bal-{}", ui::path_id(person));
         page.add(row(&line, "bal"));
         page.add(text(

@@ -108,19 +108,22 @@ pub fn path_id(id: &str) -> String {
 /// app owns. The `sync` signals mirror the document (a checkbox's state, a selected answer) and the
 /// app sets them on every redraw; the `form` signals belong to the user's inputs.
 pub struct Page {
+    /// What the app is called (the host names its tab after it); never drawn.
+    name: String,
     els: Vec<El>,
     sync: BTreeMap<String, Cbor>,
 }
 
 impl Page {
-    /// A page with its title, and the app's last error as a notice under it.
-    pub fn new(title: &str) -> Page {
+    /// A page for the app called `name` (sent as its metadata, not drawn), with the app's last
+    /// error as a notice at the top.
+    pub fn new(name: &str) -> Page {
         let mut page = Page {
+            name: name.to_owned(),
             els: Vec::new(),
             sync: BTreeMap::new(),
         };
         page.add(El::new("root", "column").set("gap", crate::value::text("medium")));
-        page.add(text("title", "root", "h1", title));
         if let Some(error) = ERROR.lock().unwrap().clone() {
             page.add(
                 El::new("error", "notice")
@@ -144,7 +147,7 @@ impl Page {
 
 static ERROR: Mutex<Option<String>> = Mutex::new(None);
 
-/// Show `message` under the title until the next action.
+/// Show `message` at the top until the next action.
 pub fn fail(message: impl Into<String>) {
     *ERROR.lock().unwrap() = Some(message.into());
 }
@@ -232,6 +235,7 @@ pub fn input(id: &str, parent: &str, label: &str, bind: &str) -> El {
 
 #[derive(Default)]
 struct Ui {
+    name: String,
     last: Vec<Node>,
     sync: BTreeMap<String, Cbor>,
 }
@@ -249,22 +253,24 @@ pub fn reset() {
 }
 
 /// Start the session: metadata, initial signals (`form`, and the page's `sync`), then the tree.
-pub fn start(host: &Host, name: &str, form: Cbor, page: Page) {
+pub fn start(host: &Host, form: Cbor, page: Page) {
     let roots = tree(page.els);
-    let signals = crate::value::map([
-        ("form", form),
-        ("sync", Cbor::Map(sync_entries(&page.sync))),
-    ]);
+    let signals = crate::value::map([("form", form), ("sync", nest(&page.sync))]);
     let mut out = String::new();
-    out.push_str(&ServerMessage::Metadata(Metadata::new().name(name)).to_line());
+    out.push_str(&metadata(&page.name));
     out.push_str(&ServerMessage::signal(ciborium_to_json(&signals)).to_line());
     for message in vtree::render_into(None, &roots) {
         out.push_str(&message.to_line());
     }
     host.emit_text(&out);
     let mut ui = ui().lock().unwrap();
+    ui.name = page.name;
     ui.last = roots;
     ui.sync = page.sync;
+}
+
+fn metadata(name: &str) -> String {
+    ServerMessage::Metadata(Metadata::new().name(name)).to_line()
 }
 
 /// Re-send what changed: elements, and signals the app owns.
@@ -282,33 +288,63 @@ fn send(host: &Host, page: Page, force: bool) {
     let roots = tree(page.els);
     let mut ui = ui().lock().unwrap();
     let mut out = String::new();
+    if ui.name != page.name {
+        out.push_str(&metadata(&page.name));
+    }
 
     // A merge patch: what is new or different, and null for what is gone.
-    let mut patch: Vec<(Cbor, Cbor)> = Vec::new();
+    let mut patch: BTreeMap<String, Cbor> = BTreeMap::new();
     for (key, value) in &page.sync {
         if force || ui.sync.get(key) != Some(value) {
-            patch.push((crate::value::text(key), value.clone()));
+            patch.insert(key.clone(), value.clone());
         }
     }
     for key in ui.sync.keys().filter(|k| !page.sync.contains_key(*k)) {
-        patch.push((crate::value::text(key), Cbor::Null));
+        patch.insert(key.clone(), Cbor::Null);
     }
     if !patch.is_empty() {
-        let patch = crate::value::map([("sync", Cbor::Map(patch))]);
+        let patch = crate::value::map([("sync", nest(&patch))]);
         out.push_str(&ServerMessage::signal(ciborium_to_json(&patch)).to_line());
     }
     for message in vtree::diff_into(None, &ui.last, &roots) {
         out.push_str(&message.to_line());
     }
     host.emit_text(&out);
+    ui.name = page.name;
     ui.last = roots;
     ui.sync = page.sync;
 }
 
-fn sync_entries(sync: &BTreeMap<String, Cbor>) -> Vec<(Cbor, Cbor)> {
-    sync.iter()
-        .map(|(k, v)| (crate::value::text(k), v.clone()))
-        .collect()
+/// The signals `sync.a.b` as the nested map they are: `{"a": {"b": …}}`. (A key with dots in a map
+/// would be a different signal from the path elements bind to.)
+fn nest(sync: &BTreeMap<String, Cbor>) -> Cbor {
+    fn put(map: &mut Vec<(Cbor, Cbor)>, path: &[&str], value: &Cbor) {
+        let [head, rest @ ..] = path else { return };
+        let at = map.iter().position(|(k, _)| k.as_text() == Some(head));
+        if rest.is_empty() {
+            let entry = (crate::value::text(*head), value.clone());
+            match at {
+                Some(i) => map[i] = entry,
+                None => map.push(entry),
+            }
+            return;
+        }
+        let i = at.unwrap_or_else(|| {
+            map.push((crate::value::text(*head), Cbor::Map(Vec::new())));
+            map.len() - 1
+        });
+        if !matches!(map[i].1, Cbor::Map(_)) {
+            map[i].1 = Cbor::Map(Vec::new());
+        }
+        if let Cbor::Map(inner) = &mut map[i].1 {
+            put(inner, rest, value);
+        }
+    }
+    let mut out = Vec::new();
+    for (key, value) in sync {
+        put(&mut out, &key.split('.').collect::<Vec<_>>(), value);
+    }
+    Cbor::Map(out)
 }
 
 /// Send one signal patch (a JSON Merge Patch), for example to clear an input after an action.

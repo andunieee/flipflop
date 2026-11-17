@@ -33,7 +33,6 @@ pub struct Edit {
 pub struct AppForm {
     pub gid: String,
     pub draft: flipflop::core::AppDraft,
-    pub name: String,
     /// The answers, one per param of the draft's form.
     pub values: Vec<String>,
 }

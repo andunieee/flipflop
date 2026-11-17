@@ -141,12 +141,13 @@ fn apply(
         Msg::ShowPeers => nav.go(Page::Peers),
         Msg::Scanning(on) => station.write_channel(Channel::Me).scanning = on,
         Msg::AppDraft { gid, draft } => {
-            nav.ui.write().app_form = Some(nav::AppForm {
-                gid,
-                name: String::new(),
-                values: vec![String::new(); draft.form.params.len()],
-                draft,
-            })
+            let values = vec![String::new(); draft.form.params.len()];
+            // An app that asks nothing is added right away.
+            if values.is_empty() {
+                nav.backend().add_app(gid, draft, values);
+            } else {
+                nav.ui.write().app_form = Some(nav::AppForm { gid, draft, values });
+            }
         }
         Msg::Shared { text, files } => nav.ui.write().share = Some(Share::Shared { text, files }),
         Msg::Music(state) => music.set_if_modified(state),

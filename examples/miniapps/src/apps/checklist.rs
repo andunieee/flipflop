@@ -14,7 +14,7 @@ use ciborium::Value as Cbor;
 
 use crate::act::{form_patch, payload, Act};
 use crate::doc::Doc;
-use crate::ui::{self, badge, button, card, input, row, text, El, Page};
+use crate::ui::{self, button, input, row, El, Page};
 use crate::value::text as cbor_text;
 use crate::Host;
 
@@ -28,11 +28,7 @@ pub fn title() -> String {
 }
 
 pub fn params() -> Cbor {
-    crate::params(
-        NAME,
-        NAME,
-        vec![],
-    )
+    crate::params(vec![crate::question("list", "List name", "", "Groceries")])
 }
 
 pub fn form(_host: &Host) -> Cbor {
@@ -127,15 +123,13 @@ fn items(doc: &Doc) -> Vec<Item> {
 pub fn page(host: &Host) -> Page {
     let doc = Doc::load(host);
     let items = items(&doc);
-    let title = title();
-    let mut page = Page::new(&title);
+    let mut page = Page::new(&title());
 
     let done = items.iter().filter(|i| i.done).count();
-    page.add(card("list", "root", &title));
     if !items.is_empty() {
         page.add(
-            El::new("list-progress", "progress")
-                .parent("list")
+            El::new("progress", "progress")
+                .parent("root")
                 .label(&format!("{done} of {} done", items.len()))
                 .set(
                     "value",
@@ -147,7 +141,7 @@ pub fn page(host: &Host) -> Page {
         let item_hash = ui::path_id(&item.id);
         let row_id = format!("i-{item_hash}");
         let args = payload(&[("item", &item.id)]);
-        page.add(row(&row_id, "list"));
+        page.add(row(&row_id, "root"));
         page.add(
             El::new(&format!("{row_id}-done"), "checkbox")
                 .parent(&row_id)
@@ -160,41 +154,30 @@ pub fn page(host: &Host) -> Page {
             &format!("{row_id}-del"),
             &row_id,
             "plain",
-            "Remove",
+            "×",
             "remove_item",
             args,
         ));
     }
-    if items.is_empty() {
-        page.add(text("list-empty", "list", "caption", "Nothing here yet."));
-    }
-    page.add(row("add", "list"));
-    page.add(
-        input("add-text", "add", "Add an item", "form.item").on_submit("add_item", Cbor::Null),
-    );
+    page.add(row("add", "root"));
+    page.add(input("add-text", "add", "", "form.item").on_submit("add_item", Cbor::Null));
     page.add(button(
         "add-go",
         "add",
         "secondary",
-        "Add",
+        "+",
         "add_item",
         Cbor::Null,
     ));
-
-    page.add(row("foot", "list").set("justify", cbor_text("between")));
-    page.add(
-        button(
-            "foot-clear",
-            "foot",
+    if done > 0 {
+        page.add(button(
+            "clear",
+            "root",
             "plain",
             "Clear done",
             "clear_done",
             Cbor::Null,
-        )
-        .disabled(done == 0),
-    );
-    if done > 0 && done == items.len() {
-        page.add(badge("list-all", "list", "success", "All done"));
+        ));
     }
     page
 }

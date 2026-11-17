@@ -806,33 +806,12 @@ impl Component for AppDialog {
         let add = {
             let form = form.clone();
             move || {
-                nav.backend().add_app(
-                    form.gid.clone(),
-                    form.draft.clone(),
-                    form.name.clone(),
-                    form.values.clone(),
-                );
+                nav.backend()
+                    .add_app(form.gid.clone(), form.draft.clone(), form.values.clone());
                 ui.write().app_form = None;
             }
         };
-        let mut fields = vec![
-            txt("Tab name", d.font_sm(), c.text_muted, 600).into_element(),
-            field(
-                form.name.clone(),
-                spec.name.placeholder.clone(),
-                move |text: String| {
-                    if let Some(form) = &mut ui.write().app_form {
-                        form.name = text;
-                    }
-                },
-            )
-            .auto_focus(true)
-            .on_submit({
-                let mut add = add.clone();
-                move |_| add()
-            })
-            .into_element(),
-        ];
+        let mut fields = vec![];
         for (i, param) in spec.params.iter().enumerate() {
             fields.push(txt(param.label.clone(), d.font_sm(), c.text_muted, 600).into_element());
             fields.push(
@@ -845,6 +824,7 @@ impl Component for AppDialog {
                         }
                     },
                 )
+                .auto_focus(i == 0)
                 .on_submit({
                     let mut add = add.clone();
                     move |_| add()

@@ -380,11 +380,13 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
     assert!(a.prepare_app(not_wasm).await.is_err());
     let draft = a.prepare_app(src).await.unwrap();
     assert_eq!(draft.form, Default::default());
-    let id = a.add_app(&gid, &draft, "", &[]).await.unwrap();
+    let id = a.add_app(&gid, &draft, &[]).await.unwrap();
+    // Until the app names its tab, it is called after its file and hash.
+    let named = format!("chess {}", &draft.hash[..6]);
 
     until("bob fetched the app", || {
         b.group_view(&gid).unwrap().tabs.iter().any(|t| {
-            t.id == id && t.on && t.title == "chess" && t.app.as_ref().is_some_and(|a| a.ready)
+            t.id == id && t.on && t.title == named && t.app.as_ref().is_some_and(|a| a.ready)
         })
     })
     .await;
@@ -399,7 +401,7 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
 
     b.set_tab(&gid, &id, false).unwrap();
     until("alice sees the app hidden", || {
-        tabs(&a).last() == Some(&("chess".to_owned(), false))
+        tabs(&a).last() == Some(&(named.clone(), false))
     })
     .await;
     b.delete_app(&gid, &id).unwrap();

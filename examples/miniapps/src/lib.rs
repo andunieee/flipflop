@@ -6,8 +6,8 @@
 //!
 //! # Exports
 //!
-//! - `ff_get_params`: before the app is added to a group: the name of its tab and the questions to
-//!   ask the user (see `params` below).
+//! - `ff_get_params`: before the app is added to a group: the questions to ask the user (see
+//!   `params` below).
 //! - `ff_start`: first, once. Carries the user's answers (`params`). Send the metadata, the initial
 //!   signals and the element tree.
 //! - `ff_doc_change`: the document changed, locally or from a syncing peer (the event carries the
@@ -21,7 +21,7 @@
 //!
 //! # An app
 //!
-//! A module in `apps/` with `NAME`, `params()` (what `ff_get_params` tells), `form(host)` (the user's initial input signals), `page(host)` (the
+//! A module in `apps/` with `NAME`, `params()` (what `ff_get_params` tells), `title()` (the app's name, for its tab), `form(host)` (the user's initial input signals), `page(host)` (the
 //! whole interface for the document as it is) and `action(host, event)` (`Err` is shown to the user).
 //! The driver below does the rest: it renders at the start, after every change and after every
 //! action, and the renderer only receives what differs from the last frame.
@@ -154,19 +154,9 @@ pub fn question(key: &str, label: &str, default: &str, placeholder: &str) -> Cbo
     ])
 }
 
-/// What `ff_get_params` tells: the tab's name (as its default and its placeholder) and the
-/// questions.
-pub fn params(name: &str, placeholder: &str, questions: Vec<Cbor>) -> Cbor {
-    value::map([
-        (
-            "name",
-            value::map([
-                ("default", value::text(name)),
-                ("placeholder", value::text(placeholder)),
-            ]),
-        ),
-        ("params", Cbor::Array(questions)),
-    ])
+/// What `ff_get_params` tells: the questions to ask the user.
+pub fn params(questions: Vec<Cbor>) -> Cbor {
+    value::map([("params", Cbor::Array(questions))])
 }
 
 /// What the app takes when it is added: the CBOR is left in memory for the host, whose address and
@@ -216,7 +206,7 @@ pub extern "C" fn ff_start(ptr: i32, len: i32) {
     picker::reset();
     // Member names, for apps that show or default to people.
     host.watch(&[key("members")]);
-    ui::start(&host, &app::title(), app::form(&host), app::page(&host));
+    ui::start(&host, app::form(&host), app::page(&host));
 }
 
 /// The document changed.

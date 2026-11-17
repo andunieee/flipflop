@@ -77,8 +77,8 @@ on every page; the user's inputs live under `form.*`, which the app only clears 
 Each module's doc comment has its exact state keys and actions.
 
 - **checklist** — one list, named when the app is added (`ff_get_params` asks for it; default empty,
-  placeholder "Groceries"): items with checkboxes and a progress bar; add and remove items, clear the
-  done ones.
+  placeholder "Groceries"), and the tab is named after it: items with checkboxes and a progress bar;
+  add and remove items, clear the done ones.
 - **expenses** — decimal amounts kept as cents, who paid, who it is split between, balances by name, a
   short list of payments that settle everything with a "Mark paid" button, and a history.
 - **poll** (Polls) — one option per line, single or several answers, who voted for what, close and

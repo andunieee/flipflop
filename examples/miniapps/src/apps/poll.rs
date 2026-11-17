@@ -28,7 +28,7 @@ pub fn title() -> String {
 
 /// Nothing to ask: the app starts empty.
 pub fn params() -> Cbor {
-    crate::params(NAME, NAME, Vec::new())
+    crate::params(Vec::new())
 }
 
 pub fn form(_host: &Host) -> Cbor {
@@ -135,7 +135,7 @@ pub fn page(host: &Host) -> Page {
     let me = crate::me();
     let mut page = Page::new(NAME);
 
-    page.add(card("new", "root", "New poll"));
+    page.add(card("new", "root", ""));
     page.add(input("new-q", "new", "Question", "form.question").placeholder("Where shall we eat?"));
     page.add(
         input("new-o", "new", "Options, one per line", "form.options")
@@ -152,7 +152,7 @@ pub fn page(host: &Host) -> Page {
         "new-go",
         "new",
         "primary",
-        "Create poll",
+        "+",
         "create",
         Cbor::Null,
     ));
@@ -168,13 +168,6 @@ pub fn page(host: &Host) -> Page {
                 .unwrap_or(0),
         )
     });
-    if polls.is_empty() {
-        page.add(
-            El::new("none", "notice")
-                .parent("root")
-                .text("No polls yet. Ask the group something above."),
-        );
-    }
 
     for poll in &polls {
         let hash = ui::path_id(poll);

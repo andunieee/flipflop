@@ -29,10 +29,17 @@
 //! Before an app is added to a group, the host instantiates it alone (no document, nothing started)
 //! and calls `ff_get_params()`. It returns an `i64`: the address of a CBOR value in the app's memory
 //! in the high 32 bits, its length in the low 32. The value is
-//! `{"name": {"default": <str>, "placeholder": <str>}, "params": [{"key": <str>, "label": <str>,
-//! "default": <str>, "placeholder": <str>}…]}`. The user sees a form with the name of the app's tab
-//! and one text field per param, and the answers (a field left empty takes its default) are kept in
+//! `{"params": [{"key": <str>, "label": <str>, "default": <str>, "placeholder": <str>}…]}`. The
+//! user sees a form with one text field per param, and the answers (a field left empty takes its default) are kept in
 //! the group, in the app's tab. Every device passes them in the `start` event.
+//!
+//! # The tab's name
+//!
+//! The app names its tab with the `name` of a `metadata` message, which it may send at any time and
+//! as often as it likes (from its params, its state, or a constant). The name is kept in the group
+//! document by the device that sees it change, so it should be the same on every device. The host
+//! reads no other metadata. Until the app sends one, the tab is named after the wasm's file and the
+//! start of its hash.
 //!
 //! # Events (host to app)
 //!
@@ -195,7 +202,6 @@ impl Runtime {
             }
         };
         Ok(AppParams {
-            name: field(&value, "name").map(|v| param(&v)).unwrap_or_default(),
             params: match field(&value, "params") {
                 Some(Cbor::Array(items)) => items.iter().map(param).collect(),
                 _ => Vec::new(),
@@ -255,8 +261,6 @@ impl Runtime {
 /// What the user may set when adding an app, as the app describes it with `ff_get_params`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AppParams {
-    /// The name of the app's tab.
-    pub name: Param,
     pub params: Vec<Param>,
 }
 
@@ -274,30 +278,18 @@ pub struct Param {
 }
 
 impl AppParams {
-    /// The tab's name and the params' values, from what the user typed (in the order of the
-    /// params): an empty answer is the default, and the tab's name falls back to the placeholder,
-    /// then to `fallback`.
-    pub fn answers(&self, name: &str, values: &[String]) -> (String, Vec<(String, String)>) {
-        let pick = |typed: &str, p: &Param| match typed.trim() {
-            "" => p.default.clone(),
-            typed => typed.to_owned(),
-        };
-        let mut name = pick(name, &self.name);
-        if name.is_empty() {
-            name = self.name.placeholder.clone();
-        }
-        let params = self
-            .params
+    /// The params' values, from what the user typed (in the order of the params): an empty answer
+    /// is the default.
+    pub fn answers(&self, values: &[String]) -> Vec<(String, String)> {
+        self.params
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                (
-                    p.key.clone(),
-                    pick(values.get(i).map_or("", String::as_str), p),
-                )
+                let typed = values.get(i).map_or("", |v| v.trim());
+                let value = if typed.is_empty() { &p.default } else { typed };
+                (p.key.clone(), value.to_owned())
             })
-            .collect();
-        (name, params)
+            .collect()
     }
 }
 

@@ -29,7 +29,7 @@ pub fn title() -> String {
 
 /// Nothing to ask: the app starts empty.
 pub fn params() -> Cbor {
-    crate::params(NAME, NAME, Vec::new())
+    crate::params(Vec::new())
 }
 
 const LENGTHS: [(&str, &str); 6] = [
@@ -191,7 +191,7 @@ pub fn page(host: &Host) -> Page {
     let mut page = Page::new(NAME);
 
     // The form.
-    page.add(card("new", "root", "New event"));
+    page.add(card("new", "root", ""));
     page.add(input("new-title", "new", "What", "form.title").placeholder("Dinner at Ana's"));
     picker::add(&mut page, "new-when", "new", &["when"], true);
     picker::quick_buttons(&mut page, "new-quick", "new", "when");
@@ -219,20 +219,13 @@ pub fn page(host: &Host) -> Page {
         "new-add",
         "new",
         "primary",
-        "Add to calendar",
+        "+",
         "add_event",
         Cbor::Null,
     ));
 
     // Upcoming events, a heading for each day; then what has passed.
     let (past, upcoming): (Vec<&Event>, Vec<&Event>) = events.iter().partition(|e| e.end <= now);
-    if upcoming.is_empty() {
-        page.add(
-            El::new("none", "notice")
-                .parent("root")
-                .text("Nothing coming up. Add the first event above."),
-        );
-    }
     let mut last_day = None;
     for event in &upcoming {
         let day = time::day_of(event.start);

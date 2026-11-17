@@ -666,6 +666,21 @@ impl GroupDoc {
         true
     }
 
+    /// Rename an app's tab. Returns whether the name changed.
+    pub fn set_app_name(&mut self, id: &str, name: &str) -> bool {
+        let Some(tab) = self.tab_obj(id) else {
+            return false;
+        };
+        if name.is_empty()
+            || self.str_of(&tab, "kind") != "app"
+            || self.str_of(&tab, "name") == name
+        {
+            return false;
+        }
+        self.doc.put(&tab, "name", name).expect("put tab");
+        true
+    }
+
     /// The app's tab, if there is one.
     pub fn app_tab(&self, id: &str) -> Option<AppTab> {
         self.tabs().into_iter().find(|t| t.id == id)?.app
@@ -999,6 +1014,10 @@ mod tests {
             a.app_params(&id),
             [("list".to_owned(), "Groceries".to_owned())]
         );
+        assert!(a.set_app_name(&id, "Groceries"));
+        assert!(!a.set_app_name(&id, "Groceries"));
+        assert!(!a.set_app_name("files", "x"));
+        assert_eq!(a.tabs()[4].app.as_ref().unwrap().name, "Groceries");
         assert!(!a.remove_app_tab("files"));
         assert!(a.remove_app_tab(&id));
         sync(&mut a, &mut b);

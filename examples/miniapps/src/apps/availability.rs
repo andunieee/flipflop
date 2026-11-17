@@ -31,7 +31,7 @@ pub fn title() -> String {
 
 /// Nothing to ask: the app starts empty.
 pub fn params() -> Cbor {
-    crate::params(NAME, NAME, Vec::new())
+    crate::params(Vec::new())
 }
 
 pub fn form(host: &Host) -> Cbor {
@@ -188,7 +188,7 @@ pub fn page(host: &Host) -> Page {
     let me = crate::me();
     let mut page = Page::new(NAME);
 
-    page.add(card("new", "root", "New plan"));
+    page.add(card("new", "root", ""));
     page.add(
         input("new-title", "new", "What is it for?", "form.title").placeholder("Board game night"),
     );
@@ -197,7 +197,7 @@ pub fn page(host: &Host) -> Page {
         "new-go",
         "new",
         "primary",
-        "Create plan",
+        "+",
         "create",
         Cbor::Null,
     ));
@@ -212,11 +212,6 @@ pub fn page(host: &Host) -> Page {
                 .unwrap_or(0),
         )
     });
-    if plans.is_empty() {
-        page.add(El::new("none", "notice").parent("root").text(
-            "No plans yet. Create one above, add a few times and let everyone say which work.",
-        ));
-    }
 
     for plan in &plans {
         let hash = ui::path_id(plan);

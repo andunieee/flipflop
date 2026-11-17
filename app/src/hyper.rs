@@ -31,7 +31,12 @@ pub struct Session {
     backend: Option<Backend>,
     gid: String,
     app: WasmApp,
+    app_id: String,
     client: Client,
+    /// The name the app last gave its tab.
+    named: Option<String>,
+    /// Counts what the app emitted, so views redraw when a signal changes without a local action.
+    pub frame: u64,
     pub error: Option<String>,
 }
 
@@ -91,7 +96,10 @@ impl Session {
             backend,
             gid,
             app,
+            app_id: app_id.to_owned(),
             client,
+            named: None,
+            frame: 0,
             error: None,
         })
     }
@@ -204,8 +212,24 @@ impl Session {
         let lines = self.app.take_ui();
         if !lines.is_empty() {
             self.client.receive(&lines);
+            self.frame += 1;
         }
+        self.rename_tab();
         self.report();
+    }
+
+    /// The app named its tab (a `metadata` message): tell the group, once per change.
+    fn rename_tab(&mut self) {
+        let name = self.client.metadata().name.clone();
+        if name.is_none() || name == self.named {
+            return;
+        }
+        self.named = name.clone();
+        let (Some(backend), Some(name)) = (&self.backend, name) else {
+            return;
+        };
+        let (gid, id) = (self.gid.clone(), self.app_id.clone());
+        backend.run(move |core| core.set_app_name(&gid, &id, &name));
     }
 
     fn report(&mut self) {
@@ -243,9 +267,9 @@ impl Component for HyperView {
         if let Ok(mut session) = self.session.try_borrow_mut() {
             session.pump();
         }
-        let (tree, error) = {
+        let (tree, error, frame) = {
             let session = self.session.borrow();
-            (session.tree(), session.error.clone())
+            (session.tree(), session.error.clone(), session.frame)
         };
         let session = self.session.clone();
         let rev = self.rev;
@@ -269,6 +293,7 @@ impl Component for HyperView {
                         node,
                         session: session.clone(),
                         rev,
+                        frame,
                     }
                     .into_element()
                 })),
@@ -281,6 +306,9 @@ struct NodeView {
     node: ResolvedTree,
     session: Rc<RefCell<Session>>,
     rev: State<u64>,
+    /// What the app emitted so far: a signal may have changed (a checkbox ticked by a peer) while
+    /// the node did not.
+    frame: u64,
 }
 
 impl PartialEq for NodeView {
@@ -288,13 +316,15 @@ impl PartialEq for NodeView {
         self.node == other.node
             && Rc::ptr_eq(&self.session, &other.session)
             && self.rev == other.rev
+            && self.frame == other.frame
     }
 }
 
 impl Component for NodeView {
     fn render(&self) -> impl IntoElement {
         // Signal values (an input's text, a checkbox) change without the resolved node changing, so
-        // every node redraws when the session does.
+        // every node redraws when the session does: after a local action (`rev`) or whatever the
+        // app emits (`frame`).
         let _ = self.rev.read();
         let mut selected = use_state(String::new);
         let mut local = use_state(String::new);
@@ -317,6 +347,7 @@ impl Component for NodeView {
                     node: child,
                     session: session.clone(),
                     rev,
+                    frame: self.frame,
                 }
                 .into_element();
                 if grows {
@@ -334,15 +365,13 @@ impl Component for NodeView {
 
         let id = node.id.clone();
         match node.component {
-            HeComponent::Column => {
-                rect()
-                    .vertical()
-                    .width(Size::fill())
-                    .spacing(gap(node))
-                    .cross_align(align(node, "align"))
-                    .children(children)
-                    .into_element()
-            }
+            HeComponent::Column => rect()
+                .vertical()
+                .width(Size::fill())
+                .spacing(gap(node))
+                .cross_align(align(node, "align"))
+                .children(children)
+                .into_element(),
             HeComponent::Row => {
                 // Fields have a label above them, so a row with one lines its children up on the
                 // bottom edge (the field and the button beside it); other rows center theirs.
@@ -461,6 +490,7 @@ impl Component for NodeView {
                             node: (*t).clone(),
                             session: session.clone(),
                             rev,
+                            frame: self.frame,
                         }
                         .into_element()
                     })
@@ -1167,13 +1197,36 @@ mod tests {
                     press(session, "add-go");
                 }
                 let first = ids(session, HeComponent::Checkbox).remove(0);
-                choose(session, &first, &format!("sync.{}", &first[..first.len() - 5].replacen("i-", "done.", 1)), json!(true));
+                choose(
+                    session,
+                    &first,
+                    &format!(
+                        "sync.{}",
+                        &first[..first.len() - 5].replacen("i-", "done.", 1)
+                    ),
+                    json!(true),
+                );
             }
             "poll" => {
-                fill(session, "new-q", "form.question", "Where shall we eat on Friday?");
-                fill(session, "new-o", "form.options", "Pizza\nSushi\nTacos at the market");
+                fill(
+                    session,
+                    "new-q",
+                    "form.question",
+                    "Where shall we eat on Friday?",
+                );
+                fill(
+                    session,
+                    "new-o",
+                    "form.options",
+                    "Pizza\nSushi\nTacos at the market",
+                );
                 press(session, "new-go");
-                fill(session, "new-q", "form.question", "Which days work for the trip?");
+                fill(
+                    session,
+                    "new-q",
+                    "form.question",
+                    "Which days work for the trip?",
+                );
                 fill(session, "new-o", "form.options", "Saturday\nSunday");
                 choose(session, "new-multi", "form.multi", json!(true));
                 press(session, "new-go");
@@ -1201,7 +1254,10 @@ mod tests {
                     choose(session, "new-payer", "form.payer", json!(payer));
                     press(session, "new-go");
                 }
-                let pay = ids(session, HeComponent::Button).into_iter().find(|id| id.ends_with("-go") && id.starts_with("pay")).unwrap();
+                let pay = ids(session, HeComponent::Button)
+                    .into_iter()
+                    .find(|id| id.ends_with("-go") && id.starts_with("pay"))
+                    .unwrap();
                 press(session, &pay);
                 // A mistake is explained.
                 fill(session, "new-what", "form.what", "Free lunch");
@@ -1209,7 +1265,12 @@ mod tests {
             }
             "availability" => {
                 fill(session, "new-title", "form.title", "Board game night");
-                fill(session, "new-note", "form.note", "At my place, food provided");
+                fill(
+                    session,
+                    "new-note",
+                    "form.note",
+                    "At my place, food provided",
+                );
                 press(session, "new-go");
                 let go = ids(session, HeComponent::Button)
                     .into_iter()
@@ -1217,11 +1278,27 @@ mod tests {
                     .unwrap();
                 let plan = go.strip_suffix("-add-go").unwrap().to_owned();
                 let hash = plan.strip_prefix("a-").unwrap().to_owned();
-                for (day, month, hour) in [("20", "11", "19"), ("21", "11", "18"), ("4", "3", "10")] {
+                for (day, month, hour) in [("20", "11", "19"), ("21", "11", "18"), ("4", "3", "10")]
+                {
                     let path = format!("form.slot.{hash}");
-                    choose(session, &format!("{plan}-add-day"), &format!("{path}.day"), json!(day));
-                    choose(session, &format!("{plan}-add-month"), &format!("{path}.month"), json!(month));
-                    choose(session, &format!("{plan}-add-hour"), &format!("{path}.hour"), json!(hour));
+                    choose(
+                        session,
+                        &format!("{plan}-add-day"),
+                        &format!("{path}.day"),
+                        json!(day),
+                    );
+                    choose(
+                        session,
+                        &format!("{plan}-add-month"),
+                        &format!("{path}.month"),
+                        json!(month),
+                    );
+                    choose(
+                        session,
+                        &format!("{plan}-add-hour"),
+                        &format!("{path}.hour"),
+                        json!(hour),
+                    );
                     press(session, &go);
                 }
                 let first = ids(session, HeComponent::Select)
@@ -1229,7 +1306,12 @@ mod tests {
                     .find(|id| id.ends_with("-ans"))
                     .unwrap();
                 let (plan, slot) = hash_part(&first);
-                choose(session, &first, &format!("sync.v.{plan}.{slot}"), json!("yes"));
+                choose(
+                    session,
+                    &first,
+                    &format!("sync.v.{plan}.{slot}"),
+                    json!("yes"),
+                );
                 // A time that is already there is explained.
                 press(session, &go);
             }
@@ -1237,7 +1319,13 @@ mod tests {
                 for (title, quick, hour, length, place) in [
                     ("Dinner at Ana's", "Tomorrow", "19", "120", "Rua Augusta 12"),
                     ("Standup", "Today", "23", "30", ""),
-                    ("Trip to the lake", "Tomorrow", "09", "day", "Meet at the station"),
+                    (
+                        "Trip to the lake",
+                        "Tomorrow",
+                        "09",
+                        "day",
+                        "Meet at the station",
+                    ),
                 ] {
                     fill(session, "new-title", "form.title", title);
                     press(session, &format!("new-quick-{quick}"));
@@ -1344,23 +1432,23 @@ mod tests {
             1.0,
         );
         runner.sync_and_update();
-        // The input is right under its label.
-        let label = runner
+        // The input is on the row of the "+" button, before it.
+        let plus = runner
             .find_many(|node, element| {
                 let label = Label::try_downcast(element)?;
-                (label.text == "Add an item").then(|| node.layout().area.center())
+                (label.text == "+").then(|| node.layout().area.center())
             })
             .first()
             .copied()
-            .expect("the label");
-        runner.click_cursor((label.x as f64, label.y as f64 + 24.));
+            .expect("the button");
+        runner.click_cursor((plus.x as f64 - 100., plus.y as f64));
         runner.write_text("Milk");
         runner.write_text("y");
         assert_eq!(
             session.borrow().value("form.item").and_then(Json::as_str),
             Some("Milky")
         );
-        click(&mut runner, "Add");
+        click(&mut runner, "+");
         runner.poll(
             std::time::Duration::from_millis(16),
             std::time::Duration::from_millis(50),
@@ -1385,15 +1473,61 @@ mod tests {
             eprintln!("skipping: run examples/miniapps/build.sh first");
             return;
         };
-        let form = Runtime::default().params(&wasm).expect("it describes itself");
-        assert_eq!(form.name.default, "Checklist");
+        let form = Runtime::default()
+            .params(&wasm)
+            .expect("it describes itself");
         let [list] = form.params.as_slice() else {
             panic!("{form:?}");
         };
         assert_eq!(
-            (list.key.as_str(), list.default.as_str(), list.placeholder.as_str()),
+            (
+                list.key.as_str(),
+                list.default.as_str(),
+                list.placeholder.as_str()
+            ),
             ("list", "", "Groceries")
         );
+    }
+
+    /// A tick that did not come from a click here (read from the document at the start, or synced
+    /// from another device) shows in the checkbox.
+    #[test]
+    fn a_tick_from_the_document_shows() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../examples/miniapps/dist/checklist.wasm"
+        );
+        let Ok(wasm) = std::fs::read(path) else {
+            eprintln!("skipping: run examples/miniapps/build.sh first");
+            return;
+        };
+        let host = Arc::new(Shared(Mutex::new(GroupDoc::new())));
+        let mut mine = Session::standalone("checklist", &wasm, "me", host.clone()).unwrap();
+        fill(&mut mine, "add-text", "form.item", "Milk");
+        press(&mut mine, "add-go");
+        let item = ids(&mine, HeComponent::Checkbox).remove(0);
+        let bind = format!("sync.{}", &item[..item.len() - 5].replacen("i-", "done.", 1));
+        let ticked = |s: &Session| s.value(&bind).and_then(Json::as_bool);
+        assert_eq!(ticked(&mine), Some(false));
+
+        // Another device ticks it: ours hears of it through the document.
+        let mut other = Session::standalone("checklist", &wasm, "bob", host.clone()).unwrap();
+        choose(&mut other, &item, &bind, json!(true));
+        mine.pump();
+        assert_eq!(ticked(&mine), Some(true));
+
+        // We tick it ourselves too, then the other one unticks it.
+        choose(&mut mine, &item, &bind, json!(true));
+        assert_eq!(ticked(&mine), Some(true));
+        choose(&mut other, &item, &bind, json!(false));
+        mine.pump();
+        assert_eq!(ticked(&mine), Some(false));
+        choose(&mut other, &item, &bind, json!(true));
+        mine.pump();
+
+        // And one that starts later finds it ticked.
+        let later = Session::standalone("checklist", &wasm, "carol", host).unwrap();
+        assert_eq!(ticked(&later), Some(true));
     }
 
     #[test]
@@ -1429,10 +1563,10 @@ mod tests {
         runner.sync_and_update();
 
         let before = texts(&runner);
-        assert!(before.iter().any(|text| text == "Checklist"), "{before:?}");
-        assert!(before.iter().any(|text| text == "Nothing here yet."), "{before:?}");
+        // Nothing but the way to add an item: no title, no card, no hint.
+        assert_eq!(before, ["+"]);
 
-        click(&mut runner, "Add");
+        click(&mut runner, "+");
         runner.poll(
             std::time::Duration::from_millis(16),
             std::time::Duration::from_millis(50),
@@ -1441,6 +1575,5 @@ mod tests {
 
         let after = texts(&runner);
         assert!(after.iter().any(|text| text == "Groceries"), "{after:?}");
-        assert!(!after.iter().any(|text| text == "Nothing here yet."), "{after:?}");
     }
 }
