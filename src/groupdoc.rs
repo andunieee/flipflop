@@ -12,7 +12,8 @@
 //! - `scratch`: a text object everyone edits.
 //! - `tabs`:    tab id -> { on }: which tabs the group shows, as any member set them. The ids are
 //!   [`BUILTIN_TABS`] and apps' ids; an app's tab also holds { kind: "app", name, file, hash, size,
-//!   from, ts }, `file` being the offer of its wasm in `files`. A built-in tab nobody touched shows
+//!   from, ts, params: { key -> text } }, `file` being the offer of its wasm in `files` and `params`
+//!   what the user answered when adding it. A built-in tab nobody touched shows
 //!   unless it is one of [`OPTIONAL_TABS`].
 //! - `apps`:    app id -> the app's own section, which only the app writes (see [`crate::apps`]).
 //!
@@ -612,6 +613,7 @@ impl GroupDoc {
         file: &str,
         hash: &str,
         size: u64,
+        params: &[(String, String)],
     ) -> String {
         let id = entry_key();
         let t = self
@@ -626,7 +628,47 @@ impl GroupDoc {
         self.doc.put(&t, "from", me).unwrap();
         self.doc.put(&t, "ts", now_ms()).unwrap();
         self.doc.put(&t, "on", true).unwrap();
+        let p = self.doc.put_object(&t, "params", ObjType::Map).unwrap();
+        for (k, v) in params {
+            self.doc.put(&p, k.as_str(), v.as_str()).unwrap();
+        }
         id
+    }
+
+    /// What the user answered when adding the app, by param.
+    pub fn app_params(&self, app: &str) -> Vec<(String, String)> {
+        let Some(tab) = self.tab_obj(app) else {
+            return Vec::new();
+        };
+        match self.doc.get(&tab, "params") {
+            Ok(Some((Value::Object(ObjType::Map), p))) => self
+                .doc
+                .map_range(&p, ..)
+                .map(|item| (item.key.to_string(), self.str_of(&p, &item.key)))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Remove an app: its tab and its section. Returns whether there was such an app.
+    pub fn remove_app_tab(&mut self, id: &str) -> bool {
+        let Some(tab) = self.tab_obj(id) else {
+            return false;
+        };
+        if self.str_of(&tab, "kind") != "app" {
+            return false;
+        }
+        self.doc.delete(self.obj("tabs"), id).expect("delete tab");
+        let apps = self.obj("apps");
+        if self.doc.get(&apps, id).ok().flatten().is_some() {
+            self.doc.delete(&apps, id).expect("delete app");
+        }
+        true
+    }
+
+    /// The app's tab, if there is one.
+    pub fn app_tab(&self, id: &str) -> Option<AppTab> {
+        self.tabs().into_iter().find(|t| t.id == id)?.app
     }
 
     // ---- apps -------------------------------------------------------------------------
@@ -925,7 +967,14 @@ mod tests {
         );
         assert!(a.set_tab("texts", false));
         assert!(!a.set_tab("nope", false));
-        let id = b.add_app_tab("bob", "chess.wasm", "f1", "abcd", 10);
+        let id = b.add_app_tab(
+            "bob",
+            "chess.wasm",
+            "f1",
+            "abcd",
+            10,
+            &[("list".into(), "Groceries".into())],
+        );
         sync(&mut a, &mut b);
         assert_eq!(on(&a), on(&b));
         assert_eq!(
@@ -946,6 +995,15 @@ mod tests {
         assert_eq!(on(&b)[1..], on(&a)[1..]);
         assert!(!b.tabs()[4].on && b.tabs()[1].on && b.tabs()[3].on);
         assert_eq!(b.tabs()[4].app.as_ref().unwrap().file, "f1");
+        assert_eq!(
+            a.app_params(&id),
+            [("list".to_owned(), "Groceries".to_owned())]
+        );
+        assert!(!a.remove_app_tab("files"));
+        assert!(a.remove_app_tab(&id));
+        sync(&mut a, &mut b);
+        assert_eq!(b.tabs().len(), 4);
+        assert!(b.app_params(&id).is_empty());
     }
 
     #[test]

@@ -4,21 +4,24 @@
 //! talks CBOR with the host and is a hypereffect *server*: the group document is its state, and it
 //! sends hypereffect messages that the local renderer draws.
 //!
-//! # Events
+//! # Exports
 //!
-//! - `start`: first, once. Send the metadata, the initial signals and the element tree.
-//! - `change`: the document changed, locally or from a syncing peer (the event carries the
+//! - `ff_get_params`: before the app is added to a group: the name of its tab and the questions to
+//!   ask the user (see `params` below).
+//! - `ff_start`: first, once. Carries the user's answers (`params`). Send the metadata, the initial
+//!   signals and the element tree.
+//! - `ff_doc_change`: the document changed, locally or from a syncing peer (the event carries the
 //!   patches). Re-send what the interface needs.
-//! - `action`: the local renderer sent an action (name, payload, signals). Validate it, write the
-//!   document, and render; if it is refused, say why in a notice. The following `change` renders
-//!   the same result on every other device.
+//! - `ff_action`: the local renderer sent an action (name, payload, signals). Validate it, write the
+//!   document, and render; if it is refused, say why in a notice. The following `ff_doc_change`
+//!   renders the same result on every other device.
 //!
 //! Every event carries the device's clock and time zone (see [`time`]), so dates are typed and shown
 //! in local time while the document holds UTC milliseconds.
 //!
 //! # An app
 //!
-//! A module in `apps/` with `NAME`, `form(host)` (the user's initial input signals), `page(host)` (the
+//! A module in `apps/` with `NAME`, `params()` (what `ff_get_params` tells), `form(host)` (the user's initial input signals), `page(host)` (the
 //! whole interface for the document as it is) and `action(host, event)` (`Err` is shown to the user).
 //! The driver below does the rest: it renders at the start, after every change and after every
 //! action, and the renderer only receives what differs from the last frame.
@@ -132,16 +135,57 @@ pub extern "C" fn ff_alloc(len: i32) -> i32 {
     ptr as i32
 }
 
-/// One event from the host: `start`, `change` or `action`.
+static PARAMS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// What the user answered when adding the app, for the param `key` (empty if there is none).
+pub fn param(key: &str) -> String {
+    let params = PARAMS.lock().unwrap();
+    let found = params.iter().find(|(k, _)| k == key);
+    found.map(|(_, v)| v.clone()).unwrap_or_default()
+}
+
+/// One question of the form shown when adding the app.
+pub fn question(key: &str, label: &str, default: &str, placeholder: &str) -> Cbor {
+    value::map([
+        ("key", value::text(key)),
+        ("label", value::text(label)),
+        ("default", value::text(default)),
+        ("placeholder", value::text(placeholder)),
+    ])
+}
+
+/// What `ff_get_params` tells: the tab's name (as its default and its placeholder) and the
+/// questions.
+pub fn params(name: &str, placeholder: &str, questions: Vec<Cbor>) -> Cbor {
+    value::map([
+        (
+            "name",
+            value::map([
+                ("default", value::text(name)),
+                ("placeholder", value::text(placeholder)),
+            ]),
+        ),
+        ("params", Cbor::Array(questions)),
+    ])
+}
+
+/// What the app takes when it is added: the CBOR is left in memory for the host, whose address and
+/// length come back packed (address in the high 32 bits).
 #[no_mangle]
-pub extern "C" fn ff_event(ptr: i32, len: i32) {
+pub extern "C" fn ff_get_params() -> i64 {
+    let mut bytes = Vec::new();
+    let _ = ciborium::into_writer(&apps::current::params(), &mut bytes);
+    let packed = ((bytes.as_ptr() as u64) << 32) | bytes.len() as u64;
+    std::mem::forget(bytes);
+    packed as i64
+}
+
+/// Read the event the host left at `ptr`, and take the clock and who we are from it.
+fn read_event(ptr: i32, len: i32) -> Option<Cbor> {
     let len = len.max(0) as usize;
     // The host allocated this with `ff_alloc`, so its capacity is `len`.
     let bytes = unsafe { Vec::from_raw_parts(ptr as *mut u8, len, len) };
-    let Ok(event) = ciborium::from_reader::<Cbor, _>(bytes.as_slice()) else {
-        return;
-    };
-    let host = Host;
+    let event = ciborium::from_reader::<Cbor, _>(bytes.as_slice()).ok()?;
     time::set_clock(
         value::i64_of(&event, "ts").unwrap_or(0),
         value::i64_of(&event, "tz").unwrap_or(0),
@@ -149,24 +193,53 @@ pub extern "C" fn ff_event(ptr: i32, len: i32) {
     if let Some(me) = str_of(&event, "me") {
         *ME.lock().unwrap() = me.to_owned();
     }
+    Some(event)
+}
+
+/// The first event, once.
+#[no_mangle]
+pub extern "C" fn ff_start(ptr: i32, len: i32) {
+    let Some(event) = read_event(ptr, len) else {
+        return;
+    };
+    let host = Host;
     use apps::current as app;
-    match str_of(&event, "type") {
-        Some("start") => {
-            ui::reset();
-            picker::reset();
-            // Member names, for apps that show or default to people.
-            host.watch(&[key("members")]);
-            ui::start(&host, app::NAME, app::form(&host), app::page(&host));
-        }
-        Some("change") => ui::update(&host, app::page(&host)),
-        Some("action") => {
-            ui::clear_error();
-            ui::begin_action();
-            if let Err(why) = app::action(&host, &event) {
-                ui::fail(why);
-            }
-            ui::refresh(&host, app::page(&host));
-        }
-        _ => {}
+    *PARAMS.lock().unwrap() = value::text_entries(
+        &value::field(&event, "params")
+            .cloned()
+            .unwrap_or(Cbor::Null),
+    )
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.as_text().unwrap_or("").to_owned()))
+    .collect();
+    ui::reset();
+    picker::reset();
+    // Member names, for apps that show or default to people.
+    host.watch(&[key("members")]);
+    ui::start(&host, &app::title(), app::form(&host), app::page(&host));
+}
+
+/// The document changed.
+#[no_mangle]
+pub extern "C" fn ff_doc_change(ptr: i32, len: i32) {
+    if read_event(ptr, len).is_some() {
+        let host = Host;
+        ui::update(&host, apps::current::page(&host));
     }
+}
+
+/// The local renderer sent an action.
+#[no_mangle]
+pub extern "C" fn ff_action(ptr: i32, len: i32) {
+    let Some(event) = read_event(ptr, len) else {
+        return;
+    };
+    let host = Host;
+    use apps::current as app;
+    ui::clear_error();
+    ui::begin_action();
+    if let Err(why) = app::action(&host, &event) {
+        ui::fail(why);
+    }
+    ui::refresh(&host, app::page(&host));
 }

@@ -36,6 +36,11 @@ pub enum Msg {
     ShowPeers,
     /// The webcam is (or is no longer) looking for a code.
     Scanning(bool),
+    /// A wasm app was read: show its form.
+    AppDraft {
+        gid: String,
+        draft: flipflop::core::AppDraft,
+    },
     /// Another app shared a text and/or files (Android).
     Shared {
         text: String,
@@ -408,9 +413,28 @@ impl Backend {
         });
     }
 
-    fn add_app(&self, gid: String, path: PathBuf, name: Option<String>) {
+    /// Read the wasm at `path`; its form opens when it is known what the app asks.
+    fn prepare_app(&self, gid: String, path: PathBuf) {
+        let Some(core) = self.core() else { return };
+        let this = self.clone();
+        self.0.rt.spawn(async move {
+            match core.prepare_app(path).await {
+                Ok(draft) => this.send(Msg::AppDraft { gid, draft }),
+                Err(err) => this.notice(format!("{err:#}")),
+            }
+        });
+    }
+
+    /// Add the app to the group, named `name`, with the answers `values` to its form.
+    pub fn add_app(
+        &self,
+        gid: String,
+        draft: flipflop::core::AppDraft,
+        name: String,
+        values: Vec<String>,
+    ) {
         self.spawn(Some("App added to the group"), move |core| async move {
-            core.add_app(&gid, path, name).await
+            core.add_app(&gid, &draft, &name, &values).await
         });
     }
 
@@ -460,7 +484,7 @@ impl Backend {
                             .pick_file()
                             .await;
                         if let Some(file) = picked {
-                            this.add_app(gid, file.path().to_owned(), None);
+                            this.prepare_app(gid, file.path().to_owned());
                         }
                     }
                     "music" => {
@@ -603,10 +627,10 @@ impl Backend {
                     .filter(|g| !g.is_empty())
                     .or_else(|| self.0.picking.lock().unwrap().clone());
                 let Some(gid) = gid else { return };
-                let name = Some(name).filter(|n| !n.is_empty());
                 if kind == "wasm" {
-                    return self.add_app(gid, path.into(), name);
+                    return self.prepare_app(gid, path.into());
                 }
+                let name = Some(name).filter(|n| !n.is_empty());
                 // A content:// URI is shared where it is; anything else is our own copy.
                 let staged = !path.starts_with("content://");
                 self.offer(gid, path.into(), name, &kind, staged);

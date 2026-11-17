@@ -8,8 +8,11 @@
 //! A core wasm module, in any language, with no WASI. It
 //! - exports `memory`;
 //! - exports `ff_alloc(len: i32) -> i32`, room for `len` bytes, where the host writes an event;
-//! - exports `ff_event(ptr: i32, len: i32)`, which handles one event (the buffer is then the app's to
-//!   free);
+//! - exports `ff_get_params() -> i64`, which describes the parameters the user gives when adding the
+//!   app (see "Parameters"); optional, an app without it has none;
+//! - exports `ff_start(ptr: i32, len: i32)`, `ff_doc_change(ptr: i32, len: i32)` and
+//!   `ff_action(ptr: i32, len: i32)`, which handle one event each (see "Events"; the buffer is then
+//!   the app's to free);
 //! - imports `flipflop.call(ptr: i32, len: i32) -> i32` to make a request: it returns the length of
 //!   the response, which the app fetches with
 //! - `flipflop.take(ptr: i32)`, copying it to `ptr`, where the app made room for it;
@@ -21,16 +24,27 @@
 //! The app runs only while it handles an event, with [`FUEL`] to spend and [`MEMORY`] at most.
 //! An app that traps or runs out is stopped.
 //!
+//! # Parameters
+//!
+//! Before an app is added to a group, the host instantiates it alone (no document, nothing started)
+//! and calls `ff_get_params()`. It returns an `i64`: the address of a CBOR value in the app's memory
+//! in the high 32 bits, its length in the low 32. The value is
+//! `{"name": {"default": <str>, "placeholder": <str>}, "params": [{"key": <str>, "label": <str>,
+//! "default": <str>, "placeholder": <str>}…]}`. The user sees a form with the name of the app's tab
+//! and one text field per param, and the answers (a field left empty takes its default) are kept in
+//! the group, in the app's tab. Every device passes them in the `start` event.
+//!
 //! # Events (host to app)
 //!
-//! - `{"type": "start", "app": <id>, "me": <our peer id>, "ts": <ms>, "tz": <minutes>}`: first, once.
-//! - `{"type": "change", "patches": [<patch>…], "ts": <ms>, "tz": <minutes>}`: the document
+//! - `ff_start`, `{"app": <id>, "me": <our peer id>, "params": {<key>: <str>…}, "ts": <ms>,
+//!   "tz": <minutes>}`: first, once.
+//! - `ff_doc_change`, `{"patches": [<patch>…], "ts": <ms>, "tz": <minutes>}`: the document
 //!   changed in the app's section or in a part it watches, whoever changed it (its own writes come
 //!   back too: the document is the truth).
-//! - `{"type": "action", "name": <str>, "payload": <value>, "signals": <map>, "me": <peer id>,
+//! - `ff_action`, `{"name": <str>, "payload": <value>, "signals": <map>, "me": <peer id>,
 //!   "ts": <ms>, "tz": <minutes>, "seq": <n>}`: the local hypereffect renderer sent an action. The
-//!   app validates it, writes the document, and lets the following `change` update the interface.
-//!   `ts` and `seq` let it name new things without a clock or randomness of its own.
+//!   app validates it, writes the document, and lets the following `ff_doc_change` update the
+//!   interface. `ts` and `seq` let it name new things without a clock or randomness of its own.
 //!
 //! Every event carries the time: `ts` is the device's clock in epoch milliseconds and `tz` its
 //! offset from UTC in minutes (east positive), so an app can show dates the way its user reads them.
@@ -80,8 +94,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use automerge::{ChangeHash, ObjType, Prop, ROOT, ReadDoc, Value, transaction::Transactable};
 use ciborium::Value as Cbor;
 use wasmi::{
-    Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
-    TypedFunc,
+    Caller, Config, Engine, Extern, Instance, Linker, Memory, Module, Store, StoreLimits,
+    StoreLimitsBuilder, TypedFunc,
 };
 
 use crate::groupdoc::GroupDoc;
@@ -142,9 +156,79 @@ impl Default for Runtime {
 }
 
 impl Runtime {
+    /// Ask the module `wasm` what it takes to be added (see "Parameters"). An app without
+    /// `ff_get_params` takes nothing.
+    pub fn params(&self, wasm: &[u8]) -> Result<AppParams> {
+        let (mut store, instance) = self.instantiate(wasm, "", "", Arc::new(NoDoc))?;
+        let Ok(get) = instance.get_typed_func::<(), i64>(&store, "ff_get_params") else {
+            return Ok(AppParams::default());
+        };
+        let memory = instance
+            .get_memory(&store, "memory")
+            .ok_or_else(|| anyhow!("the app exports no memory"))?;
+        let packed = get.call(&mut store, ())? as u64;
+        let (ptr, len) = ((packed >> 32) as usize, (packed & 0xffff_ffff) as usize);
+        let bytes = memory
+            .data(&store)
+            .get(ptr..)
+            .and_then(|m| m.get(..len))
+            .ok_or_else(|| anyhow!("ff_get_params returned room outside memory"))?;
+        let value: Cbor = ciborium::from_reader(bytes).context("ff_get_params is not CBOR")?;
+        let field = |v: &Cbor, k: &str| match v {
+            Cbor::Map(m) => m
+                .iter()
+                .find(|(key, _)| key.as_text() == Some(k))
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        };
+        let param = |v: &Cbor| {
+            let s = |k: &str| {
+                field(v, k)
+                    .and_then(|v| v.into_text().ok())
+                    .unwrap_or_default()
+            };
+            Param {
+                key: s("key"),
+                label: s("label"),
+                default: s("default"),
+                placeholder: s("placeholder"),
+            }
+        };
+        Ok(AppParams {
+            name: field(&value, "name").map(|v| param(&v)).unwrap_or_default(),
+            params: match field(&value, "params") {
+                Some(Cbor::Array(items)) => items.iter().map(param).collect(),
+                _ => Vec::new(),
+            },
+        })
+    }
+
     /// Instantiate the module `wasm` as the app `app`, run by us (`me`) in `host`'s document.
     /// Nothing of the app runs yet (but a wasm start function); [`App::start`] does that.
     pub fn load(&self, wasm: &[u8], app: &str, me: &str, host: Arc<dyn DocHost>) -> Result<App> {
+        let (store, instance) = self.instantiate(wasm, app, me, host)?;
+        Ok(App {
+            memory: instance
+                .get_memory(&store, "memory")
+                .ok_or_else(|| anyhow!("the app exports no memory"))?,
+            alloc: instance.get_typed_func(&store, "ff_alloc")?,
+            on_start: instance.get_typed_func(&store, "ff_start")?,
+            on_doc_change: instance.get_typed_func(&store, "ff_doc_change")?,
+            on_action: instance.get_typed_func(&store, "ff_action")?,
+            store,
+            seen: Vec::new(),
+            seq: 0,
+            stopped: false,
+        })
+    }
+
+    fn instantiate(
+        &self,
+        wasm: &[u8],
+        app: &str,
+        me: &str,
+        host: Arc<dyn DocHost>,
+    ) -> Result<(Store<State>, Instance)> {
         let module = Module::new(&self.engine, wasm).context("not a wasm module")?;
         let state = State {
             app: app.to_owned(),
@@ -164,18 +248,74 @@ impl Runtime {
         linker.func_wrap("flipflop", "take", host_take)?;
         linker.func_wrap("flipflop", "emit", host_emit)?;
         let instance = linker.instantiate_and_start(&mut store, &module)?;
-        Ok(App {
-            memory: instance
-                .get_memory(&store, "memory")
-                .ok_or_else(|| anyhow!("the app exports no memory"))?,
-            alloc: instance.get_typed_func(&store, "ff_alloc")?,
-            event: instance.get_typed_func(&store, "ff_event")?,
-            store,
-            seen: Vec::new(),
-            seq: 0,
-            stopped: false,
-        })
+        Ok((store, instance))
     }
+}
+
+/// What the user may set when adding an app, as the app describes it with `ff_get_params`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AppParams {
+    /// The name of the app's tab.
+    pub name: Param,
+    pub params: Vec<Param>,
+}
+
+/// One field of the form shown when adding an app.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Param {
+    /// The param's name in the `start` event (unused for the tab's name).
+    pub key: String,
+    /// What the form calls it.
+    pub label: String,
+    /// What it is when the user leaves it empty.
+    pub default: String,
+    /// What the empty field shows.
+    pub placeholder: String,
+}
+
+impl AppParams {
+    /// The tab's name and the params' values, from what the user typed (in the order of the
+    /// params): an empty answer is the default, and the tab's name falls back to the placeholder,
+    /// then to `fallback`.
+    pub fn answers(&self, name: &str, values: &[String]) -> (String, Vec<(String, String)>) {
+        let pick = |typed: &str, p: &Param| match typed.trim() {
+            "" => p.default.clone(),
+            typed => typed.to_owned(),
+        };
+        let mut name = pick(name, &self.name);
+        if name.is_empty() {
+            name = self.name.placeholder.clone();
+        }
+        let params = self
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                (
+                    p.key.clone(),
+                    pick(values.get(i).map_or("", String::as_str), p),
+                )
+            })
+            .collect();
+        (name, params)
+    }
+}
+
+/// A host for an app that is only asked what it takes: it has no group.
+struct NoDoc;
+
+impl DocHost for NoDoc {
+    fn with_doc(&self, f: &mut dyn FnMut(&mut GroupDoc)) {
+        f(&mut GroupDoc::new());
+    }
+}
+
+/// Which of the app's handlers an event goes to.
+#[derive(Clone, Copy)]
+enum Kind {
+    Start,
+    DocChange,
+    Action,
 }
 
 /// A running app.
@@ -183,7 +323,9 @@ pub struct App {
     store: Store<State>,
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
-    event: TypedFunc<(i32, i32), ()>,
+    on_start: TypedFunc<(i32, i32), ()>,
+    on_doc_change: TypedFunc<(i32, i32), ()>,
+    on_action: TypedFunc<(i32, i32), ()>,
     /// The heads the app was told about.
     seen: Vec<ChangeHash>,
     /// The number of actions given to the app, for event ids.
@@ -199,21 +341,27 @@ impl App {
     pub fn start(&mut self) -> Result<bool> {
         let state = self.store.data();
         let (host, app) = (state.host.clone(), state.app.clone());
-        let (made, heads) = with_doc(&*host, |d| {
+        let (made, heads, params) = with_doc(&*host, |d| {
             let before = d.heads();
             d.app_section(&app);
             let heads = d.heads();
-            (heads != before, heads)
+            (heads != before, heads, d.app_params(&app))
         });
         self.seen = heads;
+        let params = Cbor::Map(
+            params
+                .into_iter()
+                .map(|(k, v)| (text(k), text(v)))
+                .collect(),
+        );
         let event = map([
-            ("type", text("start")),
             ("app", text(app)),
+            ("params", params),
             ("me", text(self.store.data().me.as_str())),
             ("ts", Cbor::Integer(crate::groupdoc::now_ms().into())),
             ("tz", Cbor::Integer(utc_offset_minutes().into())),
         ]);
-        Ok(self.send(&event)? || made)
+        Ok(self.send(Kind::Start, &event)? || made)
     }
 
     /// The document changed: tell the app what changed of what it sees, if anything. Returns
@@ -257,20 +405,22 @@ impl App {
         if patches.is_empty() {
             return Ok(false);
         }
-        self.send(&map([
-            ("type", text("change")),
-            ("patches", Cbor::Array(patches)),
-            ("ts", Cbor::Integer(crate::groupdoc::now_ms().into())),
-            ("tz", Cbor::Integer(utc_offset_minutes().into())),
-        ]))
+        self.send(
+            Kind::DocChange,
+            &map([
+                ("patches", Cbor::Array(patches)),
+                ("ts", Cbor::Integer(crate::groupdoc::now_ms().into())),
+                ("tz", Cbor::Integer(utc_offset_minutes().into())),
+            ]),
+        )
     }
 
     /// Hand the app one event. Returns whether it wrote to the document.
-    fn send(&mut self, event: &Cbor) -> Result<bool> {
+    fn send(&mut self, kind: Kind, event: &Cbor) -> Result<bool> {
         if self.stopped {
             bail!("the app was stopped");
         }
-        let result = self.deliver(&codec::encode(event));
+        let result = self.deliver(kind, &codec::encode(event));
         self.stopped = result.is_err();
         result?;
         Ok(std::mem::take(&mut self.store.data_mut().wrote))
@@ -298,7 +448,6 @@ impl App {
         self.seq += 1;
         let me = self.store.data().me.clone();
         let event = map([
-            ("type", text("action")),
             ("name", text(name)),
             ("payload", payload),
             ("signals", signals),
@@ -307,17 +456,22 @@ impl App {
             ("tz", Cbor::Integer(utc_offset_minutes().into())),
             ("seq", Cbor::Integer(self.seq.into())),
         ]);
-        self.send(&event)
+        self.send(Kind::Action, &event)
     }
 
-    fn deliver(&mut self, bytes: &[u8]) -> Result<()> {
+    fn deliver(&mut self, kind: Kind, bytes: &[u8]) -> Result<()> {
         let len = i32::try_from(bytes.len())?;
         self.store.set_fuel(FUEL)?;
         let ptr = self.alloc.call(&mut self.store, len)?;
         self.memory
             .write(&mut self.store, ptr as u32 as usize, bytes)
             .context("ff_alloc gave room outside memory")?;
-        self.event.call(&mut self.store, (ptr, len))?;
+        let handler = match kind {
+            Kind::Start => &self.on_start,
+            Kind::DocChange => &self.on_doc_change,
+            Kind::Action => &self.on_action,
+        };
+        handler.call(&mut self.store, (ptr, len))?;
         Ok(())
     }
 }

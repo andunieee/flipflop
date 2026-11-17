@@ -115,6 +115,7 @@ impl Component for Shell {
                 )
             })
             .maybe(ui.edit.is_some(), |el| el.child(EditDialog))
+            .maybe(ui.app_form.is_some(), |el| el.child(AppDialog))
             .maybe(ui.apps.is_some(), |el| el.child(AppPicker))
             .maybe(ui.share.is_some(), |el| el.child(SharePicker))
             .maybe(ui.drop_hover, |el| el.child(DropHint))
@@ -339,11 +340,7 @@ fn empty_note(text: &str) -> Label {
 }
 
 /// A sidebar section heading that opens the section's page, with a "+" to add to it.
-fn section_title(
-    text: &str,
-    open: impl Fn() + 'static,
-    add: impl Fn() + 'static,
-) -> Rect {
+fn section_title(text: &str, open: impl Fn() + 'static, add: impl Fn() + 'static) -> Rect {
     let (c, _) = look();
     rect()
         .horizontal()
@@ -787,6 +784,108 @@ impl Component for EditDialog {
                                 "Leave"
                             })
                             .on_press(remove),
+                        ),
+                ),
+        )
+    }
+}
+
+/// The form for an app being added: the name of its tab, and what the app asks.
+#[derive(PartialEq)]
+struct AppDialog;
+
+impl Component for AppDialog {
+    fn render(&self) -> impl IntoElement {
+        let (c, d) = look();
+        let nav = use_consume::<Nav>();
+        let mut ui = nav.ui;
+        let Some(form) = ui.read().app_form.clone() else {
+            return rect();
+        };
+        let spec = form.draft.form.clone();
+        let add = {
+            let form = form.clone();
+            move || {
+                nav.backend().add_app(
+                    form.gid.clone(),
+                    form.draft.clone(),
+                    form.name.clone(),
+                    form.values.clone(),
+                );
+                ui.write().app_form = None;
+            }
+        };
+        let mut fields = vec![
+            txt("Tab name", d.font_sm(), c.text_muted, 600).into_element(),
+            field(
+                form.name.clone(),
+                spec.name.placeholder.clone(),
+                move |text: String| {
+                    if let Some(form) = &mut ui.write().app_form {
+                        form.name = text;
+                    }
+                },
+            )
+            .auto_focus(true)
+            .on_submit({
+                let mut add = add.clone();
+                move |_| add()
+            })
+            .into_element(),
+        ];
+        for (i, param) in spec.params.iter().enumerate() {
+            fields.push(txt(param.label.clone(), d.font_sm(), c.text_muted, 600).into_element());
+            fields.push(
+                field(
+                    form.values.get(i).cloned().unwrap_or_default(),
+                    param.placeholder.clone(),
+                    move |text: String| {
+                        if let Some(form) = &mut ui.write().app_form {
+                            form.values[i] = text;
+                        }
+                    },
+                )
+                .on_submit({
+                    let mut add = add.clone();
+                    move |_| add()
+                })
+                .into_element(),
+            );
+        }
+        scrim(
+            move |_| ui.write().app_form = None,
+            sheet()
+                .margin((80., 16., 0., 16.))
+                .width(Size::fill())
+                .max_width(Size::px(400.))
+                .corner_radius(Dim::RADIUS_LG)
+                .background(c.card_bg)
+                .border(
+                    Border::new()
+                        .fill(c.border_strong)
+                        .width(1.)
+                        .alignment(BorderAlignment::Inner),
+                )
+                .padding(d.card_padding())
+                .spacing(Dim::SPACE2)
+                .child(txt("Add an app", d.font_lg(), c.text_strong, 700))
+                .child(txt(
+                    form.draft.file_name.clone(),
+                    d.font_sm(),
+                    c.text_muted,
+                    400,
+                ))
+                .children(fields)
+                .child(
+                    rect()
+                        .horizontal()
+                        .spacing(Dim::SPACE2)
+                        .child(Btn::primary("Add").on_press({
+                            let mut add = add.clone();
+                            move |_| add()
+                        }))
+                        .child(
+                            Btn::secondary("Cancel").on_press(move |_| ui.write().app_form = None),
                         ),
                 ),
         )

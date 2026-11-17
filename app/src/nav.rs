@@ -28,6 +28,16 @@ pub struct Edit {
     pub text: String,
 }
 
+/// The form shown when adding an app: the name of its tab and what the app asks.
+#[derive(Clone, PartialEq)]
+pub struct AppForm {
+    pub gid: String,
+    pub draft: flipflop::core::AppDraft,
+    pub name: String,
+    /// The answers, one per param of the draft's form.
+    pub values: Vec<String>,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum EditKind {
     Peer,
@@ -91,6 +101,8 @@ pub struct Ui {
     /// The group whose page is showing: it counts as looked at.
     viewed: Option<String>,
     pub edit: Option<Edit>,
+    /// The app being added, while its form is open.
+    pub app_form: Option<AppForm>,
     /// The installed apps to share, while that picker is open (Android).
     pub apps: Option<Vec<(String, String, String)>>,
     pub share: Option<Share>,
@@ -122,6 +134,7 @@ impl Ui {
             group_tab: "files".into(),
             viewed: None,
             edit: None,
+            app_form: None,
             apps: None,
             share: None,
             drop_hover: false,
@@ -306,6 +319,8 @@ impl Nav {
             ui.share = None;
         } else if ui.apps.is_some() {
             ui.apps = None;
+        } else if ui.app_form.is_some() {
+            ui.app_form = None;
         } else if ui.edit.is_some() {
             ui.edit = None;
         } else if scanning {

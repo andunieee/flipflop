@@ -22,6 +22,15 @@ use crate::Host;
 
 pub const NAME: &str = "Polls";
 
+pub fn title() -> String {
+    NAME.to_owned()
+}
+
+/// Nothing to ask: the app starts empty.
+pub fn params() -> Cbor {
+    crate::params(NAME, NAME, Vec::new())
+}
+
 pub fn form(_host: &Host) -> Cbor {
     map([
         ("question", cbor_text("")),

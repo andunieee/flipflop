@@ -25,6 +25,15 @@ use crate::Host;
 
 pub const NAME: &str = "Find a time";
 
+pub fn title() -> String {
+    NAME.to_owned()
+}
+
+/// Nothing to ask: the app starts empty.
+pub fn params() -> Cbor {
+    crate::params(NAME, NAME, Vec::new())
+}
+
 pub fn form(host: &Host) -> Cbor {
     let doc = Doc::load(host);
     let slot = doc

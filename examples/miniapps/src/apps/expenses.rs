@@ -24,6 +24,15 @@ use crate::Host;
 
 pub const NAME: &str = "Expenses";
 
+pub fn title() -> String {
+    NAME.to_owned()
+}
+
+/// Nothing to ask: the app starts empty.
+pub fn params() -> Cbor {
+    crate::params(NAME, NAME, Vec::new())
+}
+
 const CURRENCIES: [&str; 8] = ["EUR", "USD", "GBP", "BRL", "CAD", "AUD", "CHF", "SEK"];
 
 pub fn form(host: &Host) -> Cbor {

@@ -17,8 +17,8 @@ a throwaway document; `miniapp-sync` feeds its first file to peer `me`, syncs, t
 
 ```json
 [
-  {"name": "add_list", "set": {"form": {"list": "Groceries"}}},
-  {"name": "add_list", "set": {"form": {"list": "Packing"}}}
+  {"name": "add_item", "set": {"form": {"item": "Milk"}}},
+  {"name": "add_item", "set": {"form": {"item": "Bread"}}}
 ]
 ```
 
@@ -26,11 +26,11 @@ a throwaway document; `miniapp-sync` feeds its first file to peer `me`, syncs, t
 
 The app is a hypereffect **server**; the host is the renderer. The group document is the state.
 
-1. The renderer starts a session (`start` in-process). The app sends `metadata`, the initial
+1. The renderer starts a session (`ff_start`, in-process). The app sends `metadata`, the initial
    `signal`s and the element tree: `column`, `card`, `row`, `list`, `text`, `input`, `button`, …
 2. The user presses a button. The renderer sends `action {"name":…, "payload":…, "signals":…}`.
 3. The app validates it and writes the document (flat scalar keys, below). It renders immediately.
-4. The document changes. Every device — including this one — gets a `change` event with the patches,
+4. The document changes. Every device — including this one — gets an `ff_doc_change` event with the patches,
    runs the app again, which diffs its new tree against the last one and emits only the changed
    `element`s, new elements, `remove`s and any `signal` patch.
 5. A device that only synced, without any local interaction, follows steps 4–5 and ends up showing
@@ -76,8 +76,9 @@ on every page; the user's inputs live under `form.*`, which the app only clears 
 
 Each module's doc comment has its exact state keys and actions.
 
-- **checklist** (Lists) — lists of items with checkboxes and a progress bar; add and remove items, clear
-  the done ones, delete a list (press twice).
+- **checklist** — one list, named when the app is added (`ff_get_params` asks for it; default empty,
+  placeholder "Groceries"): items with checkboxes and a progress bar; add and remove items, clear the
+  done ones.
 - **expenses** — decimal amounts kept as cents, who paid, who it is split between, balances by name, a
   short list of payments that settle everything with a "Mark paid" button, and a history.
 - **poll** (Polls) — one option per line, single or several answers, who voted for what, close and

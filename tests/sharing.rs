@@ -374,15 +374,13 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
     let wasm = b"\0asm\x01\0\0\0".to_vec();
     let src = da.path().join("chess.wasm");
     std::fs::write(&src, &wasm).unwrap();
-    assert!(
-        a.add_app(&gid, da.path().join("missing.wasm"), None)
-            .await
-            .is_err()
-    );
+    assert!(a.prepare_app(da.path().join("missing.wasm")).await.is_err());
     let not_wasm = da.path().join("notes.wasm");
     std::fs::write(&not_wasm, b"hello").unwrap();
-    assert!(a.add_app(&gid, not_wasm, None).await.is_err());
-    let id = a.add_app(&gid, src, None).await.unwrap();
+    assert!(a.prepare_app(not_wasm).await.is_err());
+    let draft = a.prepare_app(src).await.unwrap();
+    assert_eq!(draft.form, Default::default());
+    let id = a.add_app(&gid, &draft, "", &[]).await.unwrap();
 
     until("bob fetched the app", || {
         b.group_view(&gid).unwrap().tabs.iter().any(|t| {
@@ -402,6 +400,11 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
     b.set_tab(&gid, &id, false).unwrap();
     until("alice sees the app hidden", || {
         tabs(&a).last() == Some(&("chess".to_owned(), false))
+    })
+    .await;
+    b.delete_app(&gid, &id).unwrap();
+    until("alice sees the app gone", || {
+        a.group_view(&gid).unwrap().tabs.iter().all(|t| t.id != id)
     })
     .await;
 

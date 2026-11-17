@@ -140,6 +140,14 @@ fn apply(
         Msg::Notice(text) => nav.toast(text),
         Msg::ShowPeers => nav.go(Page::Peers),
         Msg::Scanning(on) => station.write_channel(Channel::Me).scanning = on,
+        Msg::AppDraft { gid, draft } => {
+            nav.ui.write().app_form = Some(nav::AppForm {
+                gid,
+                name: String::new(),
+                values: vec![String::new(); draft.form.params.len()],
+                draft,
+            })
+        }
         Msg::Shared { text, files } => nav.ui.write().share = Some(Share::Shared { text, files }),
         Msg::Music(state) => music.set_if_modified(state),
         Msg::Ime(event) => station.write_channel(Channel::Ime).ime.push(event),

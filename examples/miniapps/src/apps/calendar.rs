@@ -23,6 +23,15 @@ use crate::Host;
 
 pub const NAME: &str = "Calendar";
 
+pub fn title() -> String {
+    NAME.to_owned()
+}
+
+/// Nothing to ask: the app starts empty.
+pub fn params() -> Cbor {
+    crate::params(NAME, NAME, Vec::new())
+}
+
 const LENGTHS: [(&str, &str); 6] = [
     ("30", "30 min"),
     ("60", "1 hour"),

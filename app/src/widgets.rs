@@ -600,7 +600,7 @@ impl Component for TabStrip {
 /// A single-line text field. `value` is the text shown; edits go to `on_change`.
 pub fn field(
     value: impl IntoReadable<String>,
-    placeholder: &'static str,
+    placeholder: impl Into<std::borrow::Cow<'static, str>>,
     on_change: impl FnMut(String) + 'static,
 ) -> Input {
     let (_, d) = look();

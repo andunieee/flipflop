@@ -64,7 +64,7 @@ fn scripted(script: &[Cbor]) -> Vec<u8> {
     (memory.copy (i32.add (global.get $log) (i32.const 4)) (local.get $ptr) (local.get $len))
     (global.set $log (i32.add (global.get $log) (i32.add (i32.const 4) (local.get $len))))
     (i32.store (i32.const 0x10000) (i32.sub (global.get $log) (i32.const 0x10004))))
-  (func (export "ff_event") (param $ptr i32) (param $len i32)
+  (func (export "ff_start") (export "ff_doc_change") (export "ff_action") (param $ptr i32) (param $len i32)
     (local $n i32) (local $at i32) (local $rlen i32) (local $resp i32)
     (call $log (local.get $ptr) (local.get $len))
     (if (global.get $ran) (then (return)))
@@ -174,7 +174,8 @@ fn an_app_writes_reads_and_hears_of_changes() {
     assert!(app.start().unwrap());
 
     let log = log(&app);
-    assert_eq!(field(&log[0], "type"), &text("start"));
+    assert_eq!(field(&log[0], "app"), &text("chess"));
+    assert_eq!(field(&log[0], "params"), &Cbor::Map(Vec::new()));
     assert!(log[1..6].iter().all(|r| field(r, "ok") == &Cbor::Null));
     assert_eq!(
         field(&log[6], "ok"),
@@ -193,7 +194,7 @@ fn an_app_writes_reads_and_hears_of_changes() {
     // Its own writes come back to it.
     assert!(!app.notify().unwrap());
     let event = self::log(&app).pop().unwrap();
-    assert_eq!(field(&event, "type"), &text("change"));
+    field(&event, "patches");
     let own = field(&event, "patches").as_array().unwrap().clone();
     assert!(own.contains(&map([
         ("root", text("app")),
@@ -264,7 +265,7 @@ fn emitter(line: &str) -> Vec<u8> {
     (memory.copy (i32.add (global.get $log) (i32.const 4)) (local.get $ptr) (local.get $len))
     (global.set $log (i32.add (global.get $log) (i32.add (i32.const 4) (local.get $len))))
     (i32.store (i32.const 0x10000) (i32.sub (global.get $log) (i32.const 0x10004))))
-  (func (export "ff_event") (param $ptr i32) (param $len i32)
+  (func (export "ff_start") (export "ff_doc_change") (export "ff_action") (param $ptr i32) (param $len i32)
     (call $log (local.get $ptr) (local.get $len))
     (if (global.get $ran) (then (return)))
     (global.set $ran (i32.const 1))
@@ -297,7 +298,6 @@ fn an_app_emits_frames_and_gets_actions() {
             .unwrap()
     );
     let event = log(&app).pop().unwrap();
-    assert_eq!(field(&event, "type"), &text("action"));
     assert_eq!(field(&event, "name"), &text("do_it"));
     assert_eq!(field(&event, "payload"), &payload);
     assert_eq!(field(&event, "signals"), &signals);
@@ -312,7 +312,7 @@ fn an_app_that_runs_forever_is_stopped() {
         r#"(module
   (memory (export "memory") 1)
   (func (export "ff_alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "ff_event") (param i32 i32) (loop (br 0))))"#,
+  (func (export "ff_start") (export "ff_doc_change") (export "ff_action") (param i32 i32) (loop (br 0))))"#,
     )
     .unwrap();
     let mut app = Runtime::default()
@@ -330,7 +330,7 @@ fn an_app_that_floods_the_renderer_is_stopped() {
   (import "flipflop" "emit" (func $emit (param i32 i32)))
   (memory (export "memory") 32)
   (func (export "ff_alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "ff_event") (param i32 i32)
+  (func (export "ff_start") (export "ff_doc_change") (export "ff_action") (param i32 i32)
     (loop $again
       (call $emit (i32.const 0) (i32.const 0x100000))
       (br $again))))"#,
@@ -342,4 +342,57 @@ fn an_app_that_floods_the_renderer_is_stopped() {
     assert!(app.start().is_err());
     assert!(app.is_stopped());
     assert!(app.take_ui().len() <= UI_BACKLOG);
+}
+
+#[test]
+fn an_app_describes_its_params() {
+    let spec = codec::encode(&map([
+        (
+            "name",
+            map([("default", text("Lists")), ("placeholder", text("My list"))]),
+        ),
+        (
+            "params",
+            Cbor::Array(vec![map([
+                ("key", text("list")),
+                ("label", text("List name")),
+                ("default", text("")),
+                ("placeholder", text("Groceries")),
+            ])]),
+        ),
+    ]));
+    let wasm = wat::parse_str(format!(
+        r#"(module
+  (memory (export "memory") 1)
+  (data (i32.const 16) "{}")
+  (func (export "ff_get_params") (result i64)
+    (i64.or (i64.shl (i64.const 16) (i64.const 32)) (i64.const {}))))"#,
+        spec.iter()
+            .map(|b| format!("\\{b:02x}"))
+            .collect::<String>(),
+        spec.len()
+    ))
+    .unwrap();
+    let form = Runtime::default().params(&wasm).unwrap();
+    assert_eq!(form.name.default, "Lists");
+    assert_eq!(form.params[0].key, "list");
+    assert_eq!(form.params[0].placeholder, "Groceries");
+    // Empty answers are the defaults, and the name falls back to the placeholder.
+    let (name, params) = form.answers("  ", &["".into()]);
+    assert_eq!(
+        (name.as_str(), params),
+        ("Lists", vec![("list".to_owned(), String::new())])
+    );
+    let (name, params) = form.answers("Trip", &["Tents".into()]);
+    assert_eq!(
+        (name.as_str(), params),
+        ("Trip", vec![("list".to_owned(), "Tents".to_owned())])
+    );
+
+    // An app that asks nothing needs no `ff_get_params`.
+    let none = wat::parse_str(r#"(module (memory (export "memory") 1))"#).unwrap();
+    assert_eq!(
+        Runtime::default().params(&none).unwrap(),
+        AppParams::default()
+    );
 }

@@ -985,6 +985,7 @@ impl Component for InfoTab {
         let groups = use_radio::<Model, Channel>(Channel::Groups);
         let _ = peers.read();
         let mut confirm_leave = use_state(|| false);
+        let confirm_delete = use_state(|| None::<String>);
         let mut doc_json = use_state(|| None::<String>);
         let m = groups.read();
         let Some(info) = m.group(&self.gid) else {
@@ -1001,7 +1002,7 @@ impl Component for InfoTab {
                 items.extend(members_section(info, &m, nav));
             }
         }
-        items.extend(tabs_section(&view, &self.gid, nav));
+        items.extend(tabs_section(&view, &self.gid, nav, confirm_delete));
         items.extend(device_section(info, nav));
         items.extend(debug_section(&self.gid, &mut doc_json, nav));
         if info.with.is_none() {
@@ -1215,7 +1216,13 @@ fn members_section(info: &GroupInfo, m: &Model, nav: Nav) -> Vec<Element> {
 }
 
 /// The group's tabs, the same for every member: anyone shows or hides them, or adds an app.
-fn tabs_section(view: &GroupView, gid: &str, nav: Nav) -> Vec<Element> {
+fn tabs_section(
+    view: &GroupView,
+    gid: &str,
+    nav: Nav,
+    confirm_delete: State<Option<String>>,
+) -> Vec<Element> {
+    let mut confirm_delete = confirm_delete;
     let mut rows: Vec<Element> = vec![];
     for (i, t) in view.tabs.iter().enumerate() {
         if i > 0 {
@@ -1231,11 +1238,38 @@ fn tabs_section(view: &GroupView, gid: &str, nav: Nav) -> Vec<Element> {
             _ => app_detail(t),
         };
         let (gid, tab) = (gid.to_owned(), t.id.clone());
+        let toggle = ToggleRow::new(t.title.clone(), hint, t.on, {
+            let (gid, tab) = (gid.clone(), tab.clone());
+            move |on| nav.backend().run(|core| core.set_tab(&gid, &tab, on))
+        });
+        if t.app.is_none() {
+            rows.push(toggle.into_element());
+            continue;
+        }
+        // An app can be deleted, for everyone: the button asks twice.
+        let asking = confirm_delete.read().as_deref() == Some(tab.as_str());
+        let delete = move |_| {
+            if !asking {
+                confirm_delete.set(Some(tab.clone()));
+                return;
+            }
+            confirm_delete.set(None);
+            nav.backend().run(|core| core.delete_app(&gid, &tab));
+        };
         rows.push(
-            ToggleRow::new(t.title.clone(), hint, t.on, move |on| {
-                nav.backend().run(|core| core.set_tab(&gid, &tab, on))
-            })
-            .into_element(),
+            rect()
+                .horizontal()
+                .width(Size::fill())
+                .content(Content::flex())
+                .spacing(Dim::SPACE2)
+                .cross_align(Alignment::Center)
+                .child(rect().width(Size::flex(1.)).child(toggle))
+                .child(if asking {
+                    Btn::danger("Delete app?").on_press(delete).into_element()
+                } else {
+                    IconButton::new(Icon::Trash, delete).danger().into_element()
+                })
+                .into_element(),
         );
     }
     rows.push(divider().into_element());

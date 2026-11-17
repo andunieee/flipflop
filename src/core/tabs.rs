@@ -8,7 +8,21 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use super::{Core, sharing::open_source};
-use crate::state::Share;
+use crate::{
+    apps::{AppParams, Runtime},
+    state::Share,
+};
+
+/// A wasm module read and kept, waiting for the user to name its tab and answer its form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppDraft {
+    /// blake3 of the wasm, its name in the apps folder.
+    pub hash: String,
+    pub size: u64,
+    /// The file's name.
+    pub file_name: String,
+    pub form: AppParams,
+}
 
 /// The kind of an app's offer in the group's files.
 pub(super) const APP_KIND: &str = "wasm";
@@ -25,17 +39,15 @@ impl Core {
         Ok(())
     }
 
-    /// Add the wasm module at `path` to the group as an app, with its tab on. `name` defaults to
-    /// the file's. Returns the app's id.
-    pub async fn add_app(&self, gid: &str, path: PathBuf, name: Option<String>) -> Result<String> {
-        self.require_group(gid)?;
-        let name = super::sharing::clean_file_name(&match name {
-            Some(name) => name,
-            None => path
+    /// Read the wasm module at `path`, keep a copy of it, and ask it what it takes to be added to
+    /// a group (see [`crate::apps`]). Nothing is shared yet: [`Core::add_app`] does that.
+    pub async fn prepare_app(&self, path: PathBuf) -> Result<AppDraft> {
+        let file_name = super::sharing::clean_file_name(
+            &path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .context("that path has no file name")?,
-        });
+        );
         let reading = path.clone();
         let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
             use std::io::Read;
@@ -53,12 +65,13 @@ impl Core {
             crate::platform::release_content_uri(&path.to_string_lossy());
         }
         if bytes.len() as u64 > MAX_APP_BYTES {
-            bail!("{name} is too big for an app");
+            bail!("{file_name} is too big for an app");
         }
         if !bytes.starts_with(b"\0asm") {
-            bail!("{name} is not a WebAssembly module");
+            bail!("{file_name} is not a WebAssembly module");
         }
         let hash = blake3::hash(&bytes).to_hex().to_string();
+        let size = bytes.len() as u64;
         let local = self.app_path(&hash);
         if !local.exists() {
             let dir = local.parent().expect("in the apps folder");
@@ -67,14 +80,61 @@ impl Core {
             tokio::fs::write(&part, &bytes).await?;
             tokio::fs::rename(&part, &local).await?;
         }
+        let form = tokio::task::spawn_blocking(move || Runtime::default().params(&bytes))
+            .await?
+            .with_context(|| format!("{file_name} does not work as an app"))?;
+        Ok(AppDraft {
+            hash,
+            size,
+            file_name,
+            form,
+        })
+    }
+
+    /// Add the app `draft` (from [`Core::prepare_app`]) to the group, with its tab on, named `name`
+    /// and with the answers `values` to its form (in the order of `draft.form.params`). Empty
+    /// answers are the form's defaults. Returns the app's id.
+    pub async fn add_app(
+        &self,
+        gid: &str,
+        draft: &AppDraft,
+        name: &str,
+        values: &[String],
+    ) -> Result<String> {
+        self.require_group(gid)?;
+        let (name, params) = draft.form.answers(name, values);
+        let name = match name.trim() {
+            "" => draft.file_name.clone(),
+            name => name.to_owned(),
+        };
+        let local = self.app_path(&draft.hash);
+        if !local.exists() {
+            bail!("the app's file is gone");
+        }
         let fid = self
-            .offer_file(gid, local, Some(name.clone()), APP_KIND, false)
+            .offer_file(gid, local, Some(draft.file_name.clone()), APP_KIND, false)
             .await?;
         let me = self.me();
-        let size = bytes.len() as u64;
-        let id = self.with_doc(gid, |d| d.add_app_tab(&me, &name, &fid, &hash, size));
+        let (hash, size) = (&draft.hash, draft.size);
+        let id = self.with_doc(gid, |d| {
+            d.add_app_tab(&me, &name, &fid, hash, size, &params)
+        });
         self.doc_changed(gid, false);
         Ok(id)
+    }
+
+    /// Delete an app from the group, for every member: its tab and its data. If we offered its
+    /// wasm, we stop offering it.
+    pub fn delete_app(&self, gid: &str, id: &str) -> Result<()> {
+        self.require_group(gid)?;
+        let Some(app) = self.with_doc(gid, |d| d.app_tab(id)) else {
+            bail!("no such app");
+        };
+        self.with_doc(gid, |d| d.remove_app_tab(id));
+        // Only the one who added it can stop the offer; for everyone else it is just hidden.
+        let _ = self.stop_file(gid, &app.file);
+        self.doc_changed(gid, false);
+        Ok(())
     }
 
     /// Where we keep the wasm with this hash.

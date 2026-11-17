@@ -1162,14 +1162,9 @@ mod tests {
     fn seed(session: &mut Session, app: &str) {
         match app {
             "checklist" => {
-                for name in ["Groceries", "Packing"] {
-                    fill(session, "new-name", "form.list", name);
-                    press(session, "new-add");
-                }
-                let hash = hash_of("groceries");
                 for item in ["Milk", "Bread", "Coffee beans"] {
-                    fill(session, &format!("l-{hash}-add-text"), &format!("form.item.{hash}"), item);
-                    press(session, &format!("l-{hash}-add-go"));
+                    fill(session, "add-text", "form.item", item);
+                    press(session, "add-go");
                 }
                 let first = ids(session, HeComponent::Checkbox).remove(0);
                 choose(session, &first, &format!("sync.{}", &first[..first.len() - 5].replacen("i-", "done.", 1)), json!(true));
@@ -1273,16 +1268,6 @@ mod tests {
         (plan.to_owned(), slot.to_owned())
     }
 
-    /// `ui::path_id` of the apps.
-    fn hash_of(id: &str) -> String {
-        let mut hash = 0xcbf29ce484222325u64;
-        for byte in id.bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        format!("h{hash:016x}")
-    }
-
     /// `MINIAPP_SHOTS=<dir> cargo test -p flipflop-app shots` draws each miniapp, with some data in
     /// it, to PNGs (`<app>-<width>.png`) for a look at the layout.
     #[test]
@@ -1363,7 +1348,7 @@ mod tests {
         let label = runner
             .find_many(|node, element| {
                 let label = Label::try_downcast(element)?;
-                (label.text == "New list").then(|| node.layout().area.center())
+                (label.text == "Add an item").then(|| node.layout().area.center())
             })
             .first()
             .copied()
@@ -1372,10 +1357,10 @@ mod tests {
         runner.write_text("Milk");
         runner.write_text("y");
         assert_eq!(
-            session.borrow().value("form.list").and_then(Json::as_str),
+            session.borrow().value("form.item").and_then(Json::as_str),
             Some("Milky")
         );
-        click(&mut runner, "Create list");
+        click(&mut runner, "Add");
         runner.poll(
             std::time::Duration::from_millis(16),
             std::time::Duration::from_millis(50),
@@ -1383,11 +1368,31 @@ mod tests {
         runner.sync_and_update();
         let after = texts(&runner);
         assert!(after.iter().any(|t| t == "Milky"), "{after:?}");
-        assert!(after.iter().any(|t| t == "Nothing here yet."), "{after:?}");
         // The form was cleared by the app.
         assert_eq!(
-            session.borrow().value("form.list").and_then(Json::as_str),
+            session.borrow().value("form.item").and_then(Json::as_str),
             Some("")
+        );
+    }
+
+    #[test]
+    fn the_checklist_asks_for_its_list_name() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../examples/miniapps/dist/checklist.wasm"
+        );
+        let Ok(wasm) = std::fs::read(path) else {
+            eprintln!("skipping: run examples/miniapps/build.sh first");
+            return;
+        };
+        let form = Runtime::default().params(&wasm).expect("it describes itself");
+        assert_eq!(form.name.default, "Checklist");
+        let [list] = form.params.as_slice() else {
+            panic!("{form:?}");
+        };
+        assert_eq!(
+            (list.key.as_str(), list.default.as_str(), list.placeholder.as_str()),
+            ("list", "", "Groceries")
         );
     }
 
@@ -1404,7 +1409,7 @@ mod tests {
         let host = Arc::new(Shared(Mutex::new(GroupDoc::new())));
         let mut session =
             Session::standalone("checklist", &wasm, "me", host).expect("the app starts");
-        session.write("form.list", json!("Groceries"));
+        session.write("form.item", json!("Groceries"));
         let session = Rc::new(RefCell::new(session));
 
         let (mut runner, ()) = TestingRunner::new(
@@ -1424,9 +1429,10 @@ mod tests {
         runner.sync_and_update();
 
         let before = texts(&runner);
-        assert!(before.iter().any(|text| text == "Lists"), "{before:?}");
+        assert!(before.iter().any(|text| text == "Checklist"), "{before:?}");
+        assert!(before.iter().any(|text| text == "Nothing here yet."), "{before:?}");
 
-        click(&mut runner, "Create list");
+        click(&mut runner, "Add");
         runner.poll(
             std::time::Duration::from_millis(16),
             std::time::Duration::from_millis(50),
@@ -1435,6 +1441,6 @@ mod tests {
 
         let after = texts(&runner);
         assert!(after.iter().any(|text| text == "Groceries"), "{after:?}");
-        assert!(after.iter().any(|text| text == "Nothing here yet."), "{after:?}");
+        assert!(!after.iter().any(|text| text == "Nothing here yet."), "{after:?}");
     }
 }
