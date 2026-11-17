@@ -1048,9 +1048,12 @@ fn peer_section(peer: &Peer, m: &Model, nav: Nav) -> Vec<Element> {
         card()
             .child(
                 card_body(Dim::SPACE3)
+                    .horizontal()
+                    .content(Content::flex())
+                    .cross_align(Alignment::Center)
                     .child(
                         rect()
-                            .width(Size::fill())
+                            .width(Size::flex(1.))
                             .spacing(3.)
                             .child(txt(peer_title(peer), d.font_lg(), c.text_strong, 650).elide())
                             .child(txt(peer_subtitle(peer), d.font_xs(), c.text_faint, 400).elide())
@@ -1111,9 +1114,12 @@ fn rename_section(info: &GroupInfo, nav: Nav) -> Vec<Element> {
         card()
             .child(
                 card_body(Dim::SPACE3)
+                    .horizontal()
+                    .content(Content::flex())
+                    .cross_align(Alignment::Center)
                     .child(
                         rect()
-                            .width(Size::fill())
+                            .width(Size::flex(1.))
                             .spacing(3.)
                             .child(txt(group_title(info), d.font_lg(), c.text_strong, 650).elide())
                             .maybe(info.name.is_some(), |el| {

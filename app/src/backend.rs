@@ -343,30 +343,6 @@ impl Backend {
         f();
     }
 
-    /// Rename this device as its name is typed. An empty name keeps the current one (the field is
-    /// being cleared, not renamed to nothing).
-    pub fn set_name(&self, name: String) {
-        self.typed("name".into(), move |core| {
-            if !flipflop::settings::clean_name(&name).is_empty() {
-                core.set_name(&name);
-            }
-        });
-    }
-
-    /// Give a peer a local name as it is typed. An empty name restores the name they go by.
-    pub fn rename_contact(&self, id: EndpointId, name: String) {
-        self.typed(format!("peer:{id}"), move |core| {
-            core.rename_contact(id, &name)
-        });
-    }
-
-    /// Give a group a local name as it is typed. An empty name restores the name it goes by.
-    pub fn rename_group(&self, group: String, name: String) {
-        self.typed(format!("group:{group}"), move |core| {
-            core.rename_group(&group, &name)
-        });
-    }
-
     /// Catch the groups up, off the UI thread.
     pub fn mark_seen(&self, gids: Vec<String>) {
         if let Some(core) = self.core() {

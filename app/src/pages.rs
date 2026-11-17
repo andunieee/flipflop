@@ -665,8 +665,7 @@ impl Component for ScanView {
 
 // ---- Settings --------------------------------------------------------------------------------
 
-/// This device's name, to edit. Saved as you type; a name changed elsewhere (the command line)
-/// shows up here too, unless the field has something unsaved in it.
+/// This device's name, and the button that opens the dialog to change it.
 #[derive(PartialEq)]
 struct NameCard {
     name: String,
@@ -676,35 +675,29 @@ impl Component for NameCard {
     fn render(&self) -> impl IntoElement {
         let (c, d) = look();
         let nav = use_consume::<Nav>();
-        let mut name = use_state(|| self.name.clone());
-        // The name the device goes by, as far as this field knows: what core reported last, or what
-        // it will report once what is being typed is saved. Anything else is a change made elsewhere.
-        let mut known = use_state(|| self.name.clone());
-        let reported = self.name.clone();
-        let changed = *known.peek() != reported;
-        if changed {
-            let typing = flipflop::settings::clean_name(&name.peek()) != *known.peek();
-            known.set(reported.clone());
-            if !typing {
-                name.set(reported);
-            }
-        }
-        let backend = nav.backend();
+        let edit = Edit {
+            kind: EditKind::Me,
+            id: String::new(),
+            original: String::new(),
+            text: self.name.clone(),
+        };
         card().child(
-            card_body(Dim::SPACE2)
-                .child(txt("This device's name", d.font_md(), c.text_strong, 650))
-                .child(hint("Shown to other members next to the texts you send."))
+            card_body(Dim::SPACE3)
+                .horizontal()
+                .content(Content::flex())
+                .cross_align(Alignment::Center)
                 .child(
-                    Input::new(WritableSetter::new(name, move |text: String| {
-                        let cleaned = flipflop::settings::clean_name(&text);
-                        if !cleaned.is_empty() {
-                            known.set(cleaned);
-                        }
-                        backend.set_name(text.clone());
-                        name.set(text);
-                    }))
-                    .placeholder("Device name")
-                    .width(Size::fill()),
+                    rect()
+                        .width(Size::flex(1.))
+                        .spacing(3.)
+                        .child(txt("This device's name", d.font_xs(), c.text_faint, 400))
+                        .child(txt(self.name.clone(), d.font_lg(), c.text_strong, 650).elide())
+                        .child(hint("Shown to other members next to the texts you send.")),
+                )
+                .child(
+                    Btn::secondary("Rename")
+                        .icon(Icon::Edit)
+                        .on_press(move |_| nav.edit(Some(edit.clone()))),
                 ),
         )
     }

@@ -692,23 +692,34 @@ impl Component for EditDialog {
             return rect();
         };
         let backend = nav.backend();
-        // The rename applies as it is typed: there is nothing to save, only to close.
-        let apply = {
-            let (backend, kind, id) = (backend.clone(), edit.kind, edit.id.clone());
-            move |text: String| match kind {
-                EditKind::Peer => {
-                    if let Ok(id) = id.parse() {
-                        backend.rename_contact(id, text);
-                    }
-                }
-                EditKind::Group => backend.rename_group(id.clone(), text),
-            }
-        };
         let on_change = move |text: String| {
             if let Some(edit) = &mut ui.write().edit {
-                edit.text = text.clone();
+                edit.text = text;
             }
-            apply(text);
+        };
+        // The rename applies when the dialog is done, not as it is typed. Closing it any other
+        // way leaves the name as it was.
+        let done = {
+            let (backend, edit) = (backend.clone(), edit.clone());
+            move || {
+                let text = edit.text.clone();
+                match edit.kind {
+                    EditKind::Me => backend.run(|core| {
+                        // An empty name keeps the current one: a device is never nameless.
+                        if !flipflop::settings::clean_name(&text).is_empty() {
+                            core.set_name(&text);
+                        }
+                        Ok(())
+                    }),
+                    EditKind::Peer => {
+                        if let Ok(id) = edit.id.parse() {
+                            backend.run(|core| Ok(core.rename_contact(id, &text)));
+                        }
+                    }
+                    EditKind::Group => backend.run(|core| Ok(core.rename_group(&edit.id, &text))),
+                }
+                nav.edit(None);
+            }
         };
         let remove = {
             let edit = edit.clone();
@@ -725,6 +736,7 @@ impl Component for EditDialog {
                             nav.close_group();
                             core.delete_group(&edit.id);
                         }
+                        EditKind::Me => {}
                     }
                     Ok(())
                 });
@@ -748,20 +760,23 @@ impl Component for EditDialog {
                 .padding(d.card_padding())
                 .spacing(Dim::SPACE2)
                 .child(txt(
-                    if edit.kind == EditKind::Peer {
-                        "Rename peer"
-                    } else {
-                        "Rename group"
+                    match edit.kind {
+                        EditKind::Me => "Rename this device",
+                        EditKind::Peer => "Rename peer",
+                        EditKind::Group => "Rename group",
                     },
                     d.font_lg(),
                     c.text_strong,
                     700,
                 ))
-                .child(txt(edit.original.clone(), d.font_sm(), c.text_muted, 400))
+                .maybe(!edit.original.is_empty(), |el| {
+                    el.child(txt(edit.original.clone(), d.font_sm(), c.text_muted, 400))
+                })
                 .child(
                     field(
                         edit.text.clone(),
                         match edit.kind {
+                            EditKind::Me => "Device name, shown to others",
                             EditKind::Peer => "Local name (empty restores the original)",
                             EditKind::Group => {
                                 "Group name, for everybody (empty restores the original)"
@@ -770,21 +785,26 @@ impl Component for EditDialog {
                         on_change,
                     )
                     .auto_focus(true)
-                    .on_submit(move |_| nav.edit(None)),
+                    .on_submit({
+                        let done = done.clone();
+                        move |_| done()
+                    }),
                 )
                 .child(
                     rect()
                         .horizontal()
                         .spacing(Dim::SPACE2)
-                        .child(Btn::primary("Done").on_press(move |_| nav.edit(None)))
-                        .child(
-                            Btn::danger(if edit.kind == EditKind::Peer {
-                                "Remove"
-                            } else {
-                                "Leave"
-                            })
-                            .on_press(remove),
-                        ),
+                        .child(Btn::primary("Done").on_press(move |_| done()))
+                        .maybe(edit.kind != EditKind::Me, |el| {
+                            el.child(
+                                Btn::danger(if edit.kind == EditKind::Peer {
+                                    "Remove"
+                                } else {
+                                    "Leave"
+                                })
+                                .on_press(remove),
+                            )
+                        }),
                 ),
         )
     }

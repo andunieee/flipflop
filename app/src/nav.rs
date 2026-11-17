@@ -39,6 +39,8 @@ pub struct AppForm {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum EditKind {
+    /// This device: its name is not an alias, it is what everybody else calls it.
+    Me,
     Peer,
     Group,
 }
