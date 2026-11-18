@@ -207,7 +207,7 @@ Every icon comes from `assets/top.png` and is committed: the Linux hicolor PNGs 
 
 ## Run
 
-    just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity, FLIPFLOP_PHONE_LAYOUT=1 for the phone's layout)
+    just desktop                   # desktop GUI (FLIPFLOP_DIR=... for a separate identity; a window narrower than 700 shows the phone layout, FLIPFLOP_PHONE_LAYOUT=1 forces it)
     just android                   # APK; `just install` to put it on a device
     cargo run --bin flipflop -- --help
     just web                       # rebuild the guest page's wasm (see Guest links)

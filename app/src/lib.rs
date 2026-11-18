@@ -24,6 +24,7 @@ use freya::android::AndroidExt;
 use freya::{prelude::*, radio::*};
 
 pub use crate::backend::Backend;
+pub use crate::theme::PHONE_MAX_WIDTH;
 use crate::{
     backend::Msg,
     model::{Channel, Model},
@@ -37,9 +38,6 @@ pub fn app() -> impl IntoElement {
     let backend = use_consume::<Backend>();
     let backend_state = use_state(|| backend.clone());
     let ui = use_state(|| Ui::load(&backend));
-    let nav = use_provide_context(|| Nav::new(ui, backend_state));
-    let music = music::use_init_music();
-    let station = use_init_radio_station::<Model, Channel>(Model::default);
 
     let window = Platform::get().current_window();
     let theme = ui.read().theme.clone();
@@ -48,16 +46,22 @@ pub fn app() -> impl IntoElement {
         "dark" => true,
         _ => *window.preferred_theme.read() == PreferredTheme::Dark,
     };
-    let narrow = window.root_size.read().width < 420.;
+    let width = window.root_size.read().width;
     let look = Look {
         palette: Palette::new(dark),
         dim: Dim {
+            phone: theme::phone(width) || theme::forced_phone(),
+            narrow: width < 420.,
             touch: theme::touch(),
-            narrow,
         },
     };
     let mut look_state = use_provide_context(|| State::create(look));
     look_state.set_if_modified(look);
+
+    let nav = use_provide_context(|| Nav::new(ui, backend_state, look_state));
+    let music = music::use_init_music();
+    let station = use_init_radio_station::<Model, Channel>(Model::default);
+
     let mut freya_theme = use_init_theme(|| look.palette.freya_theme());
     use_side_effect(move || {
         let palette = look_state.read().palette;

@@ -451,6 +451,7 @@ mod tests {
         fn render(&self) -> impl IntoElement {
             let palette = Palette::new(true);
             let dim = Dim {
+                phone: false,
                 touch: false,
                 narrow: false,
             };

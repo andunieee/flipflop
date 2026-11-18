@@ -2,7 +2,8 @@
 
 set positional-arguments
 
-# run the desktop app (Freya UI over the Rust core). FLIPFLOP_PHONE_LAYOUT=1 shows the phone layout.
+# run the desktop app (Freya UI over the Rust core). Narrow the window, or set FLIPFLOP_PHONE_LAYOUT=1,
+# for the phone layout.
 desktop *args:
     cargo run -p flipflop-app --bin flipflop-gui -- {{args}}
 
@@ -44,9 +45,10 @@ miniapp-sync app a b:
 cli *cargs:
     cargo run --bin flipflop -- {{cargs}}
 
-# render the app's pages to PNGs without a window, over a throwaway node (FLIPFLOP_PHONE_LAYOUT=1 for the phone's)
-snapshots dir="dist/snapshots":
-    cargo run -p flipflop-app --example snapshot -- {{dir}}
+# render the app's pages to PNGs without a window, over a throwaway node (the window width picks the
+# layout; FLIPFLOP_PHONE_LAYOUT=1 forces the phone's even in a wide one)
+snapshots dir="dist/snapshots" width="":
+    cargo run -p flipflop-app --example snapshot -- {{dir}} {{width}}
 
 # --- Packages (each on its own OS; see the README) ---
 

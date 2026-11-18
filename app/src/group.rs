@@ -121,7 +121,7 @@ impl Component for GroupPage {
                     .content(Content::flex())
                     .spacing(Dim::SPACE2)
                     .cross_align(Alignment::Center)
-                    .maybe(d.touch, |el| {
+                    .maybe(d.phone, |el| {
                         el.child(
                             IconButton::new(Icon::ArrowLeft, move |_| nav.close_group())
                                 .tint(c.text_strong),
@@ -222,6 +222,7 @@ impl Component for FilesTab {
                                     .expanded()
                                     .on_press(move |_| nav.pick("media")),
                             )
+                            // Android's picker offers apps; the desktop's offers folders.
                             .child(if d.touch {
                                 Btn::secondary("App")
                                     .icon(Icon::Apps)
@@ -352,7 +353,8 @@ impl Component for FileCard {
         };
         let (gid, id) = (self.gid.clone(), f.id.clone());
 
-        // Taking a file off the list: from a right-click menu on the desktop, a button on phones.
+        // Taking a file off the list: from a right-click menu where there is one, from a button on
+        // the phone layout (and on touch screens, which have no right click to find it with).
         let removable = f.can_remove;
         let remove = act(|core, gid, id| core.remove_file(gid, id));
         let menu_remove = remove.clone();
@@ -434,7 +436,7 @@ impl Component for FileCard {
                                         ))
                                     }),
                             )
-                            .maybe(removable && d.touch, |el| {
+                            .maybe(removable && (d.phone || d.touch), |el| {
                                 el.child(IconButton::new(Icon::Trash, remove).danger())
                             }),
                     )

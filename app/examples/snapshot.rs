@@ -1,10 +1,10 @@
 //! Renders the app's pages to PNGs without opening a window, over a fresh node in a temporary
-//! directory: `cargo run -p flipflop-app --example snapshot -- <out dir>` (with
-//! `FLIPFLOP_PHONE_LAYOUT=1` for the phone layout).
+//! directory: `cargo run -p flipflop-app --example snapshot -- <out dir> [width]`. The window width
+//! picks the layout; `FLIPFLOP_PHONE_LAYOUT=1` forces the phone one in a wide window.
 
 use std::time::Duration;
 
-use flipflop_app::{Backend, app};
+use flipflop_app::{Backend, PHONE_MAX_WIDTH, app};
 use freya::prelude::*;
 use freya_testing::prelude::*;
 
@@ -16,8 +16,14 @@ fn main() {
     );
     std::fs::create_dir_all(&out).unwrap();
     let dir = std::env::temp_dir().join(format!("flipflop-snapshot-{}", std::process::id()));
-    let phone = std::env::var_os("FLIPFLOP_PHONE_LAYOUT").is_some_and(|v| v == "1");
-    let size = if phone { (412., 860.) } else { (1100., 720.) };
+    let forced = std::env::var_os("FLIPFLOP_PHONE_LAYOUT").is_some_and(|v| v == "1");
+    // The second argument is the window width; by default, one for each layout.
+    let width = std::env::args()
+        .nth(2)
+        .and_then(|w| w.parse::<f32>().ok())
+        .unwrap_or(if forced { 412. } else { 1100. });
+    let phone = width < PHONE_MAX_WIDTH || forced;
+    let size = (width, if phone { 860. } else { 720. });
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

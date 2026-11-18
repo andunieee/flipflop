@@ -48,7 +48,8 @@ fn main() {
             .with_app_id("dev.flipflop.app")
             .with_icon(LaunchConfig::window_icon(ICON))
             .with_size(960., 660.)
-            .with_min_size(640., 480.)
+            // Narrow enough to reach the phone layout by resizing.
+            .with_min_size(360., 480.)
     }));
     backend.shutdown();
 }

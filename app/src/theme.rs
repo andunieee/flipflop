@@ -123,9 +123,14 @@ impl Palette {
 /// Sizes; the phone layout is a little larger.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Dim {
-    pub touch: bool,
+    /// The phone layout: a single pane, an app bar and bottom navigation, larger controls. From the
+    /// window width only.
+    pub phone: bool,
     /// A narrow window or screen: tighter buttons.
     pub narrow: bool,
+    /// A touch screen (Android): the app picker rather than the desktop's folder picker, and a
+    /// button where a right click would be.
+    pub touch: bool,
 }
 
 impl Dim {
@@ -138,8 +143,9 @@ impl Dim {
     pub const SPACE3: f32 = 12.;
     pub const SPACE5: f32 = 24.;
 
-    fn pick(&self, touch: f32, desktop: f32) -> f32 {
-        if self.touch { touch } else { desktop }
+    /// The phone value on the phone layout, the desktop one otherwise.
+    fn pick(&self, phone: f32, desktop: f32) -> f32 {
+        if self.phone { phone } else { desktop }
     }
 
     pub fn font_xs(&self) -> f32 {
@@ -172,14 +178,26 @@ impl Dim {
     }
 }
 
-/// The phone layout: single pane, bottom navigation, larger controls. On Android, and on the desktop
-/// with `FLIPFLOP_PHONE_LAYOUT=1` (to try it without a phone).
+/// Up to this width a window gets the phone layout; wider, the sidebar. Logical pixels, as the
+/// window reports them, so it is the same number on a phone and on a narrow desktop window.
+pub const PHONE_MAX_WIDTH: f32 = 700.;
+
+/// Whether a window this wide gets the phone layout: one pane, an app bar and bottom navigation.
+/// The width alone decides.
+pub fn phone(width: f32) -> bool {
+    width < PHONE_MAX_WIDTH
+}
+
+/// `FLIPFLOP_PHONE_LAYOUT=1` forces the phone layout in a wide window, to try it.
+pub fn forced_phone() -> bool {
+    static FORCED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FORCED.get_or_init(|| std::env::var_os("FLIPFLOP_PHONE_LAYOUT").is_some_and(|v| v == "1"))
+}
+
+/// A touch screen (Android): the app picker rather than the desktop's folder picker, and a button
+/// where a right click would be.
 pub fn touch() -> bool {
-    static TOUCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *TOUCH.get_or_init(|| {
-        cfg!(target_os = "android")
-            || std::env::var_os("FLIPFLOP_PHONE_LAYOUT").is_some_and(|v| v == "1")
-    })
+    cfg!(target_os = "android")
 }
 
 /// The look in use, provided at the root.
@@ -194,4 +212,17 @@ pub fn look() -> (Palette, Dim) {
     let look = consume_context::<State<Look>>();
     let look = *look.read();
     (look.palette, look.dim)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_layout_comes_from_the_width() {
+        assert!(phone(412.));
+        assert!(phone(PHONE_MAX_WIDTH - 0.5));
+        assert!(!phone(PHONE_MAX_WIDTH));
+        assert!(!phone(960.));
+    }
 }

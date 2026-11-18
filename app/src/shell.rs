@@ -27,10 +27,16 @@ impl Component for Shell {
         };
         let ui = nav.ui.read();
         let page = ui.page.clone();
-        let touch = d.touch;
+        let phone = d.phone;
 
         let on_back = move |e: Event<KeyboardEventData>| {
-            if e.key != Key::Named(NamedKey::BrowserBack) {
+            // The phone's hardware Back, or the desktop's Alt+Left (as in a browser). Escape is left
+            // to menus and text fields.
+            let back = e.key == Key::Named(NamedKey::BrowserBack)
+                || (cfg!(not(target_os = "android"))
+                    && e.key == Key::Named(NamedKey::ArrowLeft)
+                    && e.modifiers.contains(Modifiers::ALT));
+            if !back {
                 return;
             }
             // While a field is being edited, Back puts the keyboard away, as in any other app on
@@ -49,7 +55,8 @@ impl Component for Shell {
             .width(Size::flex(1.))
             .height(Size::fill())
             .child(match page {
-                _ if scanning && !touch => ScanView.into_element(),
+                // The webcam view is the desktop's way of scanning; Android uses its scanner activity.
+                _ if scanning && cfg!(not(target_os = "android")) => ScanView.into_element(),
                 Page::Home => HomePage.into_element(),
                 Page::Groups => GroupsPage.into_element(),
                 Page::Group(id) => GroupPage { id }.into_element(),
@@ -81,25 +88,28 @@ impl Component for Shell {
                     let _ = e;
                 })
             })
-            .maybe(!touch, |el| el.child(ContextMenuViewer::new()))
-            .maybe(touch, |el| el.child(AppBar))
+            // Right-click menus are the desktop's, whichever layout the width picks.
+            .maybe(cfg!(not(target_os = "android")), |el| {
+                el.child(ContextMenuViewer::new())
+            })
+            .maybe(phone, |el| el.child(AppBar))
             .child(
                 rect()
                     .horizontal()
                     .width(Size::fill())
                     .height(Size::flex(1.))
                     .content(Content::flex())
-                    .maybe(!touch, |el| el.child(Sidebar))
+                    .maybe(!phone, |el| el.child(Sidebar))
                     .child(content),
             )
-            .maybe(touch, |el| el.child(BottomNav))
+            .maybe(phone, |el| el.child(BottomNav))
             .map(ui.toast.clone(), |el, (_, text)| {
                 el.child(
                     rect()
                         .layer(Layer::Overlay)
                         .position(
                             Position::new_global()
-                                .bottom(if touch { 80. } else { 24. } + insets[3]),
+                                .bottom(if phone { 80. } else { 24. } + insets[3]),
                         )
                         .width(Size::window_percent(100.))
                         .cross_align(Alignment::Center)

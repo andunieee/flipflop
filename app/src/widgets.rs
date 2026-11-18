@@ -415,7 +415,7 @@ impl Component for IconButton {
                 e.stop_propagation();
                 on_press.call(());
             })
-            .child(icon(self.icon, if d.touch { 20. } else { 17. }, ink))
+            .child(icon(self.icon, if d.phone { 20. } else { 17. }, ink))
     }
 }
 
@@ -627,7 +627,7 @@ pub fn area(
         .placeholder(placeholder)
         .multiline(true)
         .width(Size::fill())
-        .height(Size::px(if d.touch { 96. } else { 72. }))
+        .height(Size::px(if d.phone { 96. } else { 72. }))
 }
 
 /// Text to select and copy (tickets, links), in a field-like box.

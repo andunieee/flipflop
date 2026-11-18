@@ -4,12 +4,12 @@ use std::path::PathBuf;
 
 use freya::prelude::*;
 
-use crate::backend::Backend;
+use crate::{backend::Backend, theme::Look};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Page {
     Home,
-    /// The list of groups (phones; the desktop lists them in the sidebar).
+    /// The list of groups, where there is no sidebar to list them in (phones and narrow windows).
     Groups,
     /// A group's page, or a paired peer's (its implied group).
     Group(String),
@@ -166,24 +166,27 @@ impl Ui {
 pub struct Nav {
     pub ui: State<Ui>,
     backend: State<Backend>,
+    /// Where the phone layout is decided, from the window width.
+    look: State<Look>,
 }
 
 impl Nav {
-    pub fn new(ui: State<Ui>, backend: State<Backend>) -> Self {
-        Self { ui, backend }
+    pub fn new(ui: State<Ui>, backend: State<Backend>, look: State<Look>) -> Self {
+        Self { ui, backend, look }
     }
 
     pub fn backend(&self) -> Backend {
         self.backend.peek().clone()
     }
 
-    pub fn touch(&self) -> bool {
-        crate::theme::touch()
+    /// The phone layout: one pane, an app bar and bottom navigation (a narrow window).
+    pub fn phone(&self) -> bool {
+        self.look.peek().dim.phone
     }
 
-    /// Where leaving a group goes: the groups list on phones, Home on the desktop (which has no list page).
+    /// Where leaving a group goes: the groups list when there is no sidebar, Home when there is.
     pub fn list_page(&self) -> Page {
-        if self.touch() {
+        if self.phone() {
             Page::Groups
         } else {
             Page::Home
