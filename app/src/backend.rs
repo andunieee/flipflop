@@ -303,13 +303,6 @@ impl Backend {
         });
     }
 
-    /// Run `save` once typing in `field` pauses. Every keystroke calls this; only the last value of
-    /// a burst is saved, so typing does not hit the disk (and the peers) once per character.
-    fn typed(&self, field: String, save: impl FnOnce(&Core) + Send + 'static) {
-        let Some(core) = self.core() else { return };
-        self.after_typing(field, TYPING_PAUSE, move || save(&core));
-    }
-
     /// Run `f` once typing in `field` pauses for `after`. Every keystroke calls this; only the last
     /// one's `f` runs, so typing does not hit the disk (and the peers) once per character.
     pub(crate) fn after_typing(

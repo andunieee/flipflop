@@ -619,7 +619,7 @@ pub fn field(
 /// A multi-line text field (snippets).
 pub fn area(
     value: impl IntoReadable<String>,
-    placeholder: &'static str,
+    placeholder: impl Into<std::borrow::Cow<'static, str>>,
     on_change: impl FnMut(String) + 'static,
 ) -> Input {
     let (_, d) = look();

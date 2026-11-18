@@ -18,10 +18,11 @@ path = "src/main.rs"
 [dependencies]
 flipflop = { path = ".." }
 ciborium = "0.2"
-hypereffect = "=0.6.1"
+hypereffect = "=0.6.3"
+freya-hypereffect = "0.1.1"
 base64 = "0.22"
-freya = { git = "https://github.com/marc2332/freya", rev = "e506b09328e52cc0ab10d0adbef7dbd3ce0f063e", features = ["radio", "engine"] }
-freya-winit = { git = "https://github.com/marc2332/freya", rev = "e506b09328e52cc0ab10d0adbef7dbd3ce0f063e" }
+freya = { version = "0.6.0-alpha", features = ["radio", "engine"] }
+freya-winit = "0.6.0-alpha"
 iroh = "1.4.1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 anyhow = "1"
@@ -31,7 +32,7 @@ bytes = "1"
 libloading = "0.8"
 
 [dev-dependencies]
-freya-testing = { git = "https://github.com/marc2332/freya", rev = "e506b09328e52cc0ab10d0adbef7dbd3ce0f063e" }
+freya-testing = "0.6.0-alpha"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
