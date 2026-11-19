@@ -272,7 +272,7 @@ impl Component for FileCard {
         let f = &self.file;
         let backend = nav.backend();
         let downloading = f.progress.is_some() && !f.preparing;
-        let can_download = !f.mine && !f.have && !f.stopped && !downloading && f.source_online;
+        let can_download = downloadable(f);
         let (done, total) = f.progress.unwrap_or((0, f.size));
         let progress = if total == 0 {
             0.
@@ -563,6 +563,14 @@ impl Component for FileCard {
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
     }
+}
+
+/// Whether a file's card offers its Download (or Retry) button: it is someone else's, not here
+/// yet, still offered, not moving, and either someone who has it is online or it is on hold — a
+/// held file is only fetched again when asked for, so it keeps the button even with nobody online.
+fn downloadable(f: &FileView) -> bool {
+    let downloading = f.progress.is_some() && !f.preparing;
+    !f.mine && !f.have && !f.stopped && !downloading && (f.source_online || f.on_hold)
 }
 
 /// Pictures bigger than this keep their icon: decoding them would take too long.
@@ -859,6 +867,40 @@ fn text_card(t: &TextView, gid: &str, nav: Nav) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_on_hold_offers_download() {
+        // Held: nobody who has it may be online, but it is the only way to ask for it again.
+        let held = FileView {
+            on_hold: true,
+            ..FileView::default()
+        };
+        assert!(downloadable(&held));
+        let online = FileView {
+            source_online: true,
+            ..FileView::default()
+        };
+        assert!(downloadable(&online));
+        // Nothing to fetch from and not held: the card only says the sender is offline.
+        assert!(!downloadable(&FileView::default()));
+        // Already moving, or ours, or here: no button.
+        let moving = FileView {
+            progress: Some((1, 2)),
+            source_online: true,
+            ..FileView::default()
+        };
+        assert!(!downloadable(&moving));
+        let mine = FileView {
+            mine: true,
+            ..FileView::default()
+        };
+        assert!(!downloadable(&mine));
+        let have = FileView {
+            have: true,
+            ..FileView::default()
+        };
+        assert!(!downloadable(&have));
+    }
 
     #[test]
     fn drafts_are_kept_per_group_until_sent() {
