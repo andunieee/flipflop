@@ -188,8 +188,9 @@ public class FlipflopActivity extends android.app.NativeActivity {
         bridge.setBackground(null);
         bridge.setAlpha(0f);
         bridge.setCursorVisible(false);
+        // Focusable only while the pad uses it (startImeBridge). A focusable bridge takes the focus
+        // when the first key leaves touch mode, and the IME then types into it for any field.
         bridge.setFocusable(false);
-        bridge.setFocusableInTouchMode(true);
         bridge.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         bridge.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -207,6 +208,7 @@ public class FlipflopActivity extends android.app.NativeActivity {
             if (imeBridge == null) addImeBridge();
             if (imeBridge == null) return;
             imeBridge.setFocusable(true);
+            imeBridge.setFocusableInTouchMode(true);
             imeBridge.requestFocus();
             InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
             if (imm != null) imm.showSoftInput(imeBridge, 0);
