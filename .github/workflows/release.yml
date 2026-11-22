@@ -87,13 +87,20 @@ jobs:
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
           cp linux/flipflop-linux-x86_64-v${version}.tar.gz packaging/flatpak/flipflop.tar.gz
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-        with:
-          bundle: flipflop-linux-x86_64-v${{ steps.stage.outputs.version }}.flatpak
-          manifest-path: packaging/flatpak/dev.flipflop.app.yml
-          cache-key: flatpak-builder-${{ github.sha }}
-          arch: x86_64
-          upload-artifact: false
+      # The image's own system installation is a read-only lower overlay layer. When Flathub publishes a newer
+      # 25.08 than the image has, installing into it updates it in place, and ostree cannot rename a directory
+      # there: "Invalid cross-device link" (EXDEV), before anything is built. A user installation starts empty
+      # in the writable layer, so --user installs the SDK and runtime there instead.
+      - name: Build the bundle
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --user --repo=repo --disable-rofiles-fuse --install-deps-from=flathub \
+            --force-clean --default-branch=master --arch=x86_64 --state-dir=.flatpak-builder \
+            flatpak_app packaging/flatpak/dev.flipflop.app.yml
+          flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo --arch=x86_64 \
+            repo "flipflop-linux-x86_64-v${version}.flatpak" dev.flipflop.app master
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak
