@@ -1,9 +1,10 @@
 //! The group's tabs, which any member shows or hides for everyone (they live in the document): the
 //! built-in ones, and apps. An app is a wasm file on offer in the group, hidden from the files tab.
 //! Every member fetches it while its tab is on, keeps it in the apps folder (named after its hash,
-//! so one copy serves every group) and serves it to the others in turn.
+//! so one copy serves every group) and serves it to the others in turn. An app comes from a file, a
+//! link, or another of our groups.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 
@@ -22,6 +23,20 @@ pub struct AppDraft {
     /// The file's name.
     pub file_name: String,
     pub form: AppParams,
+}
+
+/// An app we hold and use in some group, which another group can have without fetching it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedApp {
+    /// blake3 of the wasm, its name in the apps folder.
+    pub hash: String,
+    /// Its tab's name, as the app named it (or as it was named after its file).
+    pub name: String,
+    /// The name of the wasm's file.
+    pub file_name: String,
+    pub size: u64,
+    /// The groups it is in.
+    pub groups: Vec<String>,
 }
 
 /// The kind of an app's offer in the group's files.
@@ -64,12 +79,117 @@ impl Core {
         if path.to_str().is_some_and(|p| p.starts_with("content://")) {
             crate::platform::release_content_uri(&path.to_string_lossy());
         }
+        self.draft_app(file_name, bytes).await
+    }
+
+    /// Download the wasm module at `url` (http or https), keep a copy of it, and ask it what it
+    /// takes, as [`Core::prepare_app`] does with a file.
+    pub async fn prepare_app_url(&self, url: &str) -> Result<AppDraft> {
+        let url = reqwest::Url::parse(url.trim()).context("that is not a link")?;
+        if !matches!(url.scheme(), "http" | "https") {
+            bail!("only http and https links can be downloaded");
+        }
+        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()?
+        .with_root_certificates(rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        })
+        .with_no_client_auth();
+        let client = reqwest::Client::builder()
+            .tls_backend_preconfigured(tls)
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(120))
+            .build()?;
+        let mut response = client
+            .get(url.clone())
+            .send()
+            .await
+            .with_context(|| format!("cannot download {url}"))?
+            .error_for_status()?;
+        if response.content_length().is_some_and(|n| n > MAX_APP_BYTES) {
+            bail!("that is too big for an app");
+        }
+        // Named after the last part of the path, where it was redirected to.
+        let file_name = response
+            .url()
+            .path_segments()
+            .and_then(|mut s| s.next_back())
+            .filter(|s| !s.is_empty())
+            .map_or_else(|| "app.wasm".to_owned(), super::sharing::clean_file_name);
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() as u64 > MAX_APP_BYTES {
+                bail!("{file_name} is too big for an app");
+            }
+        }
+        self.draft_app(file_name, bytes).await
+    }
+
+    /// The apps we hold that are in any of our groups, one per wasm, the latest added first: to add
+    /// one of them to another group without fetching it again (see [`Core::prepare_saved_app`]).
+    pub fn saved_apps(&self) -> Vec<SavedApp> {
+        let mut saved: Vec<(i64, SavedApp)> = Vec::new();
+        for group in self.groups().groups {
+            let Some((tabs, files)) = self.with_group_doc(&group.id, |d| (d.tabs(), d.files()))
+            else {
+                continue;
+            };
+            for app in tabs.into_iter().filter_map(|t| t.app) {
+                if !self.app_path(&app.hash).exists() {
+                    continue;
+                }
+                if let Some((_, s)) = saved.iter_mut().find(|(_, s)| s.hash == app.hash) {
+                    if !s.groups.contains(&group.id) {
+                        s.groups.push(group.id.clone());
+                    }
+                    continue;
+                }
+                let file_name = files
+                    .iter()
+                    .find(|f| f.id == app.file)
+                    .map_or_else(|| format!("{}.wasm", app.name), |f| f.name.clone());
+                let name = app
+                    .name
+                    .strip_suffix(".wasm")
+                    .unwrap_or(&app.name)
+                    .to_owned();
+                saved.push((
+                    app.ts,
+                    SavedApp {
+                        hash: app.hash,
+                        name,
+                        file_name,
+                        size: app.size,
+                        groups: vec![group.id.clone()],
+                    },
+                ));
+            }
+        }
+        saved.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+        saved.into_iter().map(|(_, s)| s).collect()
+    }
+
+    /// Ask a saved app (one of [`Core::saved_apps`]) what it takes, to add it to another group.
+    pub async fn prepare_saved_app(&self, app: &SavedApp) -> Result<AppDraft> {
+        let bytes = tokio::fs::read(self.app_path(&app.hash))
+            .await
+            .with_context(|| format!("{} is not saved anymore", app.name))?;
+        self.draft_app(app.file_name.clone(), bytes).await
+    }
+
+    /// Check that `bytes` are a wasm module, keep them in the apps folder, and ask the app what it
+    /// takes.
+    async fn draft_app(&self, file_name: String, bytes: Vec<u8>) -> Result<AppDraft> {
         if bytes.len() as u64 > MAX_APP_BYTES {
             bail!("{file_name} is too big for an app");
         }
         if !bytes.starts_with(b"\0asm") {
             bail!("{file_name} is not a WebAssembly module");
         }
+        // Hashed here, whatever its file is called: it is offered to the group by this hash.
         let hash = blake3::hash(&bytes).to_hex().to_string();
         let size = bytes.len() as u64;
         let local = self.app_path(&hash);

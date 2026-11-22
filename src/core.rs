@@ -46,7 +46,7 @@ pub use sharing::{
     AppView, DocMember, FileView, GroupView, SendView, TabView, TextView, TransferItem,
     TransfersNow, open_source,
 };
-pub use tabs::AppDraft;
+pub use tabs::{AppDraft, SavedApp};
 pub use unseen::Unseen;
 
 pub const ALPN: &[u8] = b"flipflop/0";

@@ -1326,13 +1326,13 @@ fn tabs_section(
     rows.push(
         Btn::secondary("Add an app")
             .icon(Icon::Apps)
-            .on_press(move |_| nav.pick("wasm"))
+            .on_press(move |_| nav.add_app())
             .into_element(),
     );
     vec![
         overline("TABS").into_element(),
         card().child(card_body(Dim::SPACE2).children(rows)).into_element(),
-        hint("Tabs are the same for everyone in the group, and anyone can show or hide them. An app is a WebAssembly file: every device fetches it and shares it with the others.").into_element(),
+        hint("Tabs are the same for everyone in the group, and anyone can show or hide them. An app is a WebAssembly file, from your device, a link or another group: every device fetches it and shares it with the others.").into_element(),
     ]
 }
 

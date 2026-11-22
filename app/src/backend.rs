@@ -394,6 +394,31 @@ impl Backend {
         });
     }
 
+    /// Download the wasm at `url`; its form opens when it is known what the app asks.
+    pub fn prepare_app_url(&self, gid: String, url: String) {
+        let Some(core) = self.core() else { return };
+        let this = self.clone();
+        self.notice("Downloading the app…");
+        self.0.rt.spawn(async move {
+            match core.prepare_app_url(&url).await {
+                Ok(draft) => this.send(Msg::AppDraft { gid, draft }),
+                Err(err) => this.notice(format!("{err:#}")),
+            }
+        });
+    }
+
+    /// Add an app of another group (one of `Core::saved_apps`) to `gid`; its form opens first.
+    pub fn prepare_saved_app(&self, gid: String, app: flipflop::core::SavedApp) {
+        let Some(core) = self.core() else { return };
+        let this = self.clone();
+        self.0.rt.spawn(async move {
+            match core.prepare_saved_app(&app).await {
+                Ok(draft) => this.send(Msg::AppDraft { gid, draft }),
+                Err(err) => this.notice(format!("{err:#}")),
+            }
+        });
+    }
+
     /// Add the app to the group, with the answers `values` to its form.
     pub fn add_app(&self, gid: String, draft: flipflop::core::AppDraft, values: Vec<String>) {
         self.spawn(Some("App added to the group"), move |core| async move {

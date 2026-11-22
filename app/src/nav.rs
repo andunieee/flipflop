@@ -37,6 +37,16 @@ pub struct AppForm {
     pub values: Vec<String>,
 }
 
+/// Where to add an app from, while that sheet is open: a link, a file, or one of the apps of our
+/// other groups.
+#[derive(Clone, PartialEq)]
+pub struct AppSource {
+    pub gid: String,
+    /// The link typed so far.
+    pub url: String,
+    pub saved: Vec<flipflop::core::SavedApp>,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum EditKind {
     /// This device: its name is not an alias, it is what everybody else calls it.
@@ -102,6 +112,8 @@ pub struct Ui {
     /// The group whose page is showing: it counts as looked at.
     viewed: Option<String>,
     pub edit: Option<Edit>,
+    /// Where to add an app from, while that sheet is open.
+    pub app_source: Option<AppSource>,
     /// The app being added, while its form is open.
     pub app_form: Option<AppForm>,
     /// The installed apps to share, while that picker is open (Android).
@@ -135,6 +147,7 @@ impl Ui {
             group_tab: "files".into(),
             viewed: None,
             edit: None,
+            app_source: None,
             app_form: None,
             apps: None,
             share: None,
@@ -325,6 +338,8 @@ impl Nav {
             ui.apps = None;
         } else if ui.app_form.is_some() {
             ui.app_form = None;
+        } else if ui.app_source.is_some() {
+            ui.app_source = None;
         } else if ui.edit.is_some() {
             ui.edit = None;
         } else if scanning {
@@ -352,6 +367,23 @@ impl Nav {
         if let Some(gid) = self.ui.peek().open_group() {
             self.backend().pick(gid.into(), kind);
         }
+    }
+
+    /// Ask where to add an app to the open group from.
+    pub fn add_app(mut self) {
+        let Some(gid) = self.ui.peek().open_group().map(str::to_owned) else {
+            return;
+        };
+        let saved = self
+            .backend()
+            .core()
+            .map(|core| core.saved_apps())
+            .unwrap_or_default();
+        self.ui.write().app_source = Some(AppSource {
+            gid,
+            url: String::new(),
+            saved,
+        });
     }
 
     /// "system" | "light" | "dark", kept in the data dir.

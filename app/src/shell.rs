@@ -125,6 +125,7 @@ impl Component for Shell {
                 )
             })
             .maybe(ui.edit.is_some(), |el| el.child(EditDialog))
+            .maybe(ui.app_source.is_some(), |el| el.child(AppSourceSheet))
             .maybe(ui.app_form.is_some(), |el| el.child(AppDialog))
             .maybe(ui.apps.is_some(), |el| el.child(AppPicker))
             .maybe(ui.share.is_some(), |el| el.child(SharePicker))
@@ -816,6 +817,112 @@ impl Component for EditDialog {
                             )
                         }),
                 ),
+        )
+    }
+}
+
+/// Where to add an app from: a link, a file on this device, or an app one of our groups has.
+#[derive(PartialEq)]
+struct AppSourceSheet;
+
+impl Component for AppSourceSheet {
+    fn render(&self) -> impl IntoElement {
+        let (c, d) = look();
+        let nav = use_consume::<Nav>();
+        let mut ui = nav.ui;
+        let Some(source) = ui.read().app_source.clone() else {
+            return rect();
+        };
+        let download = {
+            let (gid, url) = (source.gid.clone(), source.url.clone());
+            move || {
+                if url.trim().is_empty() {
+                    return;
+                }
+                ui.write().app_source = None;
+                nav.backend().prepare_app_url(gid.clone(), url.clone());
+            }
+        };
+        let link =
+            card().child(
+                card_body(Dim::SPACE2)
+                    .child(txt("From a link", d.font_md(), c.text_strong, 650))
+                    .child(
+                        field(
+                            source.url.clone(),
+                            "https://…/app.wasm",
+                            move |text: String| {
+                                if let Some(s) = &mut ui.write().app_source {
+                                    s.url = text;
+                                }
+                            },
+                        )
+                        .auto_focus(!d.phone)
+                        .on_submit({
+                            let mut download = download.clone();
+                            move |_| download()
+                        }),
+                    )
+                    .child(
+                        rect()
+                            .horizontal()
+                            .spacing(Dim::SPACE2)
+                            .child(Btn::primary("Download").on_press({
+                                let mut download = download.clone();
+                                move |_| download()
+                            }))
+                            .child(Btn::secondary("Paste").icon(Icon::Clipboard).on_press(
+                                move |_| {
+                                    if let Some(s) = &mut ui.write().app_source {
+                                        s.url = flipflop::platform::paste_text().trim().to_owned();
+                                    }
+                                },
+                            )),
+                    ),
+            );
+        let file = Btn::secondary("Choose a file")
+            .icon(Icon::File)
+            .on_press(move |_| {
+                ui.write().app_source = None;
+                nav.pick("wasm");
+            });
+        let mut list = vec![link.into_element(), file.into_element()];
+        if !source.saved.is_empty() {
+            list.push(overline("FROM YOUR GROUPS").into_element());
+        }
+        for app in source.saved {
+            let here = app.groups.contains(&source.gid);
+            let others = app.groups.len() - usize::from(here);
+            let detail = match (here, others) {
+                (true, 0) => "in this group".to_owned(),
+                (true, n) => format!("in this group and {n} more"),
+                (false, 1) => "in another group".to_owned(),
+                (false, n) => format!("in {n} other groups"),
+            };
+            let detail = format!("{} · {detail}", flipflop::format::size(app.size));
+            let (gid, label) = (source.gid.clone(), app.name.clone());
+            list.push(
+                ClickCard::new(move |_| {
+                    ui.write().app_source = None;
+                    nav.backend().prepare_saved_app(gid.clone(), app.clone());
+                })
+                .child(
+                    card_body(2.)
+                        .padding(Dim::SPACE3)
+                        .child(txt(label, d.font_md(), c.text_strong, 650).elide())
+                        .child(txt(detail, d.font_xs(), c.text_muted, 400).elide()),
+                )
+                .into_element(),
+            );
+        }
+        scrim(
+            move |_| ui.write().app_source = None,
+            list_sheet(
+                txt("Add an app", d.font_xl(), c.text_strong, 700),
+                move |_| ui.write().app_source = None,
+                list,
+                String::new(),
+            ),
         )
     }
 }

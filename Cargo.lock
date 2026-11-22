@@ -2364,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "flipflop"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -2397,7 +2397,9 @@ dependencies = [
  "n0-watcher",
  "open",
  "qrcode",
+ "reqwest",
  "rqrr",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",
@@ -2406,6 +2408,7 @@ dependencies = [
  "tracing-subscriber",
  "wasmi",
  "wat",
+ "webpki-roots",
  "zip",
 ]
 

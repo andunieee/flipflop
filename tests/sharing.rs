@@ -399,6 +399,34 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
     assert!(a.group_view(&gid).unwrap().files.is_empty());
     assert!(b.group_view(&gid).unwrap().files.is_empty());
 
+    // Bob adds the app he fetched to a group of his own, from his copy.
+    let saved = b.saved_apps();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        (
+            saved[0].hash.as_str(),
+            saved[0].name.as_str(),
+            saved[0].file_name.as_str()
+        ),
+        (hash.as_str(), named.as_str(), "chess.wasm")
+    );
+    assert_eq!(saved[0].groups, [gid.clone()]);
+    let other = b.create_group();
+    let again = b.prepare_saved_app(&saved[0]).await.unwrap();
+    assert_eq!(
+        (again.hash.as_str(), again.size),
+        (hash.as_str(), draft.size)
+    );
+    let reused = b.add_app(&other, &again, &[]).await.unwrap();
+    assert!(
+        b.group_view(&other).unwrap().tabs.iter().any(|t| {
+            t.id == reused && t.app.as_ref().is_some_and(|a| a.ready && a.hash == hash)
+        })
+    );
+    let saved = b.saved_apps();
+    assert_eq!(saved.len(), 1, "one wasm, in two groups");
+    assert_eq!(saved[0].groups.len(), 2);
+
     b.set_tab(&gid, &id, false).unwrap();
     until("alice sees the app hidden", || {
         tabs(&a).last() == Some(&(named.clone(), false))
@@ -412,6 +440,56 @@ async fn tabs_are_shared_and_apps_reach_everyone() {
 
     a.shutdown().await;
     b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn apps_are_downloaded_from_links() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (a, _da) = node("alice").await;
+    let wasm = b"\0asm\x01\0\0\0".to_vec();
+    // Serves the wasm at /dist/poll.wasm, anything else is a 404.
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = server.local_addr().unwrap();
+    let body = wasm.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = server.accept().await.unwrap();
+            let mut head = vec![0; 4096];
+            let n = stream.read(&mut head).await.unwrap();
+            let head = String::from_utf8_lossy(&head[..n]).into_owned();
+            let reply = if head.starts_with("GET /dist/poll.wasm ") {
+                let mut r = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .into_bytes();
+                r.extend_from_slice(&body);
+                r
+            } else {
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+            };
+            stream.write_all(&reply).await.unwrap();
+        }
+    });
+
+    let draft = a
+        .prepare_app_url(&format!("http://{addr}/dist/poll.wasm"))
+        .await
+        .unwrap();
+    assert_eq!(draft.file_name, "poll.wasm");
+    assert_eq!(draft.hash, blake3::hash(&wasm).to_hex().to_string());
+    assert!(
+        a.prepare_app_url(&format!("http://{addr}/gone.wasm"))
+            .await
+            .is_err()
+    );
+    assert!(a.prepare_app_url("file:///etc/passwd").await.is_err());
+    assert!(a.prepare_app_url("not a link").await.is_err());
+    let gid = a.create_group();
+    a.add_app(&gid, &draft, &[]).await.unwrap();
+    assert_eq!(a.saved_apps().len(), 1);
+
+    a.shutdown().await;
 }
 
 /// A plain HTTP/1.1 GET (with an optional Range): the response head and the body.
