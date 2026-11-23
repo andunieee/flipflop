@@ -10,7 +10,7 @@
     <p>FlipFlop connects your devices directly, over the local network, Bluetooth or the internet, with no account and no server in the middle. Make groups, offer files, paste texts and edit a shared scratchpad. Guests can join a group from a browser with a link.</p>
   </description>
   <launchable type="desktop-id">dev.flipflop.app.desktop</launchable>
-  <url type="homepage">https://github.com/andunieee/flipflop</url>
+  <url type="homepage">https://flipflop.name</url>
   <url type="bugtracker">https://github.com/andunieee/flipflop/issues</url>
   <content_rating type="oars-1.1" />
   <releases>

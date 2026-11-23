@@ -1,17 +1,19 @@
 name: Pages
 
-# The guest page for links from anywhere (web/): src/core/guest/page.html plus the group document and iroh in wasm.
-# Needs Settings → Pages → Source: "GitHub Actions". The site at https://andunieee.github.io/flipflop/ is:
+# Publishes the website (site/, at https://flipflop.name/) and the guest page for links from anywhere (web/:
+# src/core/guest/page.html plus the group document and iroh in wasm).
+# Needs Settings → Pages → Source: "GitHub Actions". The site is:
+#   /               the FlipFlop landing page (site/)
 #   guest/vX.Y.Z/   one copy per release tag, built from that tag: what an app of that version links to
-#                   (src/core/guest.rs)
-#   /               an older build of the guest page, kept as it is for the apps that link to it. It is not in
-#                   this repository: every deploy replaces the whole site, so it is downloaded from the live
-#                   site and published again unchanged (ROOT_FILES below). Remove that step when the root
-#                   becomes a documentation site.
-# The earlier guest/ versions are brought back the same way.
+#                   (src/core/guest.rs). Earlier guest/ versions are fetched from the live site so every
+#                   deploy keeps them available.
 
 on:
   push:
+    branches: ["master"]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
     tags: ["v*"]
   workflow_dispatch: # redeploys the site as it is, without a new version
 
@@ -25,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ROOT_FILES: index.html sw.js flipflop_web.js flipflop_web_bg.wasm
+  GUEST_FILES: index.html sw.js flipflop_web.js flipflop_web_bg.wasm
 
 jobs:
   build:
@@ -72,38 +74,42 @@ jobs:
 
       - name: Assemble the site
         env:
-          SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          SITE: https://flipflop.name
+          FALLBACK_SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
         run: |
           set -eu
-          mkdir -p site/guest
-          # fetch <path in the site> <file>: from the live site; fails the deploy rather than dropping a file
-          fetch() { mkdir -p "site/$1"; curl -fsSL "$SITE/$1${1:+/}$2" -o "site/$1${1:+/}$2"; }
+          mkdir -p _site/guest
+          cp -r site/* _site/
 
-          # the page that is already at the root, untouched
-          for f in $ROOT_FILES; do fetch "" "$f"; done
+          # fetch <path in the site> <file>: from the live site (or fallback github.io URL)
+          fetch() {
+            mkdir -p "_site/$1"
+            curl -fsSL "$SITE/$1${1:+/}$2" -o "_site/$1${1:+/}$2" 2>/dev/null \
+              || curl -fsSL "$FALLBACK_SITE/$1${1:+/}$2" -o "_site/$1${1:+/}$2"
+          }
 
           # this release
           if [ "${GITHUB_REF_TYPE}" = tag ]; then
-            mkdir -p "site/guest/${GITHUB_REF_NAME}"
-            cp build/* "site/guest/${GITHUB_REF_NAME}/"
+            mkdir -p "_site/guest/${GITHUB_REF_NAME}"
+            cp build/* "_site/guest/${GITHUB_REF_NAME}/"
           fi
 
           # the earlier releases; the names come from the remote, since only the pushed tag is in this clone
           tags="$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/##')"
           for tag in $tags; do
-            [ -d "site/guest/$tag" ] && continue
+            [ -d "_site/guest/$tag" ] && continue
             ok=1
-            for f in $ROOT_FILES; do fetch "guest/$tag" "$f" 2>/dev/null || { ok=0; break; }; done
+            for f in $GUEST_FILES; do fetch "guest/$tag" "$f" 2>/dev/null || { ok=0; break; }; done
             if [ $ok = 0 ]; then
               echo "::warning::$tag is not published yet, skipping it"
-              rm -rf "site/guest/$tag"
+              rm -rf "_site/guest/$tag"
             fi
           done
-          find site -type f | sort
+          find _site -type f | sort
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
 
   deploy:
     needs: build

@@ -49,7 +49,7 @@ const LAN_PORT: u16 = 53530;
 /// Where the page for links from anywhere is published (GitHub Pages): one copy per release, so a link opens
 /// the page built from the same source as the app that made it (see .github/workflows/pages.yml).
 const WEB_PAGE: &str = concat!(
-    "https://andunieee.github.io/flipflop/guest/v",
+    "https://flipflop.name/guest/v",
     env!("CARGO_PKG_VERSION"),
     "/"
 );

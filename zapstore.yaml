@@ -8,7 +8,7 @@ summary: Share files, texts and a scratchpad with your devices, peer to peer
 description: |
   FlipFlop connects your devices directly, over the local network, Bluetooth or the internet, with no account and no server in the middle. Make groups, offer files, paste texts and edit a shared scratchpad. Guests can join a group from a browser with a link.
 license: AGPL-3.0-or-later
-website: https://github.com/andunieee/flipflop
+website: https://flipflop.name
 icon: packaging/icons/512.png
 tags:
   - p2p
