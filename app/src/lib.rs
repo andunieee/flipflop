@@ -137,6 +137,7 @@ fn apply(
     match msg {
         Msg::Ready { core, download_dir } => {
             let mut m = station.write_channel(Channel::Me);
+            m.id = core.me_id();
             m.core = Some(core);
             m.download_dir = download_dir;
         }

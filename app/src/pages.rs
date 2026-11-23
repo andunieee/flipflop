@@ -703,6 +703,24 @@ impl Component for NameCard {
     }
 }
 
+/// A label on the left, a short value on the right (version, platform).
+fn meta_row(label: &str, value: impl Into<String>) -> Rect {
+    let (c, d) = look();
+    rect()
+        .horizontal()
+        .width(Size::fill())
+        .content(Content::flex())
+        .spacing(Dim::SPACE3)
+        .cross_align(Alignment::Center)
+        .child(txt(label, d.font_sm(), c.text_muted, 400))
+        .child(
+            txt(value, d.font_sm(), c.text_strong, 550)
+                .width(Size::flex(1.))
+                .text_align(TextAlign::End)
+                .elide(),
+        )
+}
+
 #[derive(PartialEq)]
 pub struct SettingsPage;
 
@@ -711,12 +729,18 @@ impl Component for SettingsPage {
         let (c, d) = look();
         let nav = use_consume::<Nav>();
         let me = use_radio::<Model, Channel>(Channel::Me);
-        let (my_name, download_dir, ble_status) = {
+        let (my_name, my_id, download_dir, ble_status) = {
             let m = me.read();
-            (m.name.clone(), m.download_dir.clone(), m.ble_status.clone())
+            (
+                m.name.clone(),
+                m.id.clone(),
+                m.download_dir.clone(),
+                m.ble_status.clone(),
+            )
         };
         let theme = nav.ui.read().theme.clone();
         let section = |title: &str| txt(title, d.font_md(), c.text_strong, 650);
+        let theme_nav = nav.clone();
         scroll_page(vec![
             page_title("Settings", "").into_element(),
             NameCard { name: my_name }.into_element(),
@@ -731,7 +755,7 @@ impl Component for SettingsPage {
                                 ("dark".into(), "Dark".into()),
                             ],
                             theme,
-                            move |t: String| nav.set_theme(&t),
+                            move |t: String| theme_nav.set_theme(&t),
                         )),
                 )
                 .into_element(),
@@ -756,6 +780,36 @@ impl Component for SettingsPage {
                             c.text_muted,
                             400,
                         )),
+                )
+                .into_element(),
+            card()
+                .child(
+                    card_body(Dim::SPACE2)
+                        .child(section("About"))
+                        .child(meta_row("Version", flipflop::VERSION))
+                        .child(meta_row(
+                            "Platform",
+                            format!("{} · {}", std::env::consts::OS, std::env::consts::ARCH),
+                        ))
+                        .child(divider())
+                        .child(
+                            rect()
+                                .spacing(Dim::SPACE1)
+                                .child(txt("Device key", d.font_sm(), c.text_muted, 400))
+                                .child(hint(
+                                    "This device's public key. Other devices use it to tell this one apart.",
+                                ))
+                                .child(copyable(if my_id.is_empty() {
+                                    "…".to_owned()
+                                } else {
+                                    my_id.clone()
+                                })),
+                        )
+                        .child(
+                            Btn::secondary("Copy device key")
+                                .icon(Icon::Copy)
+                                .on_press(move |_| copy(nav, &my_id)),
+                        ),
                 )
                 .into_element(),
         ])

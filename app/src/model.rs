@@ -13,6 +13,8 @@ use freya::radio::*;
 pub struct Model {
     pub core: Option<Core>,
     pub name: String,
+    /// This device's public key (the endpoint id), as the document and other devices show it.
+    pub id: String,
     pub ticket: String,
     pub ble_status: String,
     pub download_dir: String,

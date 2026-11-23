@@ -1,3 +1,6 @@
+/// The crate version, as the packages and the Settings page show it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod apps;
 pub mod ble;
 #[cfg(not(target_os = "android"))]
