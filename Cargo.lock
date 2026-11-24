@@ -2659,14 +2659,15 @@ dependencies = [
 
 [[package]]
 name = "freya-hypereffect"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66a09470d639a6145159caaf005cd3531d75f147bc4eef4629258032cf4c2a3d"
+checksum = "7ff25a4352d6f33111b5a878125df2bcc06306fdf28123c1b9332c3964f17c00"
 dependencies = [
  "base64 0.22.1",
  "bytes",
  "freya",
  "hypereffect",
+ "serde",
 ]
 
 [[package]]
@@ -3425,9 +3426,9 @@ dependencies = [
 
 [[package]]
 name = "hypereffect"
-version = "0.6.3"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51fed57ea32950c8b667334c4cc48241e4f7d246730f19f25b60856e6caf7a43"
+checksum = "612c20ff6ff82b06426891d305ccd6808581bd740cc99583efeee7d2cdf80ec4"
 dependencies = [
  "cel",
  "serde",

@@ -18,8 +18,8 @@ path = "src/main.rs"
 [dependencies]
 flipflop = { path = ".." }
 ciborium = "0.2"
-hypereffect = "=0.6.3"
-freya-hypereffect = "0.1.1"
+hypereffect = "=0.7.0"
+freya-hypereffect = "0.2.0"
 base64 = "0.22"
 freya = { version = "0.6.0-alpha", features = ["radio", "engine"] }
 freya-winit = "0.6.0-alpha"

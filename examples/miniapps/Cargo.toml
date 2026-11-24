@@ -15,7 +15,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ciborium = "0.2"
-hypereffect = "=0.6.1"
+hypereffect = "=0.7.0"
 
 [features]
 default = ["checklist"]

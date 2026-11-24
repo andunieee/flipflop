@@ -102,5 +102,5 @@ blake3 = { opt-level = 3 }
 
 [dev-dependencies]
 wat = "1"
-hypereffect = "=0.6.3"
+hypereffect = "=0.7.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

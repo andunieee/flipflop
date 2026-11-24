@@ -166,6 +166,10 @@ impl Session {
 
     /// Run a handler on element `id`, then let the app write the document and redraw.
     pub fn act(&mut self, id: &str, event: &str) {
+        if !self.client.is_connected() {
+            self.report();
+            return;
+        }
         let Some(line) = self.client.trigger(id, event) else {
             self.report();
             return;
@@ -192,7 +196,9 @@ impl Session {
     }
 
     pub fn write(&mut self, path: &str, value: Json) {
-        self.client.write(path, value);
+        if self.client.is_connected() {
+            self.client.write(path, value);
+        }
     }
 
     pub fn value(&self, path: &str) -> Option<&Json> {
@@ -241,6 +247,14 @@ impl Session {
         for url in self.client.take_opens() {
             flipflop::platform::open_url(&url);
         }
+        if let Some(close) = self.client.closed()
+            && self.error.is_none()
+        {
+            self.error = Some(match close.reason.as_deref() {
+                Some(reason) => format!("Disconnected: {reason}"),
+                None => "Disconnected. The server closed the connection.".to_owned(),
+            });
+        }
     }
 }
 
@@ -263,6 +277,10 @@ impl HyperHost for Session {
 
     fn revision(&self) -> u64 {
         self.frame
+    }
+
+    fn is_closed(&self) -> bool {
+        !self.client.is_connected()
     }
 
     fn error(&self) -> Option<String> {
